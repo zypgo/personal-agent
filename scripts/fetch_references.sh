@@ -26,6 +26,7 @@ REFS=(
   "hermes-agent|https://github.com/NousResearch/hermes-agent.git|agent cron gateway tools plugins|Gateway, cron, memory tool, approval flow, sender pairing"
   "openclaw|https://github.com/openclaw/openclaw.git|docs src/cron src/memory src/pairing src/security src/secrets src/agents|Gateway/channels/cron/skills/memory/pairing/exec-approvals"
   "zeroclaw|https://github.com/zeroclaw-labs/zeroclaw.git|crates/zeroclaw-runtime/src/approval crates/zeroclaw-memory docs|Approval manager (always_ask precedence), supervised-by-default"
+  "aimock|https://github.com/CopilotKit/aimock.git||Mock of the OpenAI Responses API: the wire shape our fake server (tests/fake_openai.py) answers with"
 )
 
 LOCK="references/SOURCES.lock"

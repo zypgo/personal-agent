@@ -7,9 +7,10 @@ Guarantees:
   and a session's events are claimed in order (an earlier event waiting out a retry backoff
   holds back the later ones).
 - **Crash recovery**: a worker that dies leaves an expiring lease; the events become claimable
-  again. Every claim counts as an attempt, so an event that crashes workers repeatedly becomes
-  `dead` instead of looping forever (poison pill). Environmental failures (network, rate limit)
-  do not count against the event.
+  again (at once, if the process that restarts holds the engine lock: see `release_leases`).
+  Every claim counts as an attempt, so an event that crashes workers repeatedly becomes `dead`
+  instead of looping forever (poison pill). Environmental failures (network, rate limit) do not
+  count against the event.
 """
 
 from __future__ import annotations
@@ -306,6 +307,21 @@ class Inbox:
                 """UPDATE events SET available_at = ?
                    WHERE status = 'pending' AND available_at > ? AND last_error LIKE ?""",
                 (now, now, error_like),
+            )
+        return cur.rowcount
+
+    def release_leases(self) -> int:
+        """Make every leased event claimable at once. Returns how many there were.
+
+        For the process that has just taken the engine lock: no other worker exists, so a lease it
+        finds belongs to one that died, and waiting for it to run out (minutes) would only keep
+        the owner's message waiting. The attempt that was started stays used: a claim that never
+        finished still counts toward the poison-pill limit.
+        """
+        with self.db.tx():
+            cur = self.db.execute(
+                """UPDATE events SET status = 'pending', lease_owner = NULL, lease_expires_at = NULL
+                   WHERE status = 'leased'"""
             )
         return cur.rowcount
 

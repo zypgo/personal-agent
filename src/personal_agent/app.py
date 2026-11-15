@@ -107,15 +107,21 @@ class App:
         return "web" if self.config.web.enabled else "cli"
 
     def recover(self) -> dict[str, int]:
-        """Clean up after a previous process that died: orphaned runs and half-sent messages.
+        """Clean up after a previous process that died: orphaned runs, half-sent messages and the
+        events its workers had claimed.
 
-        Only call this from the single process that owns the agent (the daemon, or a lone CLI)."""
+        Only call this from the single process that owns the agent (the daemon, or a lone CLI).
+        Because nobody else is working, everything it finds in flight belongs to the dead process
+        and is dealt with now, not after a timeout: a message sent just before the crash is
+        retried or parked, and the owner's message is picked up again within seconds."""
         orphaned = self.runs.recover_orphans()
-        stuck = self.outbox.recover_stuck()
+        stuck = self.outbox.recover_stuck(older_than_s=0)
         interrupted = self.audit.mark_interrupted()
+        released = self.inbox.release_leases()
         return {
             "orphaned_runs": orphaned,
             "interrupted_tool_calls": interrupted,
+            "released_events": released,
             **{f"outbox_{k}": v for k, v in stuck.items()},
         }
 

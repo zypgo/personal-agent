@@ -30,9 +30,9 @@ from personal_agent.core.worker import Worker
 from personal_agent.security.sandbox import SandboxProvider
 from tooling import Spy, install
 
-RECOVERY_WAIT_S = 1_000.0
-"""Longer than a lease (300 s) and than the time after which a message stuck in `sending` is
-given up on (120 s): by then the dead process's claims have run out."""
+RESTART_S = 2.0
+"""How long a restart takes. The new process must not need the dead one's claims to run out (a
+lease lasts 300 s): it owns the engine lock, so it knows they are dead."""
 
 
 class Crash(BaseException):
@@ -192,8 +192,8 @@ class World:
 
     def restart(self, *, die_at: int | str | None = None) -> App:
         """What the daemon does when it starts after a crash: a new process, which cleans up after
-        the old one once the old one's claims have run out."""
-        self.clock.advance(RECOVERY_WAIT_S)
+        the old one straight away."""
+        self.clock.advance(RESTART_S)
         app = self.boot(die_at=die_at)
         app.recover()
         return app

@@ -138,6 +138,39 @@ def test_delay_and_heartbeat(inbox, clock):
     assert inbox.claim("other") is None
 
 
+def test_a_restarted_process_does_not_wait_for_a_dead_workers_lease(inbox):
+    """The process that holds the engine lock knows nobody else is working: what is leased is a
+    dead worker's. Waiting out the lease would keep the owner's message waiting for minutes."""
+    event = inbox.add(msg()).id
+    inbox.claim("dead-worker")
+    assert inbox.claim("new-process") is None  # leased: not yet
+
+    assert inbox.release_leases() == 1
+
+    [claimed] = inbox.claim("new-process").events
+    assert (claimed.id, claimed.attempts) == (event, 2)  # the first, unfinished attempt stays used
+
+
+def test_a_crash_loop_that_restarts_at_once_still_ends_in_a_dead_event(inbox):
+    inbox.add(msg())
+    for _ in range(3):  # max_attempts
+        assert inbox.claim("worker") is not None
+        inbox.release_leases()
+
+    assert inbox.claim("worker") is None
+    assert inbox.counts()["dead"] == 1
+
+
+def test_releasing_leases_leaves_everything_else_alone(inbox, clock):
+    inbox.add(msg("done"))
+    inbox.complete(inbox.claim("w"))
+    inbox.add(msg("later", delay_s=60))
+    inbox.add(msg("waiting"))
+
+    assert inbox.release_leases() == 0
+    assert inbox.counts() == {"pending": 2, "leased": 0, "done": 1, "dead": 0}
+
+
 def test_release_returns_without_consuming_an_attempt(inbox):
     event_id = inbox.add(msg()).id
     batch = inbox.claim("w")

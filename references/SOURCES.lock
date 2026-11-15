@@ -8,3 +8,4 @@ nanoclaw	https://github.com/qwibitai/nanoclaw.git	dad1aadf3e6854e863df0000f49baa
 hermes-agent	https://github.com/NousResearch/hermes-agent.git	fd8a6c41ace59b476193c61002ce6a86d667b18a	2026-11-15	LICENSE	Gateway, cron, memory tool, approval flow, sender pairing
 openclaw	https://github.com/openclaw/openclaw.git	55029d41d50657cdad6e5bfd76413f39e6368b08	2026-11-15	LICENSE	Gateway/channels/cron/skills/memory/pairing/exec-approvals
 zeroclaw	https://github.com/zeroclaw-labs/zeroclaw.git	3a3f2e35865579843e5c37d8eee2e612cd98cd26	2026-11-14	LICENSE-APACHE	Approval manager (always_ask precedence), supervised-by-default
+aimock	https://github.com/CopilotKit/aimock.git	6af8b51eb573493b8f8cdad4b5abea06ed64b486	2026-11-13	LICENSE	Mock of the OpenAI Responses API: the wire shape our fake server (tests/fake_openai.py) answers with
