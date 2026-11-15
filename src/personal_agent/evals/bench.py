@@ -21,7 +21,7 @@ from personal_agent.core.dispatcher import Dispatcher
 from personal_agent.core.events import Kind, NewEvent, Trust
 from personal_agent.core.outbox import OutMessage
 from personal_agent.core.runs import RunRecord
-from personal_agent.core.worker import Worker
+from personal_agent.core.worker import Worker, WorkResult
 from personal_agent.evals.spec import Scenario, Seed, Step
 from personal_agent.paths import Paths
 from personal_agent.security.sandbox import SandboxProvider
@@ -136,9 +136,9 @@ async def _deliver(app: App) -> list[OutMessage]:
     return sink.sent
 
 
-async def _drain(app: App, session_key: str, limit: int = 20) -> list:
+async def _drain(app: App, session_key: str, limit: int = 20) -> list[WorkResult]:
     worker = Worker(app)
-    results = []
+    results: list[WorkResult] = []
     for _ in range(limit):
         result = await worker.run_once(session_key=session_key, on_failure="drop")
         if result is None:

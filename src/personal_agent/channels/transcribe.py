@@ -17,7 +17,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import openai
 
@@ -143,7 +143,7 @@ class OpenAITranscriber:
             if converted is not None:
                 data, extension = converted, "m4a"
         client = self._client_or_raise()
-        options: dict[str, str] = {}
+        options: dict[str, Any] = {}
         if self.media_cfg.language:
             options["language"] = self.media_cfg.language
         try:

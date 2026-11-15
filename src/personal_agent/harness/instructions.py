@@ -185,7 +185,7 @@ def _duration(seconds: int) -> str:
     return f"{seconds} seconds"
 
 
-def _timer_details(payload: dict) -> str:
+def _timer_details(payload: dict[str, Any]) -> str:
     """` (scheduled for ...; running 3 hours late)`: lets the agent see that it was woken late."""
     details = []
     if payload.get("scheduled_for"):

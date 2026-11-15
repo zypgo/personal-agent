@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
@@ -279,7 +279,7 @@ def build(open_app: Callable[[], App], console: Console) -> typer.Typer:
         ] = False,
     ) -> None:
         """Add a server to config.toml. Its tools stay off until you review them."""
-        entry: dict = {"name": name}
+        entry: dict[str, Any] = {"name": name}
         if url:
             if command:
                 console.print("[red]Give either --url or a command, not both.[/red]")

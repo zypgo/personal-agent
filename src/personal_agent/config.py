@@ -913,7 +913,7 @@ class ConfigError(Exception):
 
 def load_config(paths: Paths) -> Config:
     """Read `config.toml` (optional) and validate it."""
-    data: dict = {}
+    data: dict[str, Any] = {}
     if paths.config_file.exists():
         try:
             data = tomllib.loads(paths.config_file.read_text(encoding="utf-8"))

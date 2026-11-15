@@ -74,7 +74,7 @@ def parameters_schema(input_schema: dict[str, Any] | None) -> dict[str, Any]:
 
     MCP schemas are used as the server wrote them (not forced into "strict" mode, which would
     make every optional parameter required and nullable and change what the server receives)."""
-    schema = _shorten_schema_text(dict(input_schema or {}))
+    schema: dict[str, Any] = _shorten_schema_text(dict(input_schema or {}))
     schema.pop("$schema", None)
     if schema.get("type") != "object":
         return {"type": "object", "properties": {}}

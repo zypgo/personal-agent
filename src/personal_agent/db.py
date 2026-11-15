@@ -380,7 +380,20 @@ class Database:
 
     def one(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> sqlite3.Row | None:
         with self._lock:
-            return self._conn.execute(sql, params).fetchone()
+            row: sqlite3.Row | None = self._conn.execute(sql, params).fetchone()
+        return row
+
+    def row(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> sqlite3.Row:
+        """The one row a query must find (what a statement just wrote, say)."""
+        found = self.one(sql, params)
+        if found is None:
+            raise LookupError(f"expected a row: {' '.join(sql.split())[:120]}")
+        return found
+
+    def insert(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> int | None:
+        """Run an INSERT; the new row's id, or None when `OR IGNORE` skipped it."""
+        cur = self.execute(sql, params)
+        return cur.lastrowid if cur.rowcount == 1 else None
 
     def scalar(
         self, sql: str, params: Sequence[Any] | dict[str, Any] = (), default: Any = None

@@ -132,8 +132,8 @@ class _Extractor(HTMLParser):
             self._emit("\n" * (lines - self._newlines))
 
     # -- events
-    def handle_starttag(self, tag: str, attrs) -> None:
-        a = dict(attrs)
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        a = {name: value or "" for name, value in attrs}  # `<img alt>` has no value at all
         if tag == "title":
             self._in_title = True
             return
@@ -158,7 +158,7 @@ class _Extractor(HTMLParser):
         elif tag == "code" and not self._pre and self._live():
             self._emit("`")
         elif tag == "a":
-            href = (a.get("href") or "").strip()
+            href = a.get("href", "").strip()
             if href and not href.startswith(("#", "javascript:", "mailto:", "tel:")):
                 self._href = urljoin(self.base, href)
                 self._link_text = []

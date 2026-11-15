@@ -27,7 +27,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -101,7 +101,7 @@ class _LoggedStdio(MCPServerStdio):
         super().__init__(*args, **kwargs)
         self._log_path = log_path
 
-    def create_streams(self):  # type: ignore[override]
+    def create_streams(self) -> AbstractAsyncContextManager[Any]:
         return _streams_with_log(self.params, self._log_path)
 
 
@@ -121,7 +121,7 @@ def default_server_factory(cfg: McpServerConfig, settings: Settings) -> MCPServe
             params["env"] = settings.env
         if cfg.cwd:
             params["cwd"] = os.path.expanduser(cfg.cwd)
-        return _LoggedStdio(params, log_path=settings.log_path, **common)  # type: ignore[arg-type]
+        return _LoggedStdio(params, log_path=settings.log_path, **common)
     http: dict[str, Any] = {
         "url": settings.url,
         "headers": settings.headers or None,

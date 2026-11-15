@@ -7,9 +7,11 @@ import atexit
 import os
 import re
 import signal
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from datetime import datetime
-from typing import Annotated
+from pathlib import Path
+from types import ModuleType
+from typing import Annotated, Any
 
 import click
 import typer
@@ -78,6 +80,9 @@ console = Console()
 
 # Tests replace this to run the commands against a scripted model.
 _build: Callable[[], App] = build_app
+
+RunTurn = Callable[[Coroutine[Any, Any, bool]], bool]
+"""Runs one turn to its end: `asyncio.run`, or the chat loop's own event loop."""
 
 
 def _version_callback(value: bool) -> None:
@@ -284,7 +289,7 @@ def _enable_history(opened: App) -> None:
     atexit.register(lambda: _save_history(readline, history))
 
 
-def _save_history(readline, history) -> None:
+def _save_history(readline: ModuleType, history: Path) -> None:
     try:
         readline.write_history_file(history)
         history.chmod(0o600)
@@ -350,9 +355,7 @@ def _interrupted(engine: Engine, session_key: str) -> None:
         )
 
 
-def _slash(
-    engine: Engine, line: str, session_key: str, run: Callable[[Awaitable[bool]], bool]
-) -> bool:
+def _slash(engine: Engine, line: str, session_key: str, run: RunTurn) -> bool:
     """Handle a /command. Returns False to leave the chat."""
     opened = engine.app
     words = line.split()
@@ -409,7 +412,7 @@ def _answer_approvals(
     approve: bool,
     targets: list[str],
     note: str | None,
-    run: Callable[[Awaitable[bool]], bool],
+    run: RunTurn,
 ) -> None:
     """Record the owner's answer, then let the paused runs continue (here, or in the service)."""
     opened = engine.app
@@ -808,7 +811,12 @@ _TIMER_DONE = {"cancel": "Cancelled", "pause": "Paused", "resume": "Resumed"}
 def _timer_action(verb: str, ref: str) -> None:
     opened = _open()
     try:
-        if not getattr(opened.timers, verb)(ref):
+        try:
+            done = getattr(opened.timers, verb)(ref)
+        except TimerError as exc:  # e.g. a paused schedule that can no longer be read
+            console.print(f"[red]{escape(str(exc))}[/red]")
+            raise typer.Exit(1) from exc
+        if not done:
             console.print(f"[yellow]Could not {verb} '{escape(ref)}': no such timer.[/yellow]")
             raise typer.Exit(1)
         console.print(f"{_TIMER_DONE[verb]} '{escape(ref)}'.")

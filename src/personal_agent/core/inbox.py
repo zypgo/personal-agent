@@ -64,7 +64,7 @@ class Inbox:
     def add(self, event: NewEvent) -> AddResult:
         now = self.clock.now()
         with self.db.tx():
-            cur = self.db.execute(
+            new_id = self.db.insert(
                 """INSERT OR IGNORE INTO events
                    (source, kind, session_key, payload, external_id, trust, created_at, available_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -79,9 +79,9 @@ class Inbox:
                     now + max(0.0, event.delay_s),
                 ),
             )
-            if cur.rowcount == 1:
-                return AddResult(id=int(cur.lastrowid), duplicate=False)
-            row = self.db.one(
+            if new_id is not None:
+                return AddResult(id=new_id, duplicate=False)
+            row = self.db.row(
                 "SELECT id FROM events WHERE source = ? AND external_id = ?",
                 (event.source, event.external_id),
             )
@@ -91,9 +91,9 @@ class Inbox:
     @staticmethod
     def _claimable(row: sqlite3.Row, now: float) -> bool:
         if row["status"] == "pending":
-            return row["available_at"] <= now
+            return bool(row["available_at"] <= now)
         if row["status"] == "leased":
-            return (row["lease_expires_at"] or 0) <= now
+            return bool((row["lease_expires_at"] or 0) <= now)
         return False
 
     def has_ready(self, session_key: str | None = None) -> bool:

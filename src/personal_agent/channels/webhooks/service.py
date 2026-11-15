@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs
 
+from starlette.types import Receive, Scope, Send
+
 from personal_agent.channels.http import HttpListener
 from personal_agent.channels.webhooks.signatures import (
     Rejected,
@@ -183,7 +185,7 @@ class WebhookService:
     def asgi(self, submit: SubmitFn) -> Callable[..., Any]:
         """The server itself: one POST route, and a 404 for everything else."""
 
-        async def handler(scope: dict, receive: Callable, send: Callable) -> None:
+        async def handler(scope: Scope, receive: Receive, send: Send) -> None:
             if scope["type"] != "http":
                 if scope["type"] == "websocket":
                     await send({"type": "websocket.close", "code": 1008})
@@ -194,7 +196,7 @@ class WebhookService:
 
         return handler
 
-    async def _serve(self, scope: dict, receive: Callable, submit: SubmitFn) -> Reply | None:
+    async def _serve(self, scope: Scope, receive: Receive, submit: SubmitFn) -> Reply | None:
         match = ROUTE_PATH.fullmatch(scope["path"]) if scope["method"] == "POST" else None
         route = self.routes.get(match.group(1)) if match else None
         if route is None or not route.usable:
@@ -295,7 +297,7 @@ class _Gone(Exception):
     pass
 
 
-def _headers(scope: dict) -> dict[str, str]:
+def _headers(scope: Scope) -> dict[str, str]:
     """Header names in lower case. One sent twice is joined with ", " as HTTP says, which no
     signature check will accept."""
     found: dict[str, str] = {}
@@ -305,7 +307,7 @@ def _headers(scope: dict) -> dict[str, str]:
     return found
 
 
-async def _read(receive: Callable, limit: int) -> bytes:
+async def _read(receive: Receive, limit: int) -> bytes:
     """The whole body, however it is sent, or `_TooLarge` the moment it passes `limit`."""
     parts: list[bytes] = []
     size = 0
@@ -324,7 +326,7 @@ async def _read(receive: Callable, limit: int) -> bytes:
             return b"".join(parts)
 
 
-async def _respond(send: Callable, reply: Reply) -> None:
+async def _respond(send: Send, reply: Reply) -> None:
     body = json.dumps(reply.body).encode()
     headers = [
         (b"content-type", b"application/json"),

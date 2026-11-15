@@ -151,7 +151,7 @@ class HttpListener:
                 f"the {self.name} server could not start (exit {exc.code})"
             ) from None
 
-    async def _stop(self, server: _EmbeddedServer, task: asyncio.Task) -> None:
+    async def _stop(self, server: _EmbeddedServer, task: asyncio.Task[None]) -> None:
         self.stopping.set()
         if self.on_stop is not None:
             self.on_stop()

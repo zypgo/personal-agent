@@ -145,15 +145,14 @@ class Transcript:
         meta: dict[str, Any],
     ) -> Turn | None:
         with self.db.tx():
-            cur = self.db.execute(
+            new_id = self.db.insert(
                 """INSERT OR IGNORE INTO transcript(at, direction, channel, kind, text, outbox_id, meta)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (self.clock.now(), direction, channel, kind, text, outbox_id, dumps(meta)),
             )
-            if cur.rowcount != 1:
+            if new_id is None:
                 return None
-            row = self.db.one("SELECT * FROM transcript WHERE id = ?", (cur.lastrowid,))
-        assert row is not None
+            row = self.db.row("SELECT * FROM transcript WHERE id = ?", (new_id,))
         turn = _turn(row)
         if self.live is not None:
             self.live.publish({"type": "turn", "id": turn.id})

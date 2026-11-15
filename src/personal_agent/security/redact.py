@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 # (kind, pattern). Ordered so specific token formats win over the generic assignment rule.
@@ -99,7 +99,7 @@ def find_secrets(text: str) -> list[SecretMatch]:
     return sorted(found, key=lambda s: s.start)
 
 
-def known_secret_values(env: dict[str, str] | None = None, *, min_length: int = 8) -> list[str]:
+def known_secret_values(env: Mapping[str, str] | None = None, *, min_length: int = 8) -> list[str]:
     """Values of environment variables that look like secrets (by name)."""
     source = os.environ if env is None else env
     values = {

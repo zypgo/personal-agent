@@ -16,6 +16,7 @@ import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from agents.testing import ScriptedModel, assistant_message, function_call
 
@@ -23,6 +24,7 @@ from personal_agent.config import Config
 from personal_agent.evals.bench import BenchError, Trial, eval_config, play
 from personal_agent.evals.checks import Verdict, judge
 from personal_agent.evals.spec import Scenario, Script, Silent
+from personal_agent.harness.models import ModelFactory
 from personal_agent.security.sandbox import SandboxProvider
 
 MIN_BUDGET_USD = 0.0005
@@ -122,14 +124,14 @@ class CheckedScenario:
 
 
 # ---- scripts -------------------------------------------------------------------------------------
-def turns(scenario: Scenario, script: Script) -> list[list]:
+def turns(scenario: Scenario, script: Script) -> list[list[Any]]:
     """What the scripted model says, in order: per step one round of tool calls (if any), then the
     closing words."""
-    out: list[list] = []
+    out: list[list[Any]] = []
     counter = 0
     for step in scenario.steps:
         actions = script.get(step.id, [])
-        calls = []
+        calls: list[Any] = []
         for action in actions:
             counter += 1
             call_id = f"scripted-{counter}"
@@ -221,7 +223,7 @@ async def play_live(
     model: str | None,
     effort: str | None,
     cap_usd: float,
-    model_factory=None,
+    model_factory: ModelFactory | None = None,
     sandbox: SandboxProvider | None = None,
 ) -> TrialResult:
     try:
@@ -248,7 +250,7 @@ async def run_live(
     model: str | None = None,
     effort: str | None = None,
     on_trial: Callable[[Scenario, TrialResult], None] | None = None,
-    model_factory=None,
+    model_factory: ModelFactory | None = None,
     sandbox: SandboxProvider | None = None,
 ) -> LiveRun:
     """Play each scenario `trials` times with the real model, stopping when `cap_usd` is spent."""

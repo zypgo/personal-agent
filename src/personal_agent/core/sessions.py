@@ -11,12 +11,15 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from personal_agent.clock import Clock, SystemClock
 from personal_agent.core.media import MediaStore, expand_media
 from personal_agent.db import Database, dumps, loads
 from personal_agent.security.sanitize import fenced
+
+if TYPE_CHECKING:
+    from agents.memory import SessionSettings
 
 DEFAULT_SESSION = "main"
 """The one ongoing conversation every channel shares: a personal agent talks to one person."""
@@ -38,7 +41,8 @@ def _plain(item: Any) -> dict[str, Any]:
         return item
     dump = getattr(item, "model_dump", None)
     if callable(dump):
-        return dump(mode="json", exclude_none=True)
+        dumped: dict[str, Any] = dump(mode="json", exclude_none=True)
+        return dumped
     raise TypeError(f"unsupported session item type: {type(item).__name__}")
 
 
@@ -68,14 +72,14 @@ class SessionStore:
         ids: list[int] = []
         with self.db.tx():
             for item in items:
-                cur = self.db.execute(
+                new_id = self.db.insert(
                     """INSERT OR IGNORE INTO session_events
                        (session_key, kind, item, event_id, run_id, created_at)
                        VALUES (?, 'item', ?, ?, ?, ?)""",
                     (key, dumps(_plain(item)), event_id, run_id, now),
                 )
-                if cur.rowcount == 1:
-                    ids.append(int(cur.lastrowid))
+                if new_id is not None:
+                    ids.append(new_id)
         return ids
 
     def has_event(self, key: str, event_id: int) -> bool:
@@ -98,7 +102,8 @@ class SessionStore:
                 "INSERT INTO session_events(session_key, kind, item, created_at) VALUES (?, 'tombstone', ?, ?)",
                 (key, dumps({"target_id": last["id"]}), self.clock.now()),
             )
-        return loads(last["item"])
+        item: dict[str, Any] | None = loads(last["item"])
+        return item
 
     def clear(self, key: str) -> None:
         with self.db.tx():
@@ -255,7 +260,7 @@ class SessionStore:
 class SdkSession:
     """Implements the Agents SDK `Session` protocol on top of `SessionStore`."""
 
-    session_settings = None
+    session_settings: SessionSettings | None = None
 
     def __init__(
         self,

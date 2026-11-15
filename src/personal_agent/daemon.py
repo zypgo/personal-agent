@@ -23,7 +23,7 @@ import os
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from personal_agent.channels.base import Channel
 from personal_agent.core.dispatcher import Dispatcher
@@ -229,7 +229,7 @@ class Daemon:
         except Exception:
             log.warning("could not start the MCP servers", exc_info=True)
 
-    async def _shutdown(self, tasks: list[asyncio.Task]) -> None:
+    async def _shutdown(self, tasks: list[asyncio.Task[Any]]) -> None:
         workers = [t for t in tasks if (t.get_name() or "").startswith("worker-")]
         if workers:
             # Let runs that are in flight finish; anything slower is cancelled, which releases its

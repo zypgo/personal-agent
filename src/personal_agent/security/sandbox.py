@@ -31,6 +31,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -140,7 +141,7 @@ async def run_process(
     env: dict[str, str],
     cwd: Path,
     timeout_s: float,
-    on_timeout=None,
+    on_timeout: Callable[[], Awaitable[None]] | None = None,
 ) -> ExecResult:
     """Run `argv`, cap its output, and kill its whole process group on timeout or cancellation."""
     started = time.monotonic()
@@ -320,9 +321,12 @@ class SeatbeltSandbox:
         a small cache file into the per-user temp directory. Allow exactly those files (and
         nothing else there) so the tools work without printing errors."""
         try:
-            user_tmp = _real(os.confstr(_CS_DARWIN_USER_TEMP_DIR))
+            value = os.confstr(_CS_DARWIN_USER_TEMP_DIR)
         except (AttributeError, ValueError, OSError):
             return []
+        if not value:  # defined but empty: nothing to allow
+            return []
+        user_tmp = _real(value)
         text = str(user_tmp)
         if not re.fullmatch(r"[A-Za-z0-9/_-]+", text):
             return []
@@ -520,11 +524,16 @@ def select_sandbox(paths: Paths, cfg: SandboxConfig) -> tuple[Sandbox | None, st
     return None, "; ".join(problems)
 
 
+Chooser = Callable[[Paths, SandboxConfig], tuple[Sandbox | None, str]]
+
+
 class SandboxProvider:
     """Picks the sandbox the first time somebody needs one. Choosing means probing (starting a
     process, asking Docker), which is not something every `pa status` should pay for."""
 
-    def __init__(self, paths: Paths, cfg: SandboxConfig, *, chooser=select_sandbox) -> None:
+    def __init__(
+        self, paths: Paths, cfg: SandboxConfig, *, chooser: Chooser = select_sandbox
+    ) -> None:
         self._paths = paths
         self._cfg = cfg
         self._chooser = chooser

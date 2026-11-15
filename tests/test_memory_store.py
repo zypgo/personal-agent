@@ -283,6 +283,40 @@ def test_unknown_command_and_missing_arguments(store):
     assert run(store, command="view") == "Error: a path is required"
 
 
+@pytest.mark.parametrize("value", [5, 2.5, True, ["a"], {"a": 1}])
+@pytest.mark.parametrize(
+    ("command", "key"),
+    [
+        ("create", "file_text"),
+        ("str_replace", "old_str"),
+        ("str_replace", "new_str"),
+        ("insert", "insert_text"),
+    ],
+)
+def test_an_argument_that_is_not_text_is_an_error_the_model_can_read(store, command, key, value):
+    """A number where text belongs once crashed `str_replace` with a TypeError."""
+    base = {
+        "create": {"file_text": "new"},
+        "str_replace": {"old_str": "hi", "new_str": "yo"},
+        "insert": {"insert_line": 0, "insert_text": "z"},
+    }[command]
+    edit = {"command": command, "path": "/memories/state/x.md", **base, key: value}
+    run(store, command="create", path="/memories/state/x.md", file_text="hi")
+    message = f"Error: `{key}` must be text for {command}"
+
+    assert store.execute(edit, actor=Actor.AGENT) == message
+    assert store.check_command(edit) == message  # the approval check says the same
+    assert "hi" in run(store, command="view", path="/memories/state/x.md")
+
+
+def test_new_text_may_be_left_out_to_delete_what_was_matched(store):
+    run(store, command="create", path="/memories/state/x.md", file_text="keep this, drop that")
+    result = run(store, command="str_replace", path="/memories/state/x.md", old_str=", drop that")
+    assert "has been edited" in result
+    viewed = run(store, command="view", path="/memories/state/x.md")
+    assert "keep this" in viewed and "drop" not in viewed
+
+
 # ---- path safety ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "bad",

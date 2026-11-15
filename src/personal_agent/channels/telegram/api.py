@@ -116,10 +116,11 @@ class TelegramApi:
 
     # ---- what the channel uses --------------------------------------------------------
     async def get_me(self) -> dict[str, Any]:
-        return await self.call("getMe")
+        me: dict[str, Any] = await self.call("getMe")
+        return me
 
     async def get_updates(self, offset: int, poll_s: int) -> list[dict[str, Any]]:
-        return await self.call(
+        updates: list[dict[str, Any]] = await self.call(
             "getUpdates",
             {
                 "offset": offset,
@@ -128,6 +129,7 @@ class TelegramApi:
             },
             timeout_s=poll_s + 15,
         )
+        return updates
 
     async def delete_webhook(self) -> None:
         await self.call("deleteWebhook", {"drop_pending_updates": False})
@@ -152,7 +154,8 @@ class TelegramApi:
             params["reply_markup"] = reply_markup
         if silent:
             params["disable_notification"] = True
-        return await self.call("sendMessage", params)
+        sent: dict[str, Any] = await self.call("sendMessage", params)
+        return sent
 
     async def send_chat_action(self, chat_id: str | int, action: str = "typing") -> None:
         await self.call("sendChatAction", {"chat_id": chat_id, "action": action}, timeout_s=10)

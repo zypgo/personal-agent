@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
-from typing import Annotated, get_args
+from typing import Annotated, Any, get_args
 
 import typer
 from rich.console import Console
@@ -176,7 +176,7 @@ def build(console: Console) -> typer.Typer:
                 f"asked for silence ({noise['per_quiet_step']} per quiet step)."
             )
 
-    def save(paths: Paths, data: dict, markdown: str, when: datetime) -> None:
+    def save(paths: Paths, data: dict[str, Any], markdown: str, when: datetime) -> None:
         if not paths.home.is_dir():
             say("[dim]No report saved: there is no home yet (`pa init`).[/dim]")
             return

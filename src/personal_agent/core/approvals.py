@@ -139,7 +139,7 @@ class Approvals:
                         now + self.timeout_s,
                     ),
                 )
-                row = self.db.one(
+                row = self.db.row(
                     "SELECT * FROM approvals WHERE run_id = ? AND call_id = ?",
                     (run_id, call.call_id),
                 )

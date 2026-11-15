@@ -88,7 +88,7 @@ class Outbox:
         now = self.clock.now()
         payload = {"text": text, **(extra or {})}
         with self.db.tx():
-            cur = self.db.execute(
+            return self.db.insert(
                 """INSERT OR IGNORE INTO outbox
                    (session_key, channel, recipient, kind, payload, urgency, on_sent, run_id,
                     dedupe_key, created_at, not_before)
@@ -107,7 +107,6 @@ class Outbox:
                     now if not_before is None else not_before,
                 ),
             )
-            return int(cur.lastrowid) if cur.rowcount == 1 else None
 
     def has_due(self, channels: Collection[str] | None = None) -> bool:
         """Cheap read-only check that `claim_due` would return something."""
@@ -247,15 +246,6 @@ class Outbox:
         row = self.db.one("SELECT * FROM outbox WHERE id = ?", (message_id,))
         return _message(row) if row else None
 
-    def list(self, *, status: str | None = None, limit: int = 50) -> list[OutMessage]:
-        if status:
-            rows = self.db.query(
-                "SELECT * FROM outbox WHERE status = ? ORDER BY id DESC LIMIT ?", (status, limit)
-            )
-        else:
-            rows = self.db.query("SELECT * FROM outbox ORDER BY id DESC LIMIT ?", (limit,))
-        return [_message(r) for r in rows]
-
     def counts(self) -> dict[str, int]:
         out = {s: 0 for s in ("pending", "sending", "sent", "maybe_sent", "failed", "cancelled")}
         for r in self.db.query("SELECT status, COUNT(*) AS n FROM outbox GROUP BY status"):
@@ -270,3 +260,14 @@ class Outbox:
             sql += " AND session_key = ?"
             params.append(session_key)
         return [_message(r) for r in self.db.query(sql + " ORDER BY id", params)]
+
+    # Declared last on purpose: inside a class body a method named `list` hides the builtin in
+    # the annotations that follow it, and callers know this method by that name.
+    def list(self, *, status: str | None = None, limit: int = 50) -> list[OutMessage]:
+        if status:
+            rows = self.db.query(
+                "SELECT * FROM outbox WHERE status = ? ORDER BY id DESC LIMIT ?", (status, limit)
+            )
+        else:
+            rows = self.db.query("SELECT * FROM outbox ORDER BY id DESC LIMIT ?", (limit,))
+        return [_message(r) for r in rows]

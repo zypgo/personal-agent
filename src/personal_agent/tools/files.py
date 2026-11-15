@@ -16,6 +16,7 @@ import difflib
 import itertools
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -329,7 +330,7 @@ async def edit_file_tool(
         return f"Error: cannot edit {path}: {exc.strerror or exc}"
 
 
-def _path_check(write: bool):
+def _path_check(write: bool) -> Callable[[RunContext, dict[str, Any]], str | None]:
     def check(rc: RunContext, args: dict[str, Any]) -> str | None:
         try:
             resolve_path(rc.app, str(args.get("path", ".")), write=write)

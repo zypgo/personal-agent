@@ -26,11 +26,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable
-from typing import Any
 from urllib.parse import urlsplit
 
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.exceptions import HTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 CSP = "; ".join(
     [
@@ -114,7 +114,7 @@ class Guard:
 
     def __init__(
         self,
-        app: Any,
+        app: ASGIApp,
         *,
         hosts: frozenset[str],
         origins: frozenset[str],
@@ -127,7 +127,7 @@ class Guard:
         self.body_limit = body_limit
         self.api_prefix = api_prefix
 
-    async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             if scope["type"] == "websocket":
                 await send({"type": "websocket.close", "code": 1008})
@@ -146,7 +146,7 @@ class Guard:
             return
         await self.app(scope, _limited(receive, limit), self._with_headers(send))
 
-    def _check(self, scope: dict) -> tuple[int, bytes] | None:
+    def _check(self, scope: Scope) -> tuple[int, bytes] | None:
         headers = Headers(scope=scope)
         if hostname(headers.get("host")) not in self.hosts:
             return _refuse(421, "This address is not served here.")
@@ -170,7 +170,7 @@ class Guard:
             return _refuse(403, "This page does not accept requests from other sites.")
         return None
 
-    async def _respond(self, send: Callable, status: int, body: bytes) -> None:
+    async def _respond(self, send: Send, status: int, body: bytes) -> None:
         await send(
             {
                 "type": "http.response.start",
@@ -185,8 +185,8 @@ class Guard:
         )
         await send({"type": "http.response.body", "body": body})
 
-    def _with_headers(self, send: Callable) -> Callable:
-        async def wrapped(message: dict) -> None:
+    def _with_headers(self, send: Send) -> Send:
+        async def wrapped(message: Message) -> None:
             if message["type"] == "http.response.start":
                 message.setdefault("headers", [])
                 headers = MutableHeaders(scope=message)
@@ -198,11 +198,11 @@ class Guard:
         return wrapped
 
 
-def _limited(receive: Callable, limit: int) -> Callable:
+def _limited(receive: Receive, limit: int) -> Receive:
     """`receive`, but a body that grows past `limit` stops the request (413) however it is sent."""
     seen = 0
 
-    async def limited() -> dict:
+    async def limited() -> Message:
         nonlocal seen
         message = await receive()
         if message["type"] == "http.request":

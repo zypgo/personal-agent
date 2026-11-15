@@ -14,6 +14,7 @@ most once for the whole gap, or skips it, depending on its misfire policy.
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from personal_agent.config import SchedulerConfig
 from personal_agent.core.events import Kind, NewEvent, Trust
 from personal_agent.core.inbox import Inbox
 from personal_agent.db import Database
+
+log = logging.getLogger(__name__)
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 MAX_PROMPT_CHARS = 4000
@@ -270,7 +273,7 @@ class Timers:
         with self.db.tx():
             self._check_room(name)
             try:
-                cur = self.db.execute(
+                new_id = self.db.insert(
                     """INSERT INTO timers (name, kind, cron, tz, due_at, prompt, session_key, trust,
                                            misfire, created_by, created_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -290,7 +293,7 @@ class Timers:
                 )
             except sqlite3.IntegrityError as exc:
                 raise TimerError(f"a timer named {name!r} already exists") from exc
-            row = self.db.one("SELECT * FROM timers WHERE id = ?", (cur.lastrowid,))
+            row = self.db.row("SELECT * FROM timers WHERE id = ?", (new_id,))
         return _timer(row)
 
     # ---- managing ---------------------------------------------------------------------
@@ -302,13 +305,6 @@ class Timers:
                 "SELECT * FROM timers WHERE name = ? ORDER BY id DESC LIMIT 1", (str(ref),)
             )
         return _timer(row) if row else None
-
-    def list(self, *, include_finished: bool = False) -> list[Timer]:
-        sql = "SELECT * FROM timers"
-        if not include_finished:
-            sql += " WHERE status IN ('active', 'paused')"
-        rows = self.db.query(sql + " ORDER BY status, due_at, id")
-        return [_timer(r) for r in rows]
 
     def cancel(self, ref: str | int) -> bool:
         timer = self.get(ref)
@@ -337,10 +333,7 @@ class Timers:
         timer = self.get(ref)
         if timer is None or timer.status != "paused":
             return False
-        now = self.clock.now()
-        due = (
-            next_fire(timer.cron, timer.tz or self.default_tz, now) if timer.cron else timer.due_at
-        )
+        due = self._next_due(timer, self.clock.now()) if timer.kind == "schedule" else timer.due_at
         with self.db.tx():
             self.db.execute(
                 "UPDATE timers SET status = 'active', due_at = ? WHERE id = ? AND status = 'paused'",
@@ -392,13 +385,38 @@ class Timers:
                     (now, timer.id),
                 )
             else:
-                next_due = next_fire(timer.cron, timer.tz or self.default_tz, now)
+                try:
+                    next_due: float | None = self._next_due(timer, now)
+                except TimerError as exc:
+                    # One unreadable row must not keep every timer behind it from firing: this
+                    # one fires its last time, then waits (paused) for the owner to look at it.
+                    log.warning("%s; pausing it", exc)
+                    next_due = None
                 self.db.execute(
-                    """UPDATE timers SET due_at = ?, last_fired_at = COALESCE(?, last_fired_at),
-                       fire_count = fire_count + ? WHERE id = ?""",
-                    (next_due, None if skipped else now, 0 if skipped else 1, timer.id),
+                    """UPDATE timers SET due_at = COALESCE(?, due_at), status = ?,
+                       last_fired_at = COALESCE(?, last_fired_at), fire_count = fire_count + ?
+                       WHERE id = ?""",
+                    (
+                        next_due,
+                        "paused" if next_due is None else "active",
+                        None if skipped else now,
+                        0 if skipped else 1,
+                        timer.id,
+                    ),
                 )
         return Fired(timer=timer, event_id=event_id, late_s=late, skipped=skipped)
+
+    def _next_due(self, timer: Timer, now: float) -> float:
+        """When a schedule fires next. A row that was edited by hand, or a zone this system no
+        longer knows, is a `TimerError`, not whatever the libraries raise."""
+        if timer.cron is None:
+            raise TimerError(f"timer {timer.name!r} has no schedule")
+        try:
+            return next_fire(timer.cron, timer.tz or self.default_tz, now)
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise TimerError(
+                f"timer {timer.name!r} has a schedule that cannot be read ({exc})"
+            ) from exc
 
     def _event(self, timer: Timer, late: float) -> NewEvent:
         tz = get_tz(timer.tz or self.default_tz)
@@ -417,3 +435,12 @@ class Timers:
             external_id=f"timer:{timer.id}:{int(timer.due_at)}",
             trust=timer.trust,
         )
+
+    # Declared last on purpose: inside a class body a method named `list` hides the builtin in
+    # the annotations that follow it, and callers know this method by that name.
+    def list(self, *, include_finished: bool = False) -> list[Timer]:
+        sql = "SELECT * FROM timers"
+        if not include_finished:
+            sql += " WHERE status IN ('active', 'paused')"
+        rows = self.db.query(sql + " ORDER BY status, due_at, id")
+        return [_timer(r) for r in rows]

@@ -24,7 +24,7 @@ import functools
 import ipaddress
 import socket
 import ssl
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -194,11 +194,11 @@ class GuardedBackend(httpcore.AsyncNetworkBackend):
 
     async def connect_tcp(
         self,
-        host,
-        port,
-        timeout=None,  # noqa: ASYNC109 (the signature is httpcore's)
-        local_address=None,
-        socket_options=None,
+        host: str,
+        port: int,
+        timeout: float | None = None,  # noqa: ASYNC109 (the signature is httpcore's)
+        local_address: str | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
     ) -> httpcore.AsyncNetworkStream:
         addresses = await asyncio.to_thread(resolve_checked, host, port, self._policy)
         failure: Exception | None = None
@@ -215,7 +215,12 @@ class GuardedBackend(httpcore.AsyncNetworkBackend):
                 failure = exc
         raise failure or httpcore.ConnectError(f"could not connect to {host}")
 
-    async def connect_unix_socket(self, path, timeout=None, socket_options=None):  # noqa: ASYNC109
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,  # noqa: ASYNC109 (the signature is httpcore's)
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
         raise Blocked("unix sockets are not allowed")
 
     async def sleep(self, seconds: float) -> None:

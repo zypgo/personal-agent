@@ -18,6 +18,7 @@ import re
 import secrets
 import shutil
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -35,6 +36,8 @@ PREFERENCES = "preferences"
 STATE = "state"
 _WRITABLE_BY_AGENT = {PREFERENCES: False, STATE: True}
 MAX_LINES = 999_999
+REQUIRED_TEXT = {"create": ("file_text",), "str_replace": ("old_str",), "insert": ("insert_text",)}
+"""The text a command must carry: what it writes, or what it looks for."""
 
 TASKS_DIR = f"{ROOT}/{STATE}/tasks"
 FINISHED = (
@@ -182,7 +185,7 @@ class MemoryStore:
     # size accounting and limits
     # ------------------------------------------------------------------------------------
     @staticmethod
-    def _files(directory: Path):
+    def _files(directory: Path) -> Iterator[Path]:
         for dirpath, dirnames, filenames in os.walk(directory):
             dirnames[:] = [
                 d
@@ -300,7 +303,7 @@ class MemoryStore:
                 return self.str_replace(
                     command.get("path"),
                     _need(command, "old_str"),
-                    command.get("new_str") or "",
+                    _need(command, "new_str", default=""),
                     actor=actor,
                     run_id=run_id,
                 )
@@ -344,13 +347,10 @@ class MemoryStore:
             for path in paths:
                 target = self._parse(path)
                 self._require_writable(target, actor)
-            required = {
-                "create": "file_text",
-                "str_replace": "old_str",
-                "insert": "insert_text",
-            }.get(name)
-            if required and command.get(required) is None:
-                return f"Error: {name} needs {required}"
+            for key in REQUIRED_TEXT.get(name, ()):
+                _need(command, key)
+            if name == "str_replace":
+                _need(command, "new_str", default="")
             text = " ".join(
                 str(command.get(k) or "") for k in ("file_text", "new_str", "insert_text")
             )
@@ -770,10 +770,16 @@ class MemoryStore:
         return f"Restored {row['path']} to its content before version {version_id}"
 
 
-def _need(command: dict[str, Any], key: str) -> str:
+def _need(command: dict[str, Any], key: str, default: str | None = None) -> str:
+    """`command[key]` as text: what the model sent, `default` if it sent nothing, else an error
+    the model can read (a number where text belongs must not crash the tool)."""
     value = command.get(key)
     if value is None:
+        value = default
+    if value is None:
         raise PathError(f"Error: `{key}` is required for {command.get('command')}")
+    if not isinstance(value, str):
+        raise PathError(f"Error: `{key}` must be text for {command.get('command')}")
     return value
 
 

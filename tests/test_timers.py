@@ -159,6 +159,36 @@ def test_paused_timers_do_not_fire_and_resume_without_a_backlog(timers, inbox, c
     assert inbox.counts()["pending"] == 0
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "UPDATE timers SET cron = 'not a cron' WHERE name = 'a-broken'",
+        "UPDATE timers SET cron = NULL WHERE name = 'a-broken'",
+        "UPDATE timers SET tz = 'Mars/Olympus_Mons' WHERE name = 'a-broken'",
+    ],
+)
+def test_a_schedule_that_cannot_be_read_does_not_keep_the_others_from_firing(
+    timers, inbox, clock, db, damage
+):
+    """A row edited by hand (or a zone the system lost) once made every tick raise on it first, so
+    the timers behind it never fired. It now fires its last time and waits, paused."""
+    timers.add_schedule(name="a-broken", prompt="x", cron="0 9 * * *", tz=SHANGHAI)
+    timers.add_followup(name="b-fine", prompt="y", due_at=clock.now() + 100)
+    db.execute(damage)
+    db.execute("UPDATE timers SET due_at = ? WHERE name = 'a-broken'", (clock.now() + 50,))
+    clock.advance(200)
+
+    fired = timers.tick()
+
+    assert [f.timer.name for f in fired] == ["a-broken", "b-fine"]
+    assert timers.get("a-broken").status == "paused"
+    assert timers.get("a-broken").fire_count == 1
+    assert timers.get("b-fine").status == "fired"
+    assert timers.tick() == []  # nothing keeps being retried
+    with pytest.raises(TimerError, match=r"no schedule|cannot be read"):
+        timers.resume("a-broken")
+
+
 def test_cancelled_timers_never_fire(timers, inbox, clock):
     timers.add_followup(name="nope", prompt="x", due_at=clock.now() + 10)
     assert timers.cancel("nope") and not timers.cancel("nope")

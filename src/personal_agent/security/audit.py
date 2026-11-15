@@ -95,7 +95,7 @@ class Audit:
         """Record a decision. A second record for the same (run, call) is ignored, so a decision
         made while asking for approval is not duplicated when the call later executes."""
         with self.db.tx():
-            cur = self.db.execute(
+            return self.db.insert(
                 """INSERT OR IGNORE INTO audit
                    (ts, run_id, session_key, call_id, tool, category, verdict, layer, reason, args,
                     detail, outcome, tainted)
@@ -116,7 +116,6 @@ class Audit:
                     int(tainted),
                 ),
             )
-        return int(cur.lastrowid) if cur.rowcount == 1 else None
 
     def set_outcome(
         self,

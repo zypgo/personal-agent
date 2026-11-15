@@ -214,6 +214,47 @@ def test_child_env_never_carries_our_environment(paths, monkeypatch):
     assert set(env) >= {"PATH", "HOME", "TMPDIR"}
 
 
+def user_temp(monkeypatch, value):
+    """Make the per-user temp directory look like `value` (or like an unanswerable question)."""
+
+    def confstr(name):
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(os, "confstr", confstr)
+
+
+def test_the_xcrun_cache_rule_allows_exactly_its_own_files(monkeypatch, tmp_path):
+    folder = tmp_path / "T"
+    folder.mkdir()
+    user_temp(monkeypatch, str(folder) + "/")
+
+    rules = SeatbeltSandbox.xcrun_cache_rule()
+
+    assert len(rules) == 2
+    assert f"{folder.resolve()}/xcrun_db" in rules[0] and "file-write" in rules[0]
+    assert "file-read-metadata" in rules[1] and "file-write" not in rules[1]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [None, "", ValueError("no such name"), OSError("unavailable"), AttributeError("not macOS")],
+    ids=["none", "empty", "value-error", "os-error", "no-confstr"],
+)
+def test_without_a_user_temp_directory_there_is_no_xcrun_rule(monkeypatch, answer):
+    user_temp(monkeypatch, answer)
+    assert SeatbeltSandbox.xcrun_cache_rule() == []
+
+
+@pytest.mark.parametrize("name", ["with space", 'a"quote', "back\\slash", "paren(thesis)"])
+def test_an_odd_user_temp_directory_is_never_pasted_into_the_profile(monkeypatch, tmp_path, name):
+    odd = tmp_path / name
+    odd.mkdir()
+    user_temp(monkeypatch, str(odd))
+    assert SeatbeltSandbox.xcrun_cache_rule() == []
+
+
 def test_no_sandbox_needs_an_explicit_acknowledgement(paths):
     refused, why = select_sandbox(paths, SandboxConfig(backend="none"))
     assert refused is None and "i_understand_no_sandbox" in why

@@ -108,3 +108,20 @@ def test_a_message_can_enter_the_history_only_once(db):
         add(5)
     add(None)
     add(None)  # inbound lines have no outbox id and may repeat
+
+
+def test_insert_gives_the_new_id_or_none_when_or_ignore_skipped_the_row(db):
+    db.execute("CREATE TABLE scratch(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)")
+    first = db.insert("INSERT INTO scratch(name) VALUES(?)", ("a",))
+    second = db.insert("INSERT INTO scratch(name) VALUES(?)", ("b",))
+    assert isinstance(first, int) and second == first + 1
+
+    assert db.insert("INSERT OR IGNORE INTO scratch(name) VALUES(?)", ("a",)) is None
+    assert db.scalar("SELECT COUNT(*) FROM scratch") == 2  # the duplicate wrote nothing
+
+
+def test_row_is_the_one_row_a_query_must_find(db):
+    db.execute("INSERT INTO kv(key,value,updated_at) VALUES('a','1',0)")
+    assert db.row("SELECT value FROM kv WHERE key = ?", ("a",))["value"] == "1"
+    with pytest.raises(LookupError, match="expected a row: SELECT value FROM kv"):
+        db.row("SELECT value FROM kv WHERE key = ?", ("missing",))

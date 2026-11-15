@@ -167,6 +167,19 @@ def test_timers_can_be_added_listed_paused_resumed_and_cancelled(wired):
     assert "stretch" in invoke("timers", "--all").output
 
 
+def test_resuming_a_schedule_that_can_no_longer_be_read_says_so_instead_of_crashing(wired):
+    app = wired()
+    invoke("timers", "add", "brief", "Morning brief.", "--cron", "0 8 * * 1-5")
+    invoke("timers", "pause", "brief")
+    app.db.execute("UPDATE timers SET cron = 'not a cron' WHERE name = 'brief'")
+
+    result = invoke("timers", "resume", "brief")
+
+    assert result.exit_code == 1
+    assert "cannot be read" in result.output and "Traceback" not in result.output
+    assert app.timers.get("brief").status == "paused"
+
+
 def test_timers_at_takes_a_local_time(wired):
     app = wired()
     result = invoke("timers", "add", "dentist", "Call the dentist.", "--at", "2023-11-15 09:30")

@@ -196,14 +196,13 @@ class WebAuth:
             label = self.db.scalar(
                 "SELECT label FROM web_invites WHERE token_hash = ?", (digest(code),), default=""
             )
-            cur = self.db.execute(
+            new_id = self.db.insert(
                 """INSERT INTO web_sessions(token_hash, label, agent, created_at, last_seen_at,
                                             expires_at)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (digest(token), label, clean_agent(agent), now, now, now + self.session_s),
             )
-            row = self.db.one("SELECT * FROM web_sessions WHERE id = ?", (cur.lastrowid,))
-        assert row is not None
+            row = self.db.row("SELECT * FROM web_sessions WHERE id = ?", (new_id,))
         return NewSession(token, _session(row))
 
     # ---- sessions ---------------------------------------------------------------------

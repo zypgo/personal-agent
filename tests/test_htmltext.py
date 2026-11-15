@@ -147,6 +147,23 @@ def test_a_tiny_page_with_only_navigation_stays_empty():
     assert text("<body><nav>menu</nav></body>") == ""
 
 
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "<img alt>",
+        '<img alt src="a.png">',
+        "<a href>x</a>",
+        "<a href=>x</a>",
+        "<p class>",
+        "<td colspan>",
+    ],
+)
+def test_an_attribute_without_a_value_never_cuts_the_page_short(tag):
+    """`<img alt>` once raised inside the parser, and the broad "never break the tool" catch turned
+    that into a page that silently ended at the image."""
+    assert text(f"<p>before</p>{tag}<p>after</p>").endswith("after")
+
+
 def test_stray_end_tags_do_not_break_anything():
     assert text("</nav></main></div><p>fine</p></footer>") == "fine"
 

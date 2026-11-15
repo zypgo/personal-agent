@@ -22,13 +22,14 @@ from typing import TYPE_CHECKING, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from personal_agent.clock import get_tz
-from personal_agent.config import ConfigError, api_key, load_config
+from personal_agent.config import Config, ConfigError, api_key, load_config
 from personal_agent.db import SCHEMA_VERSION
 from personal_agent.harness.pricing import is_known
 from personal_agent.paths import Paths
 
 if TYPE_CHECKING:
     from personal_agent.app import App
+    from personal_agent.launchd import ServiceManager
 
 Status = Literal["ok", "warn", "fail"]
 
@@ -258,7 +259,7 @@ def capability_checks(paths: Paths) -> list[Check]:
     return checks
 
 
-def _service_checks(paths: Paths, manager=None) -> list[Check]:
+def _service_checks(paths: Paths, manager: ServiceManager | None = None) -> list[Check]:
     """The background service, if one was installed for this home: loaded, still pointing at a
     program that exists, and not somewhere macOS keeps background jobs out of."""
     if sys.platform != "darwin":
@@ -321,7 +322,7 @@ def _service_checks(paths: Paths, manager=None) -> list[Check]:
     return [Check("background service", "ok", f"running (pid {status.pid})")]
 
 
-def _skills_checks(paths: Paths, cfg) -> list[Check]:
+def _skills_checks(paths: Paths, cfg: Config) -> list[Check]:
     from personal_agent.skills.store import SkillStore
 
     if not cfg.skills.enabled:
@@ -364,7 +365,7 @@ def _reviewed_tool_counts(paths: Paths) -> dict[str, int]:
     return {str(server): int(count) for server, count in rows}
 
 
-def _mcp_checks(paths: Paths, cfg) -> list[Check]:
+def _mcp_checks(paths: Paths, cfg: Config) -> list[Check]:
     """MCP servers are programs or services the owner chose: say what would stop them working."""
     if not cfg.mcp.servers:
         return []  # nothing configured, nothing to report
@@ -417,7 +418,7 @@ def _approved_senders(paths: Paths, channel: str) -> int | None:
     return int(row[0]) if row else 0
 
 
-def _channel_checks(paths: Paths, cfg) -> list[Check]:
+def _channel_checks(paths: Paths, cfg: Config) -> list[Check]:
     """Chat channels: is what they need there, and will unprompted messages have somewhere to go?"""
     checks: list[Check] = []
     telegram = cfg.telegram
@@ -504,7 +505,7 @@ def _open_to_other_devices(host: str) -> bool:
 
 
 def _is_https(url: str | None) -> bool:
-    return bool(url) and url.startswith("https://")
+    return url is not None and url.startswith("https://")
 
 
 def _public_host(url: str) -> str:
@@ -558,7 +559,7 @@ def _port_check(name: str, paths: Paths, host: str, port: int) -> Check | None:
     return None
 
 
-def _chat_page_checks(paths: Paths, cfg) -> list[Check]:
+def _chat_page_checks(paths: Paths, cfg: Config) -> list[Check]:
     """The chat page: where it can be reached from, and whether any browser is paired."""
     web = cfg.web
     if not web.enabled:
@@ -608,7 +609,7 @@ def _chat_page_checks(paths: Paths, cfg) -> list[Check]:
     return checks
 
 
-def _webhook_checks(paths: Paths, cfg) -> list[Check]:
+def _webhook_checks(paths: Paths, cfg: Config) -> list[Check]:
     """Webhooks: is every route's secret there and strong enough, and how is the listener exposed?"""
     from personal_agent.channels.webhooks.service import route_secret
 
@@ -673,7 +674,7 @@ def _webhook_checks(paths: Paths, cfg) -> list[Check]:
     return checks
 
 
-def _plugin_checks(cfg) -> list[Check]:
+def _plugin_checks(cfg: Config) -> list[Check]:
     """Plugins are code the owner switched on: say if one that is enabled is not even installed.
     (Loading them is `pa plugins`' job; doctor does not run plugin code.)"""
     if not cfg.plugins.enabled:
@@ -697,10 +698,8 @@ def _plugin_checks(cfg) -> list[Check]:
     return checks
 
 
-def _web_checks(cfg) -> list[Check]:
+def _web_checks(cfg: Config) -> list[Check]:
     import ipaddress
-
-    from personal_agent.security.ssrf import FAKE_IP_NETWORK, NetPolicy
 
     tools = [
         name
@@ -719,7 +718,7 @@ def _web_checks(cfg) -> list[Check]:
     checks = [Check("web", "ok", f"tools: {', '.join(tools) or 'none'}; hosted search: {search}")]
 
     if tools:
-        checks.extend(_fake_ip_check(cfg, NetPolicy, FAKE_IP_NETWORK))
+        checks.extend(_fake_ip_check(cfg))
 
     broad: list[str] = []
     for entry in cfg.net.allow_private:
@@ -745,10 +744,13 @@ def _web_checks(cfg) -> list[Check]:
     return checks
 
 
-def _fake_ip_check(cfg, policy_type, fake_net) -> list[Check]:
+def _fake_ip_check(cfg: Config) -> list[Check]:
     """A VPN/proxy in fake-IP mode makes every public name resolve to 198.18.x.x, which the network
     gate refuses by default: all web tools would fail. Say so, with the fix and its price."""
     import ipaddress
+
+    from personal_agent.security.ssrf import FAKE_IP_NETWORK as fake_net
+    from personal_agent.security.ssrf import NetPolicy
 
     fake = []
     for text in _resolve_probe(PROBE_HOST):
@@ -759,7 +761,7 @@ def _fake_ip_check(cfg, policy_type, fake_net) -> list[Check]:
             continue
     if not fake:
         return []
-    policy = policy_type.from_config(cfg.net)
+    policy = NetPolicy.from_config(cfg.net)
     if all(policy.check(PROBE_HOST, ipaddress.ip_address(a)) is None for a in fake):
         return [
             Check(
@@ -814,6 +816,9 @@ async def live_checks(app: App) -> list[Check]:
             checks.append(Check(name, "fail", detail, hint))
             break
         run = app.runs.get(result.outcome.run_id)
+        if run is None:
+            checks.append(Check(name, "fail", "the run left no record in the database"))
+            break
         total += run.cost_usd
         detail = (
             f"{run.requests} model calls, {run.tool_calls} tool calls, about ${run.cost_usd:.4f}"

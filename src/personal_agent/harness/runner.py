@@ -14,11 +14,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from agents import Agent, RunConfig, RunContextWrapper, RunHooks, Runner, RunResult, RunState
+from agents import (
+    Agent,
+    ModelResponse,
+    RunConfig,
+    RunContextWrapper,
+    RunHooks,
+    Runner,
+    RunResult,
+    RunState,
+    Tool,
+    TResponseInputItem,
+)
 from agents.exceptions import MaxTurnsExceeded
+from agents.models.interface import Model
 
 from personal_agent.core.approvals import (
     DENIED,
@@ -86,12 +99,21 @@ class RunAccounting(RunHooks[RunContext]):
         self.model_name = model_name
 
     async def on_llm_start(
-        self, context: RunContextWrapper[RunContext], agent, system_prompt, input_items
+        self,
+        context: RunContextWrapper[RunContext],
+        agent: Agent[RunContext],
+        system_prompt: str | None,
+        input_items: list[TResponseInputItem],
     ) -> None:
         ctx = context.context
         self.app.budget.check_run(ctx.run_id, ctx.cost_cap_usd)  # raises BudgetExceeded
 
-    async def on_llm_end(self, context: RunContextWrapper[RunContext], agent, response) -> None:
+    async def on_llm_end(
+        self,
+        context: RunContextWrapper[RunContext],
+        agent: Agent[RunContext],
+        response: ModelResponse,
+    ) -> None:
         usage = response.usage
         details = getattr(usage, "input_tokens_details", None)
         cached = getattr(details, "cached_tokens", 0) or 0
@@ -117,7 +139,9 @@ class RunAccounting(RunHooks[RunContext]):
             ),
         )
 
-    async def on_tool_start(self, context: RunContextWrapper[RunContext], agent, tool) -> None:
+    async def on_tool_start(
+        self, context: RunContextWrapper[RunContext], agent: Agent[RunContext], tool: Tool
+    ) -> None:
         self.app.runs.add_tool_call(context.context.run_id)
         self.app.live.tool_started(str(getattr(tool, "name", "")))
 
@@ -187,8 +211,9 @@ class Harness:
                 continue
             if event.kind == Kind.MESSAGE and event.text:
                 return event.text
-            if event.kind == Kind.TIMER and isinstance(event.payload.get("prompt"), str):
-                return event.payload["prompt"]
+            prompt = event.payload.get("prompt")
+            if event.kind == Kind.TIMER and isinstance(prompt, str):
+                return prompt
         return ""
 
     @staticmethod
@@ -259,7 +284,9 @@ class Harness:
             Dreamer(app).finished(batch, outcome)
         return outcome
 
-    async def _settle(self, ctx: RunContext, work, *, resuming: bool = False) -> RunOutcome:
+    async def _settle(
+        self, ctx: RunContext, work: Awaitable[RunOutcome], *, resuming: bool = False
+    ) -> RunOutcome:
         """Await `work` and make sure the run record ends up truthful whatever happens."""
         app = self.app
         try:
@@ -330,7 +357,7 @@ class Harness:
             )
         return "\n\n".join(blocks)
 
-    def _agent(self, ctx: RunContext, instructions: str, model) -> Agent:
+    def _agent(self, ctx: RunContext, instructions: str, model: Model) -> Agent[RunContext]:
         app, cfg = self.app, self.app.config
         hosted = hosted_tools(app, ctx.profile)
         cache_key = cache_key_for(ctx.profile) if shares_prompt_cache(model) else None
@@ -513,7 +540,9 @@ class Harness:
         instructions = self._instructions(ctx.profile)
         model = app.model_factory(model_name)
         agent = self._agent(ctx, instructions, model)
-        state = await RunState.from_string(agent, state_text, context_override=ctx)
+        state = await RunState.from_string(
+            agent, state_text, context_override=RunContextWrapper(context=ctx)
+        )
 
         by_call = {a.call_id: a for a in app.approvals.for_run(ctx.run_id)}
         offered = {getattr(t, "name", None) for t in agent.tools}
