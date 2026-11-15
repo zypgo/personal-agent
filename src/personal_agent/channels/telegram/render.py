@@ -22,7 +22,10 @@ LIMIT = 4096
 SPLIT_AT = 3500
 """Markdown budget per message: leaves room for the markup that rendering adds."""
 
-_FENCE = re.compile(r"^\s*(`{3,}|~{3,})\s*([\w+#.-]*)\s*$")
+# A fence is a few backticks (or tildes) and a short language. Anything longer is just text: a fence
+# that is cut by a split is written out again at the top of the next piece, and one that could be
+# thousands of characters long would make the pieces no shorter than what they came from.
+_FENCE = re.compile(r"^\s*(`{3,10}|~{3,10})\s*([\w+#.-]{0,30})\s*$")
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$")
 _BULLET = re.compile(r"^(\s*)[-*+]\s+(.*)$")
 _QUOTE = re.compile(r"^\s{0,3}>\s?(.*)$")
@@ -172,7 +175,7 @@ def balanced(markup: str) -> bool:
 def to_html(markdown: str) -> str:
     """Markdown (the subset models actually write) as Telegram HTML. May return markup that is not
     well formed for unusual input; `balanced()` tells, and the caller falls back to plain text."""
-    lines = markdown.replace("\r\n", "\n").split("\n")
+    lines = markdown.replace("\x00", "").replace("\r\n", "\n").split("\n")  # NUL: see `_emphasis`
     out: list[str] = []
     i = 0
     while i < len(lines):
@@ -217,19 +220,32 @@ def to_html(markdown: str) -> str:
     return "\n".join(out)
 
 
+def _plain_pieces(text: str) -> list[Piece]:
+    """`text` as it is, in pieces that stay under `LIMIT` however much escaping makes of them (a
+    character grows to at most five: `&` becomes `&amp;`)."""
+    return [Piece(html.escape(part, quote=False), part) for part in _hard_wrap(text, LIMIT // 5)]
+
+
 def render(text: str) -> list[Piece]:
     """The message as pieces ready to send, each short enough for Telegram."""
     pieces: list[Piece] = []
-    pending = split_markdown(text.strip() or "(empty message)")
+    # NUL stands in for a link's markup while a line is converted; a NUL in the text would be taken
+    # for one of those stand-ins. Telegram cannot show it anyway.
+    pending = split_markdown(text.replace("\x00", "").strip() or "(empty message)")
     while pending:
         chunk = pending.pop(0)
         markup = to_html(chunk)
         if len(markup) > LIMIT or len(chunk) > LIMIT:
-            if len(chunk) > 200:  # too long once rendered: cut the source smaller and retry
-                pending = [*split_markdown(chunk, max(100, len(chunk) // 2)), *pending]
-                continue
-            markup = html.escape(chunk[:LIMIT], quote=False)
-        if not balanced(markup):
-            markup = html.escape(chunk, quote=False)
-        pieces.append(Piece(markup, chunk[:LIMIT]))
+            # Too long once rendered: cut the Markdown smaller and retry, unless that makes no
+            # headway (then nothing short of plain text will do).
+            smaller = split_markdown(chunk, max(100, len(chunk) // 2)) if len(chunk) > 200 else []
+            if smaller and max(len(piece) for piece in smaller) < len(chunk):
+                pending = [*smaller, *pending]
+            else:
+                pieces.extend(_plain_pieces(chunk))
+            continue
+        if balanced(markup):
+            pieces.append(Piece(markup, chunk))
+        else:
+            pieces.extend(_plain_pieces(chunk))
     return pieces

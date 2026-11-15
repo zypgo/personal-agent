@@ -29,7 +29,7 @@ from personal_agent.config import MemoryConfig
 from personal_agent.db import Database
 from personal_agent.paths import Paths
 from personal_agent.security.redact import find_secrets, injection_hints
-from personal_agent.security.sanitize import strip_invisible
+from personal_agent.security.sanitize import scrub_surrogates, strip_invisible
 
 ROOT = "/memories"
 PREFERENCES = "preferences"
@@ -458,6 +458,7 @@ class MemoryStore:
     ) -> str:
         target = self._parse(path)
         self._require_writable(target, actor)
+        file_text = scrub_surrogates(file_text)
         with self._lock:
             if target.physical.exists():
                 return f"Error: File {target.virtual} already exists"
@@ -482,6 +483,7 @@ class MemoryStore:
     ) -> str:
         target = self._parse(path)
         self._require_writable(target, actor)
+        old_str, new_str = scrub_surrogates(old_str), scrub_surrogates(new_str)
         with self._lock:
             if not target.physical.is_file():
                 return (
@@ -526,6 +528,7 @@ class MemoryStore:
     ) -> str:
         target = self._parse(path)
         self._require_writable(target, actor)
+        insert_text = scrub_surrogates(insert_text)
         with self._lock:
             if not target.physical.is_file():
                 return f"Error: The path {target.virtual} does not exist"
@@ -622,6 +625,7 @@ class MemoryStore:
         mounts for agent-like actors)."""
         target = self._parse(virtual_path)
         self._require_writable(target, actor)
+        text = scrub_surrogates(text)
         with self._lock:
             old = self._read(target.physical) if target.physical.is_file() else None
             self._check_content(target, text)

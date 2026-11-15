@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from typing import Any
 
 _ALWAYS = re.compile(
     "["
@@ -40,6 +41,34 @@ def strip_invisible(text: str, *, formatting: bool = False) -> str:
             ch for ch in text if ch in "\n\t" or unicodedata.category(ch) not in _FORMATTING
         )
     return text
+
+
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def scrub_surrogates(text: str) -> str:
+    """`text` with each lone surrogate replaced by U+FFFD (the replacement character).
+
+    A lone surrogate is a legal Python string and legal JSON (`"\\ud83d"`: half an emoji, what a
+    truncated string leaves behind: webhook payloads, web pages' JSON, tool arguments from a model),
+    but it cannot be written as UTF-8. It makes saving, sending or printing the text fail, so one
+    such message would otherwise be a message that can never be stored: refused again on every
+    retry. This is where it stops being a problem."""
+    return text if text.isascii() else _LONE_SURROGATE.sub("\ufffd", text)
+
+
+def scrub_tree(value: Any) -> Any:
+    """`value` (parsed JSON, or statement parameters: strings, lists, tuples, dicts, numbers) with
+    `scrub_surrogates` applied to every string, keys included. Anything else comes back as it is."""
+    if isinstance(value, str):
+        return scrub_surrogates(value)
+    if isinstance(value, list):
+        return [scrub_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(scrub_tree(item) for item in value)
+    if isinstance(value, dict):
+        return {scrub_tree(key): scrub_tree(item) for key, item in value.items()}
+    return value
 
 
 def hides_text(text: str) -> bool:

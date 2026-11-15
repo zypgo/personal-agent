@@ -27,6 +27,7 @@ from personal_agent.harness.runctx import RunContext
 from personal_agent.security.audit import safe_args
 from personal_agent.security.policy import Decision, ToolCall, Verdict
 from personal_agent.security.redact import known_secret_values, redact
+from personal_agent.security.sanitize import scrub_surrogates
 from personal_agent.tools.base import ToolDef
 
 if TYPE_CHECKING:
@@ -223,7 +224,7 @@ class ToolGuard:
         return result
 
     def _clean(self, text: str) -> str:
-        text = redact(text, known_secret_values(os.environ))
+        text = redact(scrub_surrogates(text), known_secret_values(os.environ))
         cap = self.app.config.runtime.tool_output_chars
         if len(text) > cap:
             text = f"{text[:cap]}\n[... {len(text) - cap} more characters omitted]"

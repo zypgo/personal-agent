@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import signal
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from agents import Usage
@@ -79,3 +82,23 @@ def invoke(*args: str, input: str | None = None):
 
     cli.console.size = (10_000, 50)  # Rich only honours a width that comes with a height
     return CliRunner().invoke(cli.app, list(args), input=input)
+
+
+@contextmanager
+def within(seconds: float) -> Iterator[None]:
+    """Fail the test, instead of hanging it, if the block runs longer than `seconds`.
+
+    For code that must terminate and might not (a loop that stops making progress on some input):
+    the test then reports a failure with the input, not a CI job that is killed after an hour.
+    Unix only, and only in the main thread, which is where pytest runs tests."""
+
+    def give_up(signum: int, frame: Any) -> None:
+        raise TimeoutError(f"still running after {seconds} seconds")
+
+    previous = signal.signal(signal.SIGALRM, give_up)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)

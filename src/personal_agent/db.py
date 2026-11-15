@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from personal_agent.security.sanitize import scrub_tree
+
 
 def _transcript_search_index(conn: sqlite3.Connection) -> None:
     """A full-text index over what the owner and the agent said (`Transcript.search`).
@@ -366,21 +368,31 @@ class Database:
             self._conn.execute("PRAGMA synchronous = NORMAL")
 
     # ---- statements -------------------------------------------------------------------
+    def _run(self, sql: str, params: Sequence[Any] | dict[str, Any]) -> sqlite3.Cursor:
+        """One statement. A string that SQLite cannot encode (a lone surrogate, see
+        `scrub_surrogates`) is saved with U+FFFD in its place rather than refused: refusing it
+        would mean the same message fails on every retry. Binding happens before anything is
+        executed, so trying again changes nothing twice."""
+        try:
+            return self._conn.execute(sql, params)
+        except UnicodeEncodeError:
+            return self._conn.execute(sql, scrub_tree(params))
+
     def execute(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> sqlite3.Cursor:
         with self._lock:
-            return self._conn.execute(sql, params)
+            return self._run(sql, params)
 
     def executemany(self, sql: str, rows: Sequence[Sequence[Any]]) -> sqlite3.Cursor:
         with self._lock:
-            return self._conn.executemany(sql, rows)
+            return self._conn.executemany(sql, scrub_tree(list(rows)))
 
     def query(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> list[sqlite3.Row]:
         with self._lock:
-            return self._conn.execute(sql, params).fetchall()
+            return self._run(sql, params).fetchall()
 
     def one(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> sqlite3.Row | None:
         with self._lock:
-            row: sqlite3.Row | None = self._conn.execute(sql, params).fetchone()
+            row: sqlite3.Row | None = self._run(sql, params).fetchone()
         return row
 
     def row(self, sql: str, params: Sequence[Any] | dict[str, Any] = ()) -> sqlite3.Row:
