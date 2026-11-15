@@ -22,7 +22,7 @@
 | 4a | 渠道基础与 Telegram：配对（只能在本机批准）、对话历史、聊天内命令与审批按钮、语音转文字、图片、实时事件 | ✅ |
 | 4b | Web 页面（PWA，手机可用）、Webhook（签名校验）、插件提供的渠道、真实模型验证套件 | ✅ |
 | 5 | 对着 Anthropic 的 always-on 文章补齐记忆：每次唤醒一段新对话（带着任务进度索引与"已经告诉过你什么"）、压缩、`search_history`、每夜"做梦"整理记忆（可撤销、有花费上限） | ✅ |
-| 6 | 评测、launchd 常驻服务、加固 | 🚧 |
+| 6 | 评测（`pa eval`：场景文件、先验证判分本身、再用真实模型多次试验）、launchd 常驻服务（`pa service`）、加固与最终验证 | ✅ |
 
 ## 快速开始
 
@@ -125,6 +125,31 @@ uv run pa memory history /memories/state/MEMORY.md   # 谁、何时改了这个�
 uv run pa memory restore 42            # 把某次改动撤销（版本号来自 history 或 dream log）
 ```
 
+让它一直在后台（macOS，launchd）。文章里的 always-on agent 要活过它被启动的那个终端、活过一次登录、活过自己的崩溃：
+
+```bash
+uv run pa service install --dry-run    # 先看它会写什么：一个 LaunchAgent，不要 root，任务文件里没有任何密钥
+uv run pa service install              # 登录后自动启动，异常退出后自动拉起；--keep-awake：接电源时不让 Mac 睡着
+uv run pa service status               # 状态：加载了没有、在不在跑、跑了几次、上次怎么退出的（直接 pa service 也一样）
+uv run pa service logs                 # 它自己的日志（每一行先去掉密钥）；-f 持续跟随；--launchd 看日志打开之前的崩溃
+uv run pa service restart              # 等进行中的任务做完再重启（launchd 有 30 秒的重启节流，可能要等一会儿）
+uv run pa service uninstall            # 停止并删掉任务文件；你的数据与日志都还在
+```
+
+两条要先知道的事：① macOS 不允许后台任务读「桌面 / 文稿 / 下载 / iCloud」文件夹（不弹窗，只是"Operation not permitted"），所以解释器或代码放在这些文件夹里时 `install` 会醒目地警告（任务能装上，但起不来）——把项目放到别处（比如 `~/Developer`），或在项目目录里 `uv tool install .` 装一份再从那份里 `pa service install`；② 后台任务不继承终端的环境变量，需要代理就写 `--pass-env HTTPS_PROXY`（名字像密钥的、或值里带着密钥 / 口令的——比如 `http://user:口令@代理`——一律拒绝：这类内容只放 `.env`，守护进程自己会读）。`pa doctor` 会指出任务没加载、指向的程序已不存在、或被 macOS 挡在门外。
+
+检查它的行为（`pa eval`；做法来自 Anthropic 的 "Demystifying evals"：评**结果**，不评措辞）：
+
+```bash
+uv run pa eval list                    # 内置 6 个场景，加上你放在 ~/.personal-agent/evals/*.yaml 的
+uv run pa eval show quiet-when-nothing-new   # 一个场景做什么、对它有什么要求（用大白话）
+uv run pa eval run                     # 不联网不花钱：先验证"判分本身"抓得出毛病——好脚本全部通过，每个坏脚本都让它该失败的检查失败
+uv run pa eval run --live --trials 3 --max-cost 1.0 --model gpt-6.1-sol --effort medium
+                                       # 用真实模型把每个场景各跑 3 次；累计花到上限就停；报告里有通过率、花费、"安静的步骤里它发了几条消息"
+```
+
+一个场景是一页 YAML：`seed`（它已经知道什么：偏好、记忆、任务进度、已经发过的消息、配置）、`steps`（来了什么：你的消息 / 一个定时任务 / 一次 webhook）、`checks`（之后必须成立的事：说没说、说了几条、用了哪些工具、记忆里写了什么、你写的偏好有没有被动过、花了多少）。检查从不比对措辞，因为同一句话模型有很多种说法。每个步骤还有一条隐含检查：它的 run 必须以允许的方式结束——一个崩溃的 run 什么也没说，不能被当成"选择安静"而通过。内置场景覆盖文章里的几件事：同一条新闻只说一次、没有新东西就不打扰、源读不到不能当成"一切正常"、跨几次唤醒的任务进度、你的偏好被遵守、webhook 里夹带的指令只是数据。报告（JSON + Markdown）写在 `~/.personal-agent/evals/reports/`（0600，密钥已去掉）。
+
 想先试用而不动你的主目录：`PA_HOME=./.pa-home uv run pa init`（`.pa-home/` 已被 git 忽略）。
 
 ## 开发环境
@@ -133,6 +158,7 @@ uv run pa memory restore 42            # 把某次改动撤销（版本号来自
 uv sync --all-extras          # Python 3.13 + 全部依赖
 uv run pytest                 # 测试（不需要 API key，模型由脚本化的 ScriptedModel 代替）
 node --test tests/js/*.test.mjs   # 网页前端的纯逻辑测试
+uv run pa eval run            # 内置行为场景的"判分自检"（不联网）；--live 才用真实模型
 PA_LIVE=1 uv run pytest tests/live   # 用真实 OPENAI_API_KEY 的端到端验证（会花钱；key 只从环境读）
 uv run ruff check src tests && uv run ruff format --check src tests
 uv run pa --version

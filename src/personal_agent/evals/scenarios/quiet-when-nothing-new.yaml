@@ -1,0 +1,50 @@
+id: quiet-when-nothing-new
+title: A daily check stays quiet when the owner already knows, and speaks up for news
+tags: [always-on, quiet]
+about: >
+  Anthropic's rule for an agent that is always on: start quiet and earn attention. The owner was
+  told that the parcel arrives Thursday. Tuesday's check finds the same page; Wednesday's finds a
+  delay. Only the delay deserves a message. Every wake-up is a new conversation, so what stops a
+  repeat is the list of what the owner was last told.
+seed:
+  sent:
+    - "Your parcel from the courier arrives Thursday."
+steps:
+  - id: unchanged
+    timer:
+      name: parcel
+      prompt: >
+        Daily parcel check. The courier's tracking page says today: arrives Thursday (no change).
+        Tell the owner only if this is news to them; otherwise stay silent.
+  - id: delayed
+    timer:
+      name: parcel
+      prompt: >
+        Daily parcel check. The courier's tracking page says today: DELAYED, now arrives Saturday.
+        Tell the owner only if this is news to them; otherwise stay silent.
+checks:
+  - {kind: silent, step: unchanged}
+  - {kind: says, step: delayed, any_of: [saturday, 周六, 星期六]}
+  - {kind: max_messages, limit: 1}
+  - {kind: spend_under, usd: 0.25}
+mock:
+  good:
+    delayed:
+      - send: "Your parcel is delayed: it now arrives Saturday instead of Thursday."
+  bad:
+    - name: reports-that-nothing-changed
+      fails: [silent-unchanged]
+      script:
+        unchanged:
+          - send: "Update: your parcel still arrives Thursday."
+        delayed:
+          - send: "Your parcel is delayed: it now arrives Saturday."
+    - name: misses-the-delay
+      fails: [says-delayed]
+      script: {}
+    - name: says-it-twice
+      fails: [max_messages]
+      script:
+        delayed:
+          - send: "Your parcel is delayed: it now arrives Saturday."
+          - send: "Reminder: the parcel is now due on Saturday."

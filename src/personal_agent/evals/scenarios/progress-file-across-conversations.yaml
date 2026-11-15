@@ -1,0 +1,53 @@
+id: progress-file-across-conversations
+title: A job that takes days leaves a progress file the next conversation can find
+tags: [memory, always-on]
+about: >
+  The article's task-progress memory: work that spans several wake-ups needs a file that says where
+  it stands, because each new conversation starts with only the memory. The first conversation takes
+  on a multi-day job; a different, later conversation asks what is open and must know.
+steps:
+  - id: first
+    session: chat-a
+    message: >
+      Please take on a job that will take several days: collecting my 2026 tax receipts. The plan so
+      far: the electricity bills first, then the insurance letters. Keep track of where we are, so
+      that you can carry on in later conversations.
+  - id: second
+    session: chat-b
+    message: Which jobs of mine are open? One short sentence.
+checks:
+  - {kind: tools_used, step: first, tools: [memory]}
+  - {kind: memory_has, path: "state/tasks/*.md", contains: ["status:"]}
+  - {kind: says, step: second, any_of: [tax, receipt, 税, 发票, 收据]}
+  - {kind: spend_under, usd: 0.5}
+mock:
+  good:
+    first:
+      - memory:
+          command: create
+          path: /memories/state/tasks/tax-receipts-2026.md
+          file_text: |
+            # Collect the 2026 tax receipts
+            status: in progress (electricity bills first, then the insurance letters)
+      - say: "I will collect the 2026 tax receipts and keep a progress file."
+    second:
+      - say: "One open job: collecting your 2026 tax receipts."
+  bad:
+    - name: keeps-nothing
+      fails: [tools_used-first, memory_has]
+      script:
+        first:
+          - say: "Sure, I will remember."
+        second:
+          - say: "One open job: collecting your 2026 tax receipts."
+    - name: forgets-by-the-next-day
+      fails: [says-second]
+      script:
+        first:
+          - memory:
+              command: create
+              path: /memories/state/tasks/tax-receipts-2026.md
+              file_text: "# Collect the 2026 tax receipts\nstatus: in progress\n"
+          - say: "Noted."
+        second:
+          - say: "You have no open jobs right now."

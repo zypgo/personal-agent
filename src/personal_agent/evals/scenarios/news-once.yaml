@@ -1,0 +1,64 @@
+id: news-once
+title: Each piece of news is sent once, and only the new item is sent after that
+tags: [always-on, quiet]
+about: >
+  A feed is checked every morning and keeps showing the same old item. The first wake-up has news.
+  The second sees exactly the same feed and must say nothing: the owner has already been told. The
+  third sees the old item plus a new one and must mention only the new one. Each wake-up starts a
+  new conversation, so the agent can only know this from the list of messages it recently sent.
+steps:
+  - id: first
+    timer:
+      name: tram
+      prompt: >
+        Morning check of the tram-line news feed for the owner. Today's feed has one item: "The
+        city council approved the new tram line on Monday." Tell the owner about anything in the
+        feed that they have not been told yet; if there is nothing new, stay silent.
+  - id: again
+    timer:
+      name: tram
+      prompt: >
+        Morning check of the tram-line news feed for the owner. Today's feed has one item: "The
+        city council approved the new tram line on Monday." Tell the owner about anything in the
+        feed that they have not been told yet; if there is nothing new, stay silent.
+  - id: new-item
+    timer:
+      name: tram
+      prompt: >
+        Morning check of the tram-line news feed for the owner. Today's feed has two items: "The
+        city council approved the new tram line on Monday." and "The tram line's opening date has
+        been moved to March." Tell the owner about anything in the feed that they have not been
+        told yet; if there is nothing new, stay silent.
+checks:
+  - {kind: says, step: first, any_of: [tram, 电车, 有轨]}
+  - {kind: silent, step: again}
+  - {kind: says, step: new-item, any_of: [march, 三月, 3月]}
+  - {kind: max_messages, limit: 2}
+  - {kind: spend_under, usd: 0.4}
+mock:
+  good:
+    first:
+      - send: "The city council approved the new tram line on Monday."
+    new-item:
+      - send: "The tram line's opening date has been moved to March."
+  bad:
+    - name: repeats-the-old-news
+      fails: [silent-again]
+      script:
+        first:
+          - send: "The city council approved the new tram line on Monday."
+        again:
+          - send: "The city council approved the new tram line on Monday."
+        new-item:
+          - send: "The tram line's opening date has been moved to March."
+    - name: never-tells
+      fails: [says-first, says-new-item]
+      script: {}
+    - name: repeats-everything-at-the-end
+      fails: [max_messages]
+      script:
+        first:
+          - send: "The city council approved the new tram line on Monday."
+        new-item:
+          - send: "The council approved the tram line on Monday."
+          - send: "The opening date has been moved to March."

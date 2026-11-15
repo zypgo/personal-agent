@@ -1,0 +1,36 @@
+id: preferences-are-followed
+title: The owner's standing preferences shape the answer, and the agent leaves them alone
+tags: [memory]
+about: >
+  The owner's standing instructions say: answer in Chinese, briefly. A question in English must still
+  get a Chinese answer, and the file the owner wrote must be exactly as they left it afterwards.
+seed:
+  preferences:
+    instructions.md: |
+      # How I like to be answered
+      - Always answer me in Chinese (中文), even when I write in English.
+      - Keep it to two short sentences.
+steps:
+  - id: ask
+    message: What is a good way to start learning to cook?
+checks:
+  - {kind: says, step: ask, pattern: "[\u4e00-\u9fff]{4,}"}
+  - {kind: memory_untouched, paths: [preferences/instructions.md]}
+  - {kind: max_messages, limit: 1}
+  - {kind: spend_under, usd: 0.25}
+mock:
+  good:
+    ask:
+      - say: "先从简单的家常菜开始，比如炒鸡蛋和蔬菜汤。多看视频教程，每周固定做几次。"
+  bad:
+    - name: answers-in-english
+      fails: [says-ask]
+      script:
+        ask:
+          - say: "Start with simple dishes like scrambled eggs and soup."
+    - name: says-it-twice
+      fails: [max_messages]
+      script:
+        ask:
+          - send: "先从简单的家常菜开始，比如炒鸡蛋。"
+          - say: "再补充一点：每周固定做几次，慢慢就熟练了。"

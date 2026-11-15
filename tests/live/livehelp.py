@@ -27,6 +27,13 @@ LIVE_HOME = Path(os.environ.get("PA_LIVE_HOME", "~/.personal-agent-livetest")).e
 MODEL = os.environ.get("PA_LIVE_MODEL", "gpt-6.1-sol")
 EFFORT = "medium"
 
+SPENT: list[float] = []
+
+
+def record_spend(usd: float) -> None:
+    """Keep what one agent (or one trial) cost, so the run can say what it cost altogether."""
+    SPENT.append(float(usd))
+
 
 def live_config(**sections: dict[str, Any]) -> Config:
     """The settings every live test starts from; `sections` adds to or overrides them."""

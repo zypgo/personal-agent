@@ -6,7 +6,8 @@ What they need
 - The key: `OPENAI_API_KEY` in `$PA_LIVE_HOME/.env` (default `~/.personal-agent-livetest`). It is
   read into this process's environment and nowhere else; the tests copy it to no file.
 - Money: every model call uses `gpt-6.1-sol` with medium reasoning (`PA_LIVE_MODEL` changes the
-  name). A test caps its own spending, and the whole folder costs well under a dollar.
+  name). A test caps its own spending, and the whole folder costs about 35 cents (the last
+  line of the run says what it really cost).
 
 Each test builds its own agent in a temporary home, so nothing here touches your real one.
 """
@@ -19,7 +20,7 @@ from typing import Any
 
 import pytest
 from dotenv import dotenv_values
-from livehelp import LIVE_HOME, Chat, live_config
+from livehelp import LIVE_HOME, SPENT, Chat, live_config, record_spend
 
 from personal_agent.app import App, build_app
 from personal_agent.config import Config
@@ -55,4 +56,13 @@ async def live(tmp_path, monkeypatch):
     yield start
     for app in started:
         await app.stop_services()
+        record_spend(app.db.scalar("SELECT SUM(cost_usd) FROM runs", default=0.0))
         app.close()
+
+
+def pytest_terminal_summary(terminalreporter) -> None:
+    if SPENT:
+        terminalreporter.write_line(
+            f"live spend: ${sum(SPENT):.4f} across {len(SPENT)} agents / trial sets "
+            "(model calls only; the OpenAI dashboard is the authority)"
+        )

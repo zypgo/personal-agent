@@ -238,6 +238,7 @@ def capability_checks(paths: Paths) -> list[Check]:
     checks.extend(_channel_checks(paths, cfg))
     checks.extend(_chat_page_checks(paths, cfg))
     checks.extend(_webhook_checks(paths, cfg))
+    checks.extend(_service_checks(paths))
 
     for name, secret in cfg.secrets.items():
         hosts = ", ".join(secret.hosts)
@@ -255,6 +256,69 @@ def capability_checks(paths: Paths) -> list[Check]:
                 )
             )
     return checks
+
+
+def _service_checks(paths: Paths, manager=None) -> list[Check]:
+    """The background service, if one was installed for this home: loaded, still pointing at a
+    program that exists, and not somewhere macOS keeps background jobs out of."""
+    if sys.platform != "darwin":
+        return []
+    from personal_agent.launchd import ServiceError, ServiceManager, protected_folder
+
+    manager = manager or ServiceManager(paths)
+    if not manager.plist_file.exists():
+        return []  # nobody asked for one: nothing to report
+    python = manager.installed_python()
+    if python is None:
+        return [
+            Check(
+                "background service",
+                "warn",
+                f"{manager.plist_file} is not a job file this version wrote",
+                "Run: pa service install",
+            )
+        ]
+    if not os.path.exists(python):
+        return [
+            Check(
+                "background service",
+                "warn",
+                f"it runs {python}, which no longer exists",
+                "Run: pa service install (from where the agent is installed now)",
+            )
+        ]
+    if folder := protected_folder(python):
+        return [
+            Check(
+                "background service",
+                "warn",
+                f"it runs {python}, in your {folder} folder; macOS keeps background jobs out of it",
+                "Move the project elsewhere (or `uv tool install .`), then: pa service install",
+            )
+        ]
+    try:
+        status = manager.status()
+    except ServiceError as exc:
+        return [Check("background service", "warn", str(exc))]
+    if not status.loaded:
+        return [
+            Check(
+                "background service",
+                "warn",
+                "installed, but not loaded (it loads at your next login)",
+                "Run: pa service install",
+            )
+        ]
+    if status.pid is None:
+        return [
+            Check(
+                "background service",
+                "warn",
+                f"loaded but not running ({status.state or 'unknown'}; last exit {status.last_exit})",
+                "See why: pa service logs --launchd",
+            )
+        ]
+    return [Check("background service", "ok", f"running (pid {status.pid})")]
 
 
 def _skills_checks(paths: Paths, cfg) -> list[Check]:
