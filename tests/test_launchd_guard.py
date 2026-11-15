@@ -32,7 +32,8 @@ REAL_HOME_AGENTS = Path("~/Library/LaunchAgents").expanduser()
     ],
 )
 def test_changing_the_real_launchd_from_a_test_is_refused(verb):
-    with pytest.raises(AssertionError, match="real launchd"):
+    said = rf"real launchd: launchctl {verb} gui/1/local\.personal-agent\.guard"
+    with pytest.raises(AssertionError, match=said):
         launchd.system_launchctl(verb, "gui/1/local.personal-agent.guard")
 
 
