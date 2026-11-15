@@ -126,6 +126,25 @@ def _json(value: object) -> str:
     return text if len(text) <= MAX_PAYLOAD_CHARS else text[:MAX_PAYLOAD_CHARS] + "\n[truncated]"
 
 
+def _duration(seconds: int) -> str:
+    for unit, size in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        if seconds >= size:
+            count = seconds // size
+            return f"{count} {unit}{'s' if count != 1 else ''}"
+    return f"{seconds} seconds"
+
+
+def _timer_details(payload: dict) -> str:
+    """` (scheduled for ...; running 3 hours late)`: lets the agent see that it was woken late."""
+    details = []
+    if payload.get("scheduled_for"):
+        details.append(f"scheduled for {payload['scheduled_for']}")
+    late = int(payload.get("late_s") or 0)
+    if late >= 120:
+        details.append(f"running {_duration(late)} late; the computer may have been asleep")
+    return f" ({'; '.join(details)})" if details else ""
+
+
 def event_to_item(event: Event, *, context: str | None = None) -> dict[str, str]:
     """The user-role session item that represents one inbox event."""
     kind, payload = event.kind, event.payload
@@ -137,7 +156,7 @@ def event_to_item(event: Event, *, context: str | None = None) -> dict[str, str]
                 event.text, event.source
             )
     elif kind == Kind.TIMER:
-        header = f"[Timer fired: {payload.get('name', 'unnamed')}]"
+        header = f"[Timer fired: {payload.get('name', 'unnamed')}{_timer_details(payload)}]"
         prompt = str(payload.get("prompt", ""))
         body = (
             header

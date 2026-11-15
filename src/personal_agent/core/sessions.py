@@ -9,6 +9,7 @@ audits can read what really happened.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
@@ -194,18 +195,24 @@ class SessionStore:
         return [SessionInfo(r["session_key"], r["n"], r["last"]) for r in rows]
 
     # ---- crash recovery ---------------------------------------------------------------
-    def repair_dangling_calls(self, key: str, *, run_id: str | None = None) -> int:
+    def repair_dangling_calls(
+        self, key: str, *, run_id: str | None = None, skip: Collection[str] = ()
+    ) -> int:
         """Give every tool call without a recorded result an explicit "interrupted" result.
 
         The SDK silently drops such calls from the model input, so the model would never learn
-        that an action may already have happened. Returns the number of calls repaired.
+        that an action may already have happened. Calls in `skip` (those of a run waiting for the
+        owner's approval) are left alone: their real result is coming. Returns the number of
+        calls repaired.
         """
         items = self.items(key)
         answered = {i.get("call_id") for i in items if i.get("type") == "function_call_output"}
         missing = [
             i["call_id"]
             for i in items
-            if i.get("type") == "function_call" and i.get("call_id") not in answered
+            if i.get("type") == "function_call"
+            and i.get("call_id") not in answered
+            and i.get("call_id") not in skip
         ]
         if missing:
             self.append(

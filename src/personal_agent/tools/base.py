@@ -6,9 +6,10 @@ touching the network is simply never given a network tool.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from agents import FunctionTool
 
@@ -17,7 +18,8 @@ class Category(StrEnum):
     READ = "read"  # reads local or remote data without changing anything
     MEMORY = "memory"  # reads/writes the agent's own memory
     NOTIFY = "notify"  # talks to the owner
-    SCHEDULE = "schedule"  # creates future wake-ups
+    REMIND = "remind"  # sets a one-off reminder for itself
+    SCHEDULE = "schedule"  # creates recurring wake-ups
     WRITE = "write"  # changes files or external state
     EXEC = "exec"  # runs commands
     NET_WRITE = "net_write"  # sends data to the outside world
@@ -42,6 +44,26 @@ class ToolDef:
     taints: bool = False
     """The tool returns content the owner did not write (web pages, mail, files from outside)."""
     source: str = "builtin"
+    detail: Callable[[dict[str, Any]], str] | None = None
+    """Short summary of one call for `tool:detail` rules and the audit log (a command, a host)."""
+    category_for: Callable[[dict[str, Any]], Category] | None = None
+    """Lets one tool change category by arguments (a reminder is lighter than a recurring job)."""
+
+    def category_of(self, args: dict[str, Any]) -> Category:
+        if self.category_for is not None:
+            try:
+                return self.category_for(args)
+            except Exception:
+                return self.category
+        return self.category
+
+    def detail_of(self, args: dict[str, Any]) -> str:
+        if self.detail is None:
+            return ""
+        try:
+            return str(self.detail(args))[:300]
+        except Exception:
+            return ""
 
 
 @dataclass

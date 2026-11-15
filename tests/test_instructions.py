@@ -159,3 +159,25 @@ def test_context_block_is_stable_and_complete(clock):
     assert block.splitlines()[0] == "<context>" and block.splitlines()[-1] == "</context>"
     assert "now: 2023-11-15 06:13 Wednesday (Asia/Shanghai, UTC+08:00)" in block
     assert "session: main" in block and "note: note A" in block
+
+
+def _timer_event(**extra):
+    new = timer("brief", "Summarise my inbox.")
+    return make_event(new.__class__(**{**new.__dict__, "payload": {**new.payload, **extra}}))
+
+
+def test_a_late_timer_tells_the_agent_it_was_woken_late():
+    text = event_to_item(
+        _timer_event(
+            scheduled_for="2026-11-15 08:00 Sunday (Asia/Shanghai, UTC+08:00)", late_s=7200
+        )
+    )["content"]
+    assert text.startswith("[Timer fired: brief (scheduled for 2026-11-15 08:00")
+    assert "2 hours late" in text and "asleep" in text
+
+
+def test_an_on_time_timer_does_not_claim_to_be_late():
+    text = event_to_item(_timer_event(scheduled_for="2026-11-15 08:00 Sunday (UTC)", late_s=3))[
+        "content"
+    ]
+    assert "scheduled for 2026-11-15 08:00" in text and "late" not in text

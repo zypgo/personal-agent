@@ -270,6 +270,20 @@ class Inbox:
             )
         return cur.rowcount
 
+    def expedite(self, error_like: str) -> int:
+        """Make events that were put off because of a problem that is now fixed ready at once.
+
+        `error_like` is an SQL LIKE pattern over the stored failure text (for example
+        `%budget reached%` after the owner raised today's limit)."""
+        now = self.clock.now()
+        with self.db.tx():
+            cur = self.db.execute(
+                """UPDATE events SET available_at = ?
+                   WHERE status = 'pending' AND available_at > ? AND last_error LIKE ?""",
+                (now, now, error_like),
+            )
+        return cur.rowcount
+
     def release(self, batch: Batch) -> None:
         """Give a batch back untouched (graceful shutdown): no attempt is consumed."""
         with self.db.tx():

@@ -12,7 +12,17 @@ from dataclasses import dataclass
 
 import openai
 
+from personal_agent.core.budget import BudgetExceeded
 from personal_agent.security.redact import known_secret_values, redact
+
+__all__ = [
+    "BudgetExceeded",
+    "Failure",
+    "ModelUnavailable",
+    "PreferencesProblem",
+    "RunTimedOut",
+    "classify",
+]
 
 
 class ModelUnavailable(Exception):
@@ -23,14 +33,8 @@ class PreferencesProblem(Exception):
     """The owner's preferences could not be read; the run was stopped on purpose."""
 
 
-class BudgetExceeded(Exception):
-    """A spending limit was reached; the run is paused, not failed."""
-
-    def __init__(self, scope: str, spent: float, limit: float) -> None:
-        super().__init__(f"{scope} budget reached: ${spent:.2f} of ${limit:.2f}")
-        self.scope = scope
-        self.spent = spent
-        self.limit = limit
+class RunTimedOut(Exception):
+    """A run took longer than `runtime.run_timeout_s` and was stopped."""
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,8 @@ class Failure:
     summary: str
     user_hint: str | None = None
     """What the owner can do about it, if anything."""
+    notice_key: str | None = None
+    """Tell the owner once per key, even when no conversation is waiting (a paused budget)."""
 
 
 def classify(exc: BaseException) -> Failure:
@@ -50,6 +56,26 @@ def classify(exc: BaseException) -> Failure:
             300.0,
             text,
             "There is no OpenAI API key yet. Run `pa doctor` to see where to put it.",
+        )
+    if isinstance(exc, BudgetExceeded) and exc.scope == "daily":
+        return Failure(
+            True,
+            exc.resets_in_s or 3600.0,
+            text,
+            f"Today's budget (${exc.limit:.2f}) is used up. Work resumes after midnight; "
+            "run `pa budget extend 2` to allow $2 more today.",
+            notice_key="budget:daily",
+        )
+    if isinstance(exc, BudgetExceeded):
+        return Failure(
+            False,
+            0.0,
+            text,
+            f"That task reached its cost limit (${exc.limit:.2f}) and was stopped.",
+        )
+    if isinstance(exc, RunTimedOut):
+        return Failure(
+            False, 0.0, text, "That took too long, so I stopped it. What I did so far is saved."
         )
     if isinstance(exc, PreferencesProblem):
         return Failure(

@@ -125,6 +125,83 @@ MIGRATIONS: list[str] = [
         updated_at REAL NOT NULL
     );
     """,
+    # ---- 2: iteration 2 always-on loop ----------------------------------------------------
+    """
+    -- Timers: follow-ups the agent sets for itself, and recurring schedules.
+    CREATE TABLE timers (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT NOT NULL,
+        kind          TEXT NOT NULL CHECK (kind IN ('followup', 'schedule')),
+        cron          TEXT,                  -- 5-field cron expression (schedule only)
+        tz            TEXT,                  -- IANA zone the cron expression is evaluated in
+        due_at        REAL NOT NULL,         -- next firing, UTC epoch seconds
+        prompt        TEXT NOT NULL,         -- what the agent is told when it fires
+        session_key   TEXT NOT NULL,
+        trust         TEXT NOT NULL DEFAULT 'owner' CHECK (trust IN ('owner', 'untrusted')),
+        status        TEXT NOT NULL DEFAULT 'active'
+                      CHECK (status IN ('active', 'paused', 'fired', 'cancelled')),
+        misfire       TEXT NOT NULL DEFAULT 'fire_once' CHECK (misfire IN ('fire_once', 'skip')),
+        created_by    TEXT NOT NULL DEFAULT 'owner',   -- owner | agent | system
+        created_at    REAL NOT NULL,
+        last_fired_at REAL,
+        fire_count    INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE UNIQUE INDEX timers_live_name ON timers(name) WHERE status IN ('active', 'paused');
+    CREATE INDEX timers_due ON timers(due_at) WHERE status = 'active';
+
+    -- Approvals: a tool call that must wait for the owner. The run is suspended (run_states)
+    -- until every approval of that run is decided.
+    CREATE TABLE approvals (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      TEXT NOT NULL,
+        session_key TEXT NOT NULL,
+        call_id     TEXT NOT NULL,           -- the model's tool call id
+        tool        TEXT NOT NULL,
+        summary     TEXT NOT NULL,           -- what the owner is asked to approve (redacted)
+        status      TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'approved', 'denied', 'expired', 'superseded')),
+        created_at  REAL NOT NULL,
+        expires_at  REAL NOT NULL,
+        decided_at  REAL,
+        decided_by  TEXT,
+        note        TEXT
+    );
+    CREATE UNIQUE INDEX approvals_call ON approvals(run_id, call_id);
+    CREATE INDEX approvals_status ON approvals(status, expires_at);
+    CREATE INDEX approvals_session ON approvals(session_key, status);
+
+    -- A suspended run: the SDK's serialized RunState plus what we need to rebuild its context.
+    -- Stays on this machine; it contains the conversation so far.
+    CREATE TABLE run_states (
+        run_id      TEXT PRIMARY KEY,
+        session_key TEXT NOT NULL,
+        state       TEXT NOT NULL,
+        meta        TEXT NOT NULL,           -- JSON: profile, origin, trust, taint reasons
+        created_at  REAL NOT NULL
+    );
+
+    -- Every tool call and what the policy decided about it.
+    CREATE TABLE audit (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts          REAL NOT NULL,
+        run_id      TEXT,
+        session_key TEXT,
+        call_id     TEXT,                    -- the model's tool call id
+        tool        TEXT NOT NULL,
+        category    TEXT,
+        verdict     TEXT NOT NULL,           -- allow | ask | deny
+        layer       TEXT,                    -- which policy layer decided
+        reason      TEXT,
+        args        TEXT,                    -- redacted and truncated
+        detail      TEXT,
+        outcome     TEXT,                    -- ok | error | denied | rejected | timeout | pending
+        duration_ms INTEGER,
+        tainted     INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX audit_ts ON audit(ts);
+    CREATE INDEX audit_run ON audit(run_id);
+    CREATE UNIQUE INDEX audit_call ON audit(run_id, call_id) WHERE call_id IS NOT NULL;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -183,6 +260,19 @@ class Database:
     ) -> Any:
         row = self.one(sql, params)
         return default if row is None or row[0] is None else row[0]
+
+    # ---- small key/value state ---------------------------------------------------------
+    def kv_get(self, key: str, default: str | None = None) -> str | None:
+        row = self.one("SELECT value FROM kv WHERE key = ?", (key,))
+        return default if row is None else row["value"]
+
+    def kv_set(self, key: str, value: str, *, now: float = 0.0) -> None:
+        with self.tx():
+            self.execute(
+                """INSERT INTO kv(key, value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at""",
+                (key, value, now),
+            )
 
     # ---- transactions -----------------------------------------------------------------
     @contextmanager

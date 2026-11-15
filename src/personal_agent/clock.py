@@ -7,8 +7,9 @@ time is derived through the owner's timezone only at the edges (prompts, UI).
 from __future__ import annotations
 
 import os
+import re
 import time
-from datetime import datetime, tzinfo
+from datetime import datetime, timedelta, tzinfo
 from typing import Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -83,3 +84,48 @@ def format_local(ts: float, tz: tzinfo) -> str:
     offset = f"{offset[:3]}:{offset[3:]}" if offset else "+00:00"
     zone = getattr(tz, "key", None) or dt.tzname() or "local"
     return f"{dt:%Y-%m-%d %H:%M} {dt:%A} ({zone}, UTC{offset})"
+
+
+def start_of_day(ts: float, tz: tzinfo) -> float:
+    """Local midnight at the start of the day `ts` falls in (UTC epoch seconds)."""
+    return to_local(ts, tz).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+def start_of_next_day(ts: float, tz: tzinfo) -> float:
+    midnight = to_local(ts, tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (midnight + timedelta(days=1)).timestamp()
+
+
+_QUIET = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
+
+
+def parse_quiet_hours(text: str) -> tuple[int, int]:
+    """`"23:00-08:00"` -> (start, end) as minutes since local midnight. The window may wrap past
+    midnight."""
+    match = _QUIET.match(text)
+    if match is None:
+        raise ValueError(f'quiet_hours must look like "23:00-08:00", got {text!r}')
+    h1, m1, h2, m2 = (int(g) for g in match.groups())
+    if not (0 <= h1 < 24 and 0 <= h2 < 24 and 0 <= m1 < 60 and 0 <= m2 < 60):
+        raise ValueError(f"quiet_hours has an impossible time: {text!r}")
+    start, end = h1 * 60 + m1, h2 * 60 + m2
+    if start == end:
+        raise ValueError("quiet_hours must start and end at different times")
+    return start, end
+
+
+def in_quiet_hours(ts: float, tz: tzinfo, window: tuple[int, int]) -> bool:
+    local = to_local(ts, tz)
+    minute = local.hour * 60 + local.minute
+    start, end = window
+    return start <= minute < end if start < end else minute >= start or minute < end
+
+
+def quiet_hours_end(ts: float, tz: tzinfo, window: tuple[int, int]) -> float:
+    """When the quiet window that contains `ts` ends (UTC epoch seconds)."""
+    local = to_local(ts, tz)
+    end = window[1]
+    end_at = local.replace(hour=end // 60, minute=end % 60, second=0, microsecond=0)
+    if end_at <= local:
+        end_at += timedelta(days=1)
+    return end_at.timestamp()

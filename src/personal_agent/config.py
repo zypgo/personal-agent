@@ -11,8 +11,9 @@ import tomllib
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from personal_agent.clock import parse_quiet_hours
 from personal_agent.paths import Paths
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -66,10 +67,87 @@ class MemoryConfig(_Section):
     index_max_bytes: int = Field(25_000, ge=1_000)
 
 
+class RuntimeConfig(_Section):
+    concurrency: int = Field(2, ge=1, le=16)
+    """Sessions worked on at the same time (one session is only ever handled by one run)."""
+    run_timeout_s: float = Field(900.0, gt=0)
+    """A single run that takes longer than this is stopped."""
+    poll_s: float = Field(1.0, ge=0.05)
+    """How often an idle worker checks the inbox for events added by other processes."""
+    tool_timeout_s: float = Field(120.0, gt=0)
+    """A single tool call that takes longer than this is abandoned (its result says so)."""
+    tool_output_chars: int = Field(20_000, ge=1_000)
+    """Longer tool output is cut; the model is told how much was left out."""
+
+
+class PolicyConfig(_Section):
+    mode: Literal["read_only", "supervised", "auto", "autonomous"] = "supervised"
+    """read_only: look but never act. supervised: asks before anything that changes the world.
+    auto: a small reviewer model decides, escalating to you when unsure. autonomous: no
+    questions (only your deny rules and always_ask still apply)."""
+    always_ask: list[str] = []
+    """Patterns like "shell:*" or "mcp_*". These ask even in auto and autonomous mode."""
+    allow: list[str] = []
+    """Patterns that are pre-approved, for example "shell:git status*"."""
+    deny: list[str] = []
+    """Patterns that are never allowed in any mode."""
+    allow_when_tainted: list[str] = []
+    """Allow patterns that stay allowed after the run has read untrusted content."""
+    approval_timeout_hours: float = Field(12.0, gt=0)
+    """An approval request nobody answers within this time counts as a refusal."""
+    i_understand_autonomous_risk: bool = False
+
+    @model_validator(mode="after")
+    def _autonomous_must_be_acknowledged(self) -> PolicyConfig:
+        if self.mode == "autonomous" and not self.i_understand_autonomous_risk:
+            raise ValueError(
+                'policy.mode = "autonomous" lets the agent act without asking; '
+                "set policy.i_understand_autonomous_risk = true to confirm"
+            )
+        return self
+
+
+class BudgetConfig(_Section):
+    per_run_usd: float = Field(1.0, gt=0)
+    """A single run that spends more than this is stopped and reported (usually a loop)."""
+    daily_usd: float = Field(5.0, gt=0)
+    """Across all runs since local midnight. Reaching it pauses work until tomorrow; nothing is lost."""
+
+
+class NotifyConfig(_Section):
+    channel: str = "cli"
+    """Where messages go when no conversation is waiting (scheduled work, alerts)."""
+    quiet_hours: str | None = None
+    """Local time window such as "23:00-08:00". Only urgent messages are delivered inside it."""
+    max_per_hour: int = Field(6, ge=1)
+    """Non-urgent messages per channel per hour; the rest wait for the next hour."""
+
+    @field_validator("quiet_hours")
+    @classmethod
+    def _quiet_hours_are_valid(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_quiet_hours(value)
+        return value
+
+
+class SchedulerConfig(_Section):
+    misfire_grace_s: int = Field(3600, ge=0)
+    """A recurring schedule that is overdue by more than this (the computer was asleep) is
+    treated according to its misfire policy instead of firing as if on time."""
+    min_interval_s: int = Field(300, ge=60)
+    """Shortest allowed gap between two firings of a recurring schedule."""
+    max_timers: int = Field(50, ge=1)
+
+
 class Config(_Section):
     agent: AgentConfig = AgentConfig()
     model: ModelConfig = ModelConfig()
     memory: MemoryConfig = MemoryConfig()
+    runtime: RuntimeConfig = RuntimeConfig()
+    policy: PolicyConfig = PolicyConfig()
+    budget: BudgetConfig = BudgetConfig()
+    notify: NotifyConfig = NotifyConfig()
+    scheduler: SchedulerConfig = SchedulerConfig()
 
 
 DEFAULT_CONFIG_TOML = """\
@@ -101,6 +179,32 @@ max_files = 500
 view_max_chars = 16000
 index_max_lines = 200            # lines of memory/state/MEMORY.md injected into every run
 index_max_bytes = 25000
+
+[runtime]
+concurrency = 2                  # conversations worked on at once
+run_timeout_s = 900              # a run longer than this is stopped
+tool_timeout_s = 120             # a single tool call longer than this is abandoned
+
+[policy]
+mode = "supervised"              # read_only | supervised | auto | autonomous
+# always_ask = ["shell:*"]       # patterns that ask in every mode except read_only
+# allow = ["shell:git status*"]  # patterns that are pre-approved
+# deny = ["shell:rm -rf *"]      # patterns that are never allowed
+approval_timeout_hours = 12      # an unanswered request counts as a refusal
+
+[budget]
+per_run_usd = 1.0                # one run above this is stopped and reported
+daily_usd = 5.0                  # all runs since local midnight; reaching it pauses work, loses nothing
+
+[notify]
+channel = "cli"                  # where unprompted messages go
+# quiet_hours = "23:00-08:00"    # local time; only urgent messages get through
+max_per_hour = 6                 # non-urgent messages per channel per hour
+
+[scheduler]
+misfire_grace_s = 3600           # how late a recurring job may run after the computer slept
+min_interval_s = 300             # shortest allowed gap between firings of a recurring job
+max_timers = 50
 """
 
 
