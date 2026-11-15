@@ -605,7 +605,7 @@ Anthropic 的 always-on 文章说"先安静，再去赢得注意力"，"Demystif
 
 ### 迭代 6 已被测试钉住的不变量
 
-（累计 3047 个离线测试，另有 79 个网页脚本测试与 27 个对真实模型的场景。本迭代新增的文件：服务 `test_launchd.py` 152、`test_cli_service.py` 63、`test_doctor_service.py` 12；评测 `test_eval_spec.py` 86、`test_eval_checks.py` 62、`test_eval_bench.py` 32、`test_eval_runner.py` 26、`test_eval_report.py` 21、`test_cli_eval.py` 39、`test_eval_builtin.py` 19；`test_cli_mentions.py` 2。**变异验证**：把保护代码改坏、对应测试必须失败——服务 246 处、评测的场景格式 101 处、判分 / 试验 / 运行器 / 报告 / 命令 252 处，共 599 处，全部被杀死。每一轮都有存活的，几乎全是测试太弱，补了测试后重跑；少数是**等价变异**，处理方式是把代码改到不再有那一处多余的东西，而不是为它写测试。
+（累计 3047 个离线测试，另有 79 个网页脚本测试与 27 个对真实模型的场景。本迭代新增的文件：服务 `test_launchd.py` 152、`test_cli_service.py` 63、`test_doctor_service.py` 12；评测 `test_eval_spec.py` 86、`test_eval_checks.py` 62、`test_eval_bench.py` 32、`test_eval_runner.py` 26、`test_eval_report.py` 21、`test_cli_eval.py` 39、`test_eval_builtin.py` 19；`test_cli_mentions.py` 2。**变异验证**：把保护代码改坏、对应测试必须失败——服务 246 处、评测的场景格式 101 处、判分 / 试验 / 运行器 / 报告 / 命令 252 处，共 599 处，全部被杀死（运行器与三份清单在 `scripts/mutation/`：`uv run python scripts/mutation/run.py scripts/mutation/lists/iteration6_service.py`，它在一份临时副本上改，真实源码不会被碰）。每一轮都有存活的，几乎全是测试太弱，补了测试后重跑；少数是**等价变异**，处理方式是把代码改到不再有那一处多余的东西，而不是为它写测试。
 
 **这一轮变异验证自己的一个漏洞**：变异运行器没有先确认"没被改过的代码能通过这些测试"。我在最后改了一个内置场景（多加了一个坏脚本），一个写死了"1 个坏脚本"的命令测试因此一直失败，而运行器把"测试失败"一律算成"变异被杀死"——于是报告层与命令层有 13 处变异其实活着，被这条已经坏掉的测试冒名杀死了。完整重跑时它们现身，补了测试（见上面各条：多个 `--tag` 取并集、`show` 念 `about`、坏脚本的错误要脱密、报告不写穿符号链接且 JSON 带缩进、一个残留的 `.json` 也算名字被占、比实际更短的脚本带着原因被指出来、一次失败的试验只显示第一个、`OPENAI_BASE_URL`……），服务一侧的完整重跑也有 5 处存活：两处（配置里的 `base_url` 与环境变量 `OPENAI_BASE_URL` 都算自定义端点、不该提示缺 key）第一轮就活着、当时漏补了；另外三处（`.env` 里的 key 也算、`logs --launchd -f` 跟的是错误文件而不是标准输出、卸载时只剩"已加载"或只剩"文件"一半的状态）原先被杀死过，后来调整测试时覆盖丢了，重跑才发现。运行器现在每开一批先把每一组测试在未改动的代码上跑一遍，不干净就直接停下。）
 

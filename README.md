@@ -160,6 +160,7 @@ uv run pytest                 # 测试（不需要 API key，模型由脚本化�
 node --test tests/js/*.test.mjs   # 网页前端的纯逻辑测试
 uv run pa eval run            # 内置行为场景的"判分自检"（不联网）；--live 才用真实模型
 PA_LIVE=1 uv run pytest tests/live   # 用真实 OPENAI_API_KEY 的端到端验证（会花钱；key 只从环境读）
+uv run python scripts/mutation/run.py scripts/mutation/lists/iteration6_spec.py   # 变异验证：故意把保护代码改坏，测试必须失败
 uv run ruff check src tests && uv run ruff format --check src tests
 uv run pa --version
 scripts/fetch_references.sh   # 重新拉取只读参考项目到 references/
