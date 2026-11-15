@@ -205,7 +205,7 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
     app.inbox.add(owner_message("hello"))
     await Worker(app).run_once()
 
-    assert tool_names(model) == ["memory", "send_message"]
+    assert tool_names(model) == ["memory", "schedule", "send_message"]
 
 
 # ---- background runs --------------------------------------------------------------------

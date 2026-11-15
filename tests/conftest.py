@@ -50,3 +50,26 @@ def make_app(tmp_path, clock, monkeypatch):
     yield make
     for app in created:
         app.close()
+
+
+@pytest.fixture
+def wired(make_app, monkeypatch):
+    """Run CLI commands against the test app (and keep it open between commands)."""
+    from personal_agent import cli
+
+    def wire(model: ScriptedModel | None = None, *, config: Config | None = None) -> App:
+        app = make_app(model, config=config)
+        monkeypatch.setattr(app, "close", lambda: None)
+        monkeypatch.setattr(cli, "_build", lambda: app)
+        return app
+
+    return wire
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """A fresh agent home for tests that exercise `pa init` and the real wiring."""
+    monkeypatch.setenv("PA_HOME", str(tmp_path / "fresh-home"))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    return tmp_path / "fresh-home"

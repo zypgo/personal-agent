@@ -109,6 +109,17 @@ class Outbox:
             )
             return int(cur.lastrowid) if cur.rowcount == 1 else None
 
+    def has_due(self, channels: Collection[str] | None = None) -> bool:
+        """Cheap read-only check that `claim_due` would return something."""
+        params: list[Any] = [self.clock.now()]
+        sql = "SELECT 1 FROM outbox WHERE status = 'pending' AND not_before <= ?"
+        if channels is not None:
+            if not channels:
+                return False
+            sql += f" AND channel IN ({','.join('?' * len(channels))})"
+            params.extend(channels)
+        return self.db.one(sql + " LIMIT 1", params) is not None
+
     # ---- delivery state machine -----------------------------------------------------------
     def claim_due(
         self, *, channels: Collection[str] | None = None, limit: int = 20
@@ -218,6 +229,18 @@ class Outbox:
                 (cutoff,),
             ).rowcount
         return {"retried": urgent, "maybe_sent": other}
+
+    def background_sends_since(self, channel: str, since: float) -> list[float]:
+        """When non-urgent, non-interactive messages went out on `channel` since `since` (oldest
+        first). These are the ones quiet hours and the hourly limit apply to."""
+        rows = self.db.query(
+            """SELECT sent_at FROM outbox
+               WHERE channel = ? AND status = 'sent' AND sent_at >= ? AND urgency != 'urgent'
+                 AND COALESCE(json_extract(payload, '$.interactive'), 0) = 0
+               ORDER BY sent_at""",
+            (channel, since),
+        )
+        return [r["sent_at"] for r in rows]
 
     # ---- introspection -----------------------------------------------------------------
     def get(self, message_id: int) -> OutMessage | None:

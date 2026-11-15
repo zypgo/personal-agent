@@ -6,6 +6,7 @@ from typing import Any
 
 from agents import Usage
 from openai.types.responses.response_usage import InputTokensDetails, OutputTokensDetails
+from typer.testing import CliRunner
 
 from personal_agent.core.events import Kind, NewEvent, Trust
 
@@ -67,3 +68,10 @@ def text_of(item: dict[str, Any]) -> str:
     if isinstance(content, list):
         return "".join(part.get("text", "") for part in content if isinstance(part, dict))
     return ""
+
+
+def invoke(*args: str, input: str | None = None):
+    """Run a `pa` command in-process."""
+    from personal_agent import cli
+
+    return CliRunner().invoke(cli.app, list(args), input=input)

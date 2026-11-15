@@ -307,6 +307,41 @@ class MemoryStore:
             return f"Error: {name} failed: {exc.strerror or exc}"
         return f"Error: unknown command {name}"
 
+    MUTATING = frozenset({"create", "str_replace", "insert", "delete", "rename"})
+
+    def check_command(self, command: dict[str, Any], *, actor: Actor = Actor.AGENT) -> str | None:
+        """Dry check of a mutating command: nothing is changed.
+
+        Returns None if the command is well-formed and aimed at a place the actor may write,
+        otherwise the error text the model should see right away. (Whether `str_replace` still
+        matches is only known when the command is applied.)"""
+        name = command.get("command")
+        if name not in self.MUTATING:
+            return f"Error: only {', '.join(sorted(self.MUTATING))} are allowed here, not {name!r}."
+        try:
+            paths = (
+                [command.get("old_path"), command.get("new_path")]
+                if name == "rename"
+                else [command.get("path")]
+            )
+            for path in paths:
+                target = self._parse(path)
+                self._require_writable(target, actor)
+            required = {
+                "create": "file_text",
+                "str_replace": "old_str",
+                "insert": "insert_text",
+            }.get(name)
+            if required and command.get(required) is None:
+                return f"Error: {name} needs {required}"
+            text = " ".join(
+                str(command.get(k) or "") for k in ("file_text", "new_str", "insert_text")
+            )
+            self._check_content(self._parse(paths[-1]), text)
+        except PathError as exc:
+            return str(exc)
+        return None
+
     # ---- view -----------------------------------------------------------------------------
     def view(self, path: Any, view_range: Any = None) -> str:
         target = self._parse(path)

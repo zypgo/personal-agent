@@ -144,3 +144,35 @@ def test_release_returns_without_consuming_an_attempt(inbox):
     inbox.release(batch)
     row = inbox.get(event_id)
     assert row["status"] == "pending" and row["attempts"] == 0
+
+
+# ---- cheap readiness checks used by idle loops ------------------------------------------------
+def test_has_ready_agrees_with_what_claim_would_return(inbox, clock):
+    assert not inbox.has_ready()
+    first = inbox.add(msg("a", session="A")).id
+    assert inbox.has_ready() and inbox.has_ready("A") and not inbox.has_ready("B")
+
+    batch = inbox.claim("w1")
+    assert not inbox.has_ready()  # leased and the lease is live
+
+    clock.advance(61)  # lease expired: another worker may take it over
+    assert inbox.has_ready()
+    inbox.fail(inbox.claim("w2"), "boom", environmental=True, retry_in=30)
+    assert not inbox.has_ready()  # waiting to retry
+    clock.advance(31)
+    assert inbox.has_ready()
+    assert batch.ids == [first]
+
+
+def test_active_for_counts_running_and_ready_events_but_not_ones_waiting_to_retry(inbox, clock):
+    assert inbox.active_for("main") == 0
+    inbox.add(msg("a"))
+    assert inbox.active_for("main") == 1 and inbox.active_for("other") == 0
+    batch = inbox.claim("w1")
+    assert inbox.active_for("main") == 1  # running
+    inbox.fail(batch, "no network", environmental=True, retry_in=600)
+    assert inbox.active_for("main") == 0
+    clock.advance(601)
+    assert inbox.active_for("main") == 1
+    inbox.complete(inbox.claim("w1"))
+    assert inbox.active_for("main") == 0

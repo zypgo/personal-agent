@@ -161,8 +161,8 @@ async def test_raising_todays_cap_releases_the_waiting_events_immediately(make_a
     await drain(app)
     assert await drain(app) == []  # still paused
 
-    app.budget.extend_today(1.0)
-    assert app.inbox.expedite("%budget reached%") == 1
+    limit, released = app.extend_budget(1.0)
+    assert (limit, released) == (1.004, 1)
     [result] = await drain(app)
     assert result.outcome.status == "completed"
     assert any(m.text == "again" for m in app.outbox.list())

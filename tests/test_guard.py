@@ -77,7 +77,7 @@ async def test_a_tool_denied_on_every_call_is_not_even_offered(make_app):
     app = make_app(model, config=config(deny=["shell", "notes:*"]))
     install(app, Spy())
     await ask(app)
-    assert tool_names(model) == {"memory", "send_message", "fetch", "leaky"}
+    assert tool_names(model) == {"memory", "send_message", "schedule", "fetch", "leaky"}
 
 
 async def test_read_only_mode_hides_everything_that_changes_the_world(make_app):
@@ -85,7 +85,29 @@ async def test_read_only_mode_hides_everything_that_changes_the_world(make_app):
     app = make_app(model, config=config(mode="read_only"))
     install(app, Spy())
     await ask(app)
-    assert tool_names(model) == {"memory", "send_message", "fetch", "leaky"}
+    # `schedule` stays: a one-off reminder is harmless, recurring jobs are refused per call.
+    assert tool_names(model) == {"memory", "send_message", "schedule", "fetch", "leaky"}
+
+
+async def test_in_read_only_mode_a_reminder_works_but_a_recurring_job_is_refused(make_app):
+    def schedule(call_id, **kw):
+        base = dict(
+            action="create", name="x", prompt="p", delay_minutes=None, at=None, cron=None,
+            timezone="UTC", session="own",
+        )  # fmt: skip
+        return function_call("schedule", {**base, **kw}, call_id=call_id)
+
+    model = ScriptedModel(
+        [
+            [schedule("a", name="remind", delay_minutes=30)],
+            [schedule("b", name="daily", cron="0 8 * * *")],
+            [assistant_message("done")],
+        ]
+    )
+    app = make_app(model, config=config(mode="read_only"))
+    await ask(app)
+    assert app.timers.get("remind") is not None and app.timers.get("daily") is None
+    assert outputs(app)["b"].startswith("Denied: the agent is in read-only mode")
 
 
 async def test_untrusted_runs_are_only_offered_tools_marked_for_their_profile(make_app):

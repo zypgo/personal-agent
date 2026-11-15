@@ -113,3 +113,16 @@ def test_recent_claims_are_not_considered_stuck(outbox, clock):
 def test_rejects_unknown_urgency(outbox):
     with pytest.raises(ValueError):
         enq(outbox, urgency="whenever")
+
+
+def test_has_due_agrees_with_what_claim_due_would_return(outbox, clock):
+    assert not outbox.has_due()
+    enq(outbox, "later", not_before=clock.now() + 60)
+    assert not outbox.has_due()  # held back
+    enq(outbox, "now", channel="web")
+    assert outbox.has_due() and outbox.has_due({"web"}) and not outbox.has_due({"cli"})
+    assert not outbox.has_due(set())
+    clock.advance(61)
+    assert outbox.has_due({"cli"})
+    outbox.claim_due()
+    assert not outbox.has_due()  # everything is claimed

@@ -118,11 +118,7 @@ class Timers:
         trust: Trust = Trust.OWNER,
         created_by: str = "agent",
     ) -> Timer:
-        now = self.clock.now()
-        if due_at < now - 1:
-            raise TimerError("that time is in the past")
-        if due_at > now + MAX_FOLLOWUP_DAYS * 86400:
-            raise TimerError(f"a follow-up cannot be more than {MAX_FOLLOWUP_DAYS} days away")
+        self._plan_followup(due_at)
         return self._insert(
             name=name,
             kind="followup",
@@ -148,6 +144,31 @@ class Timers:
         created_by: str = "agent",
         misfire: str = "fire_once",
     ) -> Timer:
+        cron, tz_name = self._plan_schedule(cron, tz, misfire)
+        return self._insert(
+            name=name,
+            kind="schedule",
+            cron=cron,
+            tz=tz_name,
+            due_at=next_fire(cron, tz_name, self.clock.now()),
+            prompt=prompt,
+            session_key=session_key,
+            trust=trust,
+            misfire=misfire,
+            created_by=created_by,
+        )
+
+    # ---- validation without side effects ------------------------------------------------
+    def _plan_followup(self, due_at: float) -> None:
+        now = self.clock.now()
+        if due_at < now - 1:
+            raise TimerError("that time is in the past")
+        if due_at > now + MAX_FOLLOWUP_DAYS * 86400:
+            raise TimerError(f"a follow-up cannot be more than {MAX_FOLLOWUP_DAYS} days away")
+
+    def _plan_schedule(
+        self, cron: str, tz: str | None, misfire: str = "fire_once"
+    ) -> tuple[str, str]:
         tz_name = tz or self.default_tz
         try:
             ZoneInfo(tz_name)
@@ -160,20 +181,61 @@ class Timers:
             )
         if misfire not in ("fire_once", "skip"):
             raise TimerError("misfire must be 'fire_once' or 'skip'")
-        now = self.clock.now()
-        self._check_interval(cron, tz_name, now)
-        return self._insert(
-            name=name,
-            kind="schedule",
-            cron=cron,
-            tz=tz_name,
-            due_at=next_fire(cron, tz_name, now),
-            prompt=prompt,
-            session_key=session_key,
-            trust=trust,
-            misfire=misfire,
-            created_by=created_by,
+        self._check_interval(cron, tz_name, self.clock.now())
+        return cron, tz_name
+
+    @staticmethod
+    def _check_name_and_prompt(name: str, prompt: str) -> tuple[str, str]:
+        name = name.strip()
+        if not NAME_RE.match(name) or name.isdigit():
+            raise TimerError(
+                "name must be 1-64 characters: lowercase letters, digits, '-', '_' or '.', "
+                "starting with a letter or digit, and not only digits"
+            )
+        prompt = prompt.strip()
+        if not prompt:
+            raise TimerError("the prompt (what to do when it fires) cannot be empty")
+        if len(prompt) > MAX_PROMPT_CHARS:
+            raise TimerError(
+                f"the prompt is {len(prompt)} characters; the limit is {MAX_PROMPT_CHARS}"
+            )
+        return name, prompt
+
+    def _check_room(self, name: str) -> None:
+        live = self.db.scalar(
+            "SELECT COUNT(*) FROM timers WHERE status IN ('active', 'paused')", default=0
         )
+        if live >= self.cfg.max_timers:
+            raise TimerError(
+                f"there are already {live} timers (limit {self.cfg.max_timers}); cancel some first"
+            )
+        taken = self.db.one(
+            "SELECT 1 FROM timers WHERE name = ? AND status IN ('active', 'paused')", (name,)
+        )
+        if taken:
+            raise TimerError(f"a timer named {name!r} already exists")
+
+    def check_followup(self, name: str, prompt: str, due_at: float) -> str | None:
+        """Why `add_followup` would refuse these arguments right now, or None. Changes nothing."""
+        try:
+            self._plan_followup(due_at)
+            checked, _ = self._check_name_and_prompt(name, prompt)
+            self._check_room(checked)
+        except TimerError as exc:
+            return str(exc)
+        return None
+
+    def check_schedule(
+        self, name: str, prompt: str, cron: str, tz: str | None = None
+    ) -> str | None:
+        """Why `add_schedule` would refuse these arguments right now, or None. Changes nothing."""
+        try:
+            self._plan_schedule(cron, tz)
+            checked, _ = self._check_name_and_prompt(name, prompt)
+            self._check_room(checked)
+        except TimerError as exc:
+            return str(exc)
+        return None
 
     def _check_interval(self, cron: str, tz_name: str, now: float) -> None:
         """Reject schedules that would fire more often than allowed (each firing costs money)."""
@@ -204,27 +266,9 @@ class Timers:
         misfire: str,
         created_by: str,
     ) -> Timer:
-        name = name.strip()
-        if not NAME_RE.match(name) or name.isdigit():
-            raise TimerError(
-                "name must be 1-64 characters: lowercase letters, digits, '-', '_' or '.', "
-                "starting with a letter or digit, and not only digits"
-            )
-        prompt = prompt.strip()
-        if not prompt:
-            raise TimerError("the prompt (what to do when it fires) cannot be empty")
-        if len(prompt) > MAX_PROMPT_CHARS:
-            raise TimerError(
-                f"the prompt is {len(prompt)} characters; the limit is {MAX_PROMPT_CHARS}"
-            )
+        name, prompt = self._check_name_and_prompt(name, prompt)
         with self.db.tx():
-            live = self.db.scalar(
-                "SELECT COUNT(*) FROM timers WHERE status IN ('active', 'paused')", default=0
-            )
-            if live >= self.cfg.max_timers:
-                raise TimerError(
-                    f"there are already {live} timers (limit {self.cfg.max_timers}); cancel some first"
-                )
+            self._check_room(name)
             try:
                 cur = self.db.execute(
                     """INSERT INTO timers (name, kind, cron, tz, due_at, prompt, session_key, trust,

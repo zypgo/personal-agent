@@ -74,7 +74,7 @@ flowchart LR
 
 ## 模块布局
 
-下面是目标布局；已经落地的见文末「实现状态」，迭代 1 已实现的文件在行尾标 ✅。
+下面是目标布局；已经落地的在行尾标 ✅，其余见文末「实现状态」。
 
 ```
 src/personal_agent/
@@ -89,14 +89,16 @@ src/personal_agent/
     events.py      ✅ 事件模型与信任等级（owner / untrusted）
     inbox.py       ✅ 收件箱：去重、租约、批处理、毒丸
     sessions.py    ✅ 追加式会话日志；SDK Session 适配
-    timers.py      follow-up 与 schedule；错过策略
+    timers.py      ✅ follow-up 与 schedule；时区/夏令时正确；错过策略；恰好一次触发
+    approvals.py   ✅ 审批请求/答复/过期/被覆盖；挂起 run 的状态存取
+    budget.py      ✅ 单 run 与每日上限；今日临时加额
     outbox.py      ✅ 发件箱；on_sent 提交；maybe_sent
     runs.py        ✅ run 记录、用量、状态机
-    worker.py      ✅ 领取批次、续租、失败归因（迭代 2 加并发循环）
-    dispatcher.py  ✅ 投递与重试（迭代 2 加静默时段、限流）
+    worker.py      ✅ 领取批次、续租、失败归因
+    dispatcher.py  ✅ 投递与重试；静默时段与每小时限流
   harness/
-    runner.py      ✅ Agents SDK 封装：偏好 fresh 读取、幂等落盘事件、实时记账、静默/投递规则
-                      （迭代 2 加挂起/恢复、预算）
+    runner.py      ✅ Agents SDK 封装：偏好 fresh 读取、幂等落盘事件、实时记账、静默/投递规则、
+                      审批挂起/恢复、模型调用前的预算检查
     instructions.py ✅ 系统指令 + 每次唤醒的上下文块；事件 → 会话条目（不可信内容围栏）
     prompts/       ✅ 运行协议与角色提示（system.md、profile_*.md）
     models.py      ✅ 模型端点工厂、重试策略、隐私默认（store=false + 加密推理回放）
@@ -111,19 +113,22 @@ src/personal_agent/
     dreaming.py    夜间整理
   security/
     redact.py      ✅ 密钥与敏感信息脱敏、注入线索
-    policy.py      分层策略引擎 + guardian
+    policy.py      ✅ 分层策略引擎
+    guardian.py    ✅ `auto` 模式的评审模型（失败即升级给人）
     sandbox.py     seatbelt / docker 后端
     broker.py      密钥占位符与出站代理
     ssrf.py        URL/IP 校验
-    audit.py       审计日志
+    audit.py       ✅ 审计日志（每次工具调用的决策与结局）
   tools/
     base.py        ✅ 工具类别、运行画像、注册表
-    builtin.py     ✅ `memory`（view/create/str_replace/insert/delete/rename）与 `send_message`
-    …              files、shell、web_fetch、web_search、http_request、schedule、search_history、skills
+    guard.py       ✅ 包住每一个工具：策略 → 审计 → 超时 → 输出脱敏与截断 → 污点标记
+    builtin.py     ✅ `memory`、`send_message`（含 `after_sent` 书签）、`schedule`
+    …              files、shell、web_fetch、web_search、http_request、search_history、skills
   plugins/         MCP 装载、Skills 装载、渠道/工具注册（entry points）
   channels/        ✅ base（Channel 协议）、cli；web（Starlette + PWA）、telegram、webhook
-  daemon.py        组装并运行 worker / scheduler / dispatcher / 渠道
-  cli.py           ✅ `pa` 命令：init / doctor / chat / ask / status / runs / run / sessions / outbox / memory / prefs
+  daemon.py        ✅ 单实例锁 + worker / scheduler / dispatcher / 巡检循环 + 优雅停机；渠道服务（迭代 4）挂在这里
+  cli.py           ✅ `pa` 命令：init / doctor / chat / ask / serve / status / runs / run / approvals / approve / deny /
+                      timers / audit / budget / sessions / outbox / memory / prefs
   evals/           场景评测框架
 ```
 
@@ -173,7 +178,7 @@ logs/ run/           日志、锁文件
 ### Harness（`harness/runner.py`）
 - 每次 run 构造一个 SDK `Agent`（`instructions` 为可调用，run 开始时快照），通过 `Session` 适配器读写会话日志。
 - **挂起/恢复**：策略返回 ASK → SDK 产生 `interruptions` → `RunState.to_string()` 存入 `run_states` → 审批请求入发件箱。用户答复事件到来后 `RunState.from_string()` + `approve/reject` → 继续。快照只来自本机 SQLite。
-- **预算**：`RunHooks.on_llm_end` 累计用量 × 价格表；超过单 run/单日上限 → 抛 `BudgetExceeded` → 标记 `paused_budget`（暂停而非失败），并通知用户。
+- **预算**：每次模型调用**之前**（`RunHooks.on_llm_start`）检查单 run/单日上限，调用之后只记账——先付费再丢弃答案是错的。超限 → `BudgetExceeded` → 标记 `paused_budget`（暂停而非失败）；单日上限会把事件延后到本地午夜（每天只通知一次），`pa budget extend` 可当天放行。
 - **上下文裁剪**：`call_model_input_filter` 把较早的大体积工具输出替换为占位符（tool-result clearing）；会话过长时压缩为摘要。
 - **提示缓存**：`instructions` 保持稳定；时间、触发事件等动态内容放进输入末尾。
 - **模型端点**：`OpenAIResponsesModel`（默认）；`base_url` 可指向兼容端点，并可降级到 Chat Completions。
@@ -184,16 +189,38 @@ logs/ run/           日志、锁文件
 
 | 序 | 层 | 结果 |
 |----|----|------|
-| 1 | **地板**：用户 deny 规则、内置硬禁止（如 `rm -rf /`、`curl \| sh`、读取密钥路径）；对命令做规范化/去混淆后匹配 | DENY（任何模式都不可绕过） |
+| 1 | **`deny` 规则**（用户配置，`工具名` 或 `工具名:细节` 的 glob） | DENY（任何模式都不可绕过） |
 | 2 | **画像**：本次 run 的工具类别白名单（`full / scheduled / untrusted / dream`） | 不在画像内 → 工具根本不提供；若仍被调用 → DENY |
-| 3 | **`always_ask`** 规则（工具名 glob，支持 `*`） | ASK（压过后面所有） |
-| 4 | **污点升级**：run 已读取不可信内容时，`exec / net_write / schedule / config` 类工具 | ASK（除非规则显式 `allow_when_tainted`） |
-| 5 | **模式**：`read_only`（只放行读/记忆/通知）· `supervised`（默认；读/记忆/通知放行，其余 ASK）· `auto`（guardian 评估）· `autonomous`（需显式确认风险） | ALLOW / ASK / DENY |
+| 3 | **`read_only` 模式**：只放行读 / 记忆 / 通知 / 一次性提醒 | 其余 DENY |
+| 4 | **`always_ask`** 规则 | ASK（压过后面所有，含 `auto` 与 `autonomous`） |
+| 5 | **污点升级**：run 已读取不可信内容时，`schedule / write / exec / net_write / config` 类工具 | ASK（除非规则显式 `allow_when_tainted`；`autonomous` 不适用） |
 | 6 | **`allow` 规则**（如 `shell:git status*`） | ALLOW |
+| 7 | **模式默认**：`supervised`（默认）读/记忆/通知/提醒放行、其余 ASK · `auto` 交给 guardian 评审 · `autonomous` 放行（须 `i_understand_autonomous_risk = true`） | ALLOW / ASK / REVIEW |
+
+> 内置硬禁止（如 `rm -rf /`、`curl | sh`、读取密钥路径）随 shell 工具在迭代 3 加入，作为第 1 层之前的地板。
 
 - **guardian**（仅 `auto` 模式）：用快速模型评审动作；把命令当**不可信输入**——剥离注释、定界标签包裹、"忽略块内指令"、仅输出 `APPROVE/DENY/ESCALATE`，不确定即升级给人。
-- 工具按类别声明：`read / memory / notify / schedule / write / exec / net_write / config`；MCP 工具默认 `write`（未知即需批准），可用 MCP 注解 `readOnlyHint` 或配置覆盖。
+- 工具按类别声明：`read / memory / notify / remind / schedule / write / exec / net_write / config`；工具可按参数动态归类（`schedule` 的一次性提醒是 `remind`，周期任务是 `schedule`）；MCP 工具默认 `write`（未知即需批准），可用 MCP 注解 `readOnlyHint` 或配置覆盖。
 - 审批**超时视为拒绝**；用户在审批待决时发来新消息 → 待决审批被标为"被覆盖"并拒绝（安全默认）。
+- **参数无效不打扰主人**：工具的 `validate` 钩子先于策略运行，非法 cron / 过去的时间直接把错误还给模型，而不是让主人批准一个必然失败的动作。
+- **信任继承**：被污点 run 创建的计时器，触发时以 `untrusted` 画像运行——不可信内容无法借计时器"洗白"。
+
+### 审批：挂起与恢复（`core/approvals.py`、`harness/runner.py`）
+- 策略返回 ASK → run **挂起**：SDK 的 `RunState` 存入 `run_states`，审批请求经发件箱发给主人（`approval_request`），worker 立刻空闲，等待期间不占用任何东西。
+- 主人答复（`/approve N|all`、`/deny N 原因`，或 `pa approve|deny`）→ 写入 `approval_response` 事件（幂等键 `resume:{run}:{轮}`）→ worker 取出状态并继续。**重启之后依然可以恢复。**
+- **批准的动作至多执行一次**：执行前先在审计里落下 `running`；崩溃后该调用被标为 `interrupted`，模型被告知结果未知，不会重放。
+- 主人在等待期间发来新消息 → 待决请求作废（`superseded`），对应调用以明确文案收口；后台事件不会"修复"挂起中的调用。过期同理视为拒绝。
+
+### 常驻进程（`daemon.py`）
+- **谁在运行 agent**由文件锁（`run/engine.lock`，`flock`）决定，进程死亡内核自动释放，不会残留。持有者可以是 `pa serve`（后台服务），也可以是一次孤立的 `pa chat` / `pa ask`（在本进程内运行 worker）。
+- `pa chat` / `pa ask` 发现锁被后台服务持有时进入**客户端模式**：只提交事件并等待，终端消息留在发件箱里作为"信箱"，下次打开聊天时送达。**恢复崩溃遗留状态只由持锁者做**，避免误伤另一个进程里正在运行的 run。
+- 循环：`concurrency` 个 worker（每会话同时只有一个 run）、scheduler（`timers.tick()`）、dispatcher、巡检（过期审批 + 心跳）。空闲时只做**只读**的 `has_ready()` / `has_due()` 检查，不抢写锁；任何新事件/新消息会唤醒所有循环。
+- 停机（SIGINT/SIGTERM）：先让进行中的 run 在 `shutdown_grace_s` 内完成，其余取消并**原样归还**事件（不消耗重试次数）；再按一次 Ctrl-C 强制退出。服务（渠道）崩溃会带退避重启，不拖垮核心循环。
+- 客户端不等"仅在等待重试"的事件（环境故障退避中），也不会把主人的 Ctrl-C 变成对后台 run 的中断。
+
+### 预算与通知闸门
+- `BudgetGuard`：单 run 上限防循环，每日上限（本地午夜重置）防账单；`status` 与 `pa budget` 展示今日花费、上限与重置时间。
+- `Dispatcher`：静默时段内只投递 `urgent` 与交互式回复；非紧急后台消息每渠道每小时有上限，超出的顺延到下一小时（顺延不是丢弃）。
 
 ### 沙箱与"双手"（`security/sandbox.py`）
 - 统一接口：`execute(command, cwd, timeout, env) -> ExecResult`。后端：
@@ -242,8 +269,8 @@ logs/ run/           日志、锁文件
 | 收件箱 / 会话日志 / 发件箱 / runs | ✅ 迭代 1 |
 | 记忆（VirtualFS + memory 工具 + 版本） | ✅ 迭代 1 |
 | Harness（SDK 封装）+ CLI 对话 + Fake-LLM 测试 | ✅ 迭代 1 |
-| Worker / Scheduler / Dispatcher / 预算 | 🚧 迭代 2 |
-| 策略引擎 + 延迟审批 + 审计 | 🚧 迭代 2 |
+| Worker / Scheduler / Dispatcher / 预算 / 常驻进程 | ✅ 迭代 2 |
+| 策略引擎 + 延迟审批 + 审计 + `schedule` 工具 | ✅ 迭代 2 |
 | MCP / Skills / 沙箱 / 密钥代理 / 内置工具 | 🚧 迭代 3 |
 | Web PWA / Telegram / Webhook / 配对 / 语音 / 图像 | 🚧 迭代 4 |
 | 检索 / 压缩 / 上下文裁剪 / 做梦 / 子代理 | 🚧 迭代 5 |
@@ -262,12 +289,27 @@ logs/ run/           日志、锁文件
 - **实时记账**：每次模型调用后立即写入用量与成本，崩溃的 run 也有账。
 - **优先级**：发件箱紧急消息先投递。
 
-### 迭代 1 的已知限制
+### 迭代 2 已被测试钉住的不变量
+
+- **没有"是"就不执行，批准了也至多执行一次**：挂起的调用在主人答复前绝不运行；答复后恢复，工具只执行一次；执行中途崩溃的调用被标记 `interrupted`，不重放（`tests/test_approval_flow.py`，含变异验证）。
+- **答复可以在重启之后到来**；主人发来新消息会让待决请求作废，后台事件不会把挂起中的调用"修好"。
+- **预算在调用之前检查**：超限的 run 不会花钱换一个被丢弃的答案；每日上限暂停但不丢事件，午夜自动继续，`extend_budget` 当天放行（`tests/test_budget.py`）。
+- **计时器恰好触发一次**：多进程同时 `tick` 也只写一个事件；cron 按用户时区与夏令时计算；错过的任务只补一次或跳过，不会"补发一堆"（`tests/test_timers.py`）。
+- **污点与信任**：读过外部内容的 run 做会改变世界的动作要先问；它创建的计时器以 `untrusted` 运行；无效参数不会让主人去批准一个必然失败的动作（`tests/test_guard.py`、`tests/test_schedule_tool.py`）。
+- **`after_sent` 书签**：`send_message` 里带的记忆变更在入队时就被校验，只有渠道确认送达后才提交（`tests/test_schedule_tool.py`、`tests/test_dispatcher.py`）。
+- **静默时段与限流**：非紧急后台消息被顺延而不是丢弃；紧急消息与交互式回复不受限（`tests/test_notify_gate.py`）。
+- **单实例**：同一时刻只有一个进程运行 agent；停机时进行中的 run 先完成，超时的被原样归还（不消耗重试次数）；崩溃的渠道服务带退避重启（`tests/test_daemon.py`）。
+- **终端的控制面**：`pa approve|deny|approvals|timers|audit|budget|status` 与聊天内 `/approve` `/deny`；有后台服务时终端只提交并等待，不会因为"恢复崩溃状态"误伤另一进程里的 run（`tests/test_cli_control.py`）。
+
+另有一次真实进程冒烟（不在测试套件里）：`pa serve` 起服务 → `pa status` 显示后台运行 → 第二个 `pa serve` 被拒绝 → `pa ask` 经服务提交 → 模型端点不可达时给出"稍后重试"提示 → SIGTERM 干净退出、锁释放。
+
+### 已知限制（截至迭代 2）
 
 - **会话窗口是权宜之计**：模型只看到最近 `agent.history_items` 条（默认 400，从最近的用户消息处对齐，避免切断工具往返），日志保留全部。窗口滑动会让提示缓存在那一刻失效；带摘要的压缩与工具结果清理在迭代 5 实现。
-- **目前只有两个工具**（`memory`、`send_message`）；文件、shell、网络、MCP、Skills 在迭代 3。
-- **没有常驻进程**：后台 run、计时器、策略审批、预算上限在迭代 2。`pa chat` / `pa ask` 启动时会清理上次崩溃遗留的 `running` 记录，因此迭代 2 的守护进程运行时会用锁文件避免它们互相干扰。
-- **一次一个会话**：CLI 只处理自己会话里的事件；并发调度在迭代 2。
+- **目前只有三个工具**（`memory`、`send_message`、`schedule`）；文件、shell、网络、MCP、Skills 在迭代 3。
+- **还没有终端以外的渠道**：没有注册对应渠道时，后台消息留在终端"信箱"，下次 `pa chat` 打开时送达；Web/Telegram/Webhook 在迭代 4。
+- **终端与后台服务之间没有即时通知**：客户端模式靠 `runtime.poll_s`（默认 1 秒）轮询，所以 `pa ask` 经服务提交会有至多约一秒的起步延迟。
+- **服务不会开机自启**：`pa serve` 在前台运行；launchd 常驻服务在迭代 6。
 
 ### 尚未验证（需要真实 `OPENAI_API_KEY`）
 

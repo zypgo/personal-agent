@@ -368,7 +368,10 @@ class Harness:
                 kind="approval_request",
                 run_id=ctx.run_id,
                 dedupe_key=f"approval:{ctx.run_id}:{approvals[0].id}",
-                extra={"approval_ids": [a.id for a in approvals]},
+                extra={
+                    "approval_ids": [a.id for a in approvals],
+                    "interactive": ctx.origin.interactive,
+                },
             )
             app.runs.set_status(ctx.run_id, "awaiting_approval")
         queued = list(ctx.queued_messages) + ([message_id] if message_id else [])
@@ -444,6 +447,7 @@ class Harness:
                 kind="message" if final_text else "notice",
                 run_id=ctx.run_id,
                 dedupe_key=f"run:{ctx.run_id}:final",
+                extra={"interactive": True},
             )
             if message_id is not None:
                 queued.append(message_id)
@@ -464,6 +468,7 @@ class Harness:
             kind="notice",
             run_id=ctx.run_id,
             dedupe_key=f"run:{ctx.run_id}:{key}",
+            extra={"interactive": ctx.origin.interactive},
         )
         app.runs.finish(ctx.run_id, "failed", error=error)
         return RunOutcome(

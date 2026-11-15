@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import atexit
 import os
-from collections.abc import Callable
+import re
+import signal
+from collections.abc import Awaitable, Callable
 from datetime import datetime
+from typing import Annotated
 
 import click
 import typer
@@ -22,7 +25,8 @@ from personal_agent.clock import format_local
 from personal_agent.config import DEFAULT_CONFIG_TOML, DEFAULT_ENV, ConfigError, load_env
 from personal_agent.core.dispatcher import Dispatcher
 from personal_agent.core.events import Kind, NewEvent
-from personal_agent.core.worker import Worker
+from personal_agent.core.timers import TimerError
+from personal_agent.daemon import AlreadyRunning, Daemon, Engine, daemon_state
 from personal_agent.doctor import live_checks, static_checks
 from personal_agent.logs import setup_logging
 from personal_agent.memory.store import INSTRUCTIONS_PATH, PROFILE_PATH, PROPOSALS_PATH, Actor
@@ -39,6 +43,10 @@ outbox_app = typer.Typer(
     help="Messages waiting to be delivered, or whose delivery is unclear.",
     invoke_without_command=True,
 )
+timers_app = typer.Typer(
+    help="Reminders and recurring jobs the agent (or you) set up.", invoke_without_command=True
+)
+budget_app = typer.Typer(help="Spending limits and today's spend.", invoke_without_command=True)
 memory_app = typer.Typer(
     help="Inspect the agent's memory and its change history.", no_args_is_help=True
 )
@@ -48,6 +56,8 @@ prefs_app = typer.Typer(
 )
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(outbox_app, name="outbox")
+app.add_typer(timers_app, name="timers")
+app.add_typer(budget_app, name="budget")
 app.add_typer(memory_app, name="memory")
 app.add_typer(prefs_app, name="prefs")
 
@@ -74,15 +84,13 @@ def _root(
     """personal-agent."""
 
 
-def _open(*, recover: bool = False) -> App:
+def _open() -> App:
     try:
         opened = _build()
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
     setup_logging(opened.paths)
-    if recover:
-        opened.recover()
     return opened
 
 
@@ -135,7 +143,7 @@ def doctor(
     checks = static_checks(paths)
     skipped_live = live and any(c.status == "fail" for c in checks)
     if live and not skipped_live:
-        opened = _open(recover=True)
+        opened = _open()
         try:
             with console.status("[dim]calling the model...[/dim]"):
                 checks += asyncio.run(live_checks(opened))
@@ -157,27 +165,47 @@ def doctor(
 
 
 # ---- talking to the agent ----------------------------------------------------------------
-async def _turn(opened: App, session_key: str) -> bool:
-    """Run everything ready in a session, then deliver what the agent said. True if no failure."""
-    worker = Worker(opened)
-    ok = True
+async def _turn(engine: Engine, session_key: str, event_id: int | None = None) -> bool:
+    """Get everything ready in a session processed, then show what the agent said.
+
+    Returns False if the message could not be handled (the reason has been printed). With a
+    background service running, "processed" means the service did it and we waited."""
+    opened = engine.app
+    dispatcher = Dispatcher(opened, {"cli": CliChannel(console)})
+
+    async def show() -> None:
+        await dispatcher.deliver_once()
+
     with console.status("[dim]thinking...[/dim]"):
-        while (
-            result := await worker.run_once(session_key=session_key, on_failure="drop")
-        ) is not None:
-            if result.failure is not None:
-                ok = False
-                console.print(
-                    f"[red]Error:[/red] {result.failure.user_hint or result.failure.summary}"
-                )
-    await Dispatcher(opened, {"cli": CliChannel(console)}).deliver_once()
+        results = await engine.settle(session_key, tick=show)
+    ok = True
+    for result in results:
+        if result.failure is not None:
+            ok = False
+            console.print(f"[red]Error:[/red] {result.failure.user_hint or result.failure.summary}")
+    await dispatcher.deliver_once()
+    if event_id is not None and not engine.inline:
+        ok = _service_handled(opened, event_id)
     return ok
 
 
-def _submit(opened: App, text: str, session_key: str) -> None:
-    opened.inbox.add(
+def _service_handled(opened: App, event_id: int) -> bool:
+    event = opened.inbox.get(event_id)
+    if event is None or event["status"] == "done":
+        return True
+    if event["status"] == "dead":
+        console.print(f"[red]Error:[/red] {escape(str(event['last_error'] or 'it failed'))}")
+    else:
+        console.print(
+            "[yellow]The agent could not finish this yet; the background service will retry.[/yellow]"
+        )
+    return False
+
+
+def _submit(opened: App, text: str, session_key: str) -> int:
+    return opened.inbox.add(
         NewEvent(source="cli", kind=Kind.MESSAGE, session_key=session_key, payload={"text": text})
-    )
+    ).id
 
 
 @app.command()
@@ -188,22 +216,27 @@ def ask(
     ),
 ) -> None:
     """Ask once and print the answer."""
-    opened = _open(recover=True)
+    opened = _open()
+    engine = Engine.acquire(opened)
     try:
-        _submit(opened, text, session)
-        if not asyncio.run(_turn(opened, session)):
+        event_id = _submit(opened, text, session)
+        if not asyncio.run(_turn(engine, session, event_id)):
             raise typer.Exit(1)
     finally:
+        engine.close()
         opened.close()
 
 
 HELP_TEXT = """\
-/new       start a fresh conversation (the old one stays in the log)
-/status    what is queued, what ran, what it cost
-/memory    show the agent's memory directory
-/runs      recent runs
-/help      this list
-/exit      leave (Ctrl-D works too)"""
+/new              start a fresh conversation (the old one stays in the log)
+/status           what is queued, what ran, what it cost
+/approvals        actions waiting for your yes or no
+/approve [N|all]  allow a waiting action
+/deny [N|all]     refuse it; add a few words after the number to tell the agent why
+/memory           show the agent's memory directory
+/runs             recent runs
+/help             this list
+/exit             leave (Ctrl-D works too)"""
 
 
 def _enable_history(opened: App) -> None:
@@ -231,9 +264,19 @@ def _save_history(readline, history) -> None:
 def chat_loop(opened: App, session_key: str, read_line: Callable[[str], str] = input) -> None:
     """The interactive loop. One event loop for the whole conversation, so the HTTP connection
     pool is reused, and Ctrl-C cancels only the running turn."""
+    engine = Engine.acquire(opened)
+    try:
+        _chat(engine, session_key, read_line)
+    finally:
+        engine.close()
+
+
+def _chat(engine: Engine, session_key: str, read_line: Callable[[str], str]) -> None:
+    opened = engine.app
+    where = "" if engine.inline else " · background service"
     console.print(
         Panel(
-            f"[bold]{opened.config.agent.name}[/bold] · model {opened.config.model.main} · session '{session_key}'\n"
+            f"[bold]{opened.config.agent.name}[/bold] · model {opened.config.model.main} · session '{session_key}'{where}\n"
             "[dim]/help for commands, Ctrl-D to leave[/dim]",
             expand=False,
         )
@@ -241,6 +284,7 @@ def chat_loop(opened: App, session_key: str, read_line: Callable[[str], str] = i
     with asyncio.Runner() as runner:
         # Anything the agent wanted to say while you were away.
         runner.run(Dispatcher(opened, {"cli": CliChannel(console)}).deliver_once())
+        _remind_of_approvals(opened)
         while True:
             try:
                 line = read_line("you> ").strip()
@@ -249,21 +293,35 @@ def chat_loop(opened: App, session_key: str, read_line: Callable[[str], str] = i
                 break
             if not line:
                 continue
-            if line.startswith("/"):
-                if not _slash(opened, line, session_key):
-                    break
-                continue
-            _submit(opened, line, session_key)
             try:
-                runner.run(_turn(opened, session_key))
+                if line.startswith("/"):
+                    if not _slash(engine, line, session_key, runner.run):
+                        break
+                    continue
+                event_id = _submit(opened, line, session_key)
+                runner.run(_turn(engine, session_key, event_id))
             except KeyboardInterrupt:
-                dropped = opened.inbox.drop_pending(session_key, "interrupted by the owner")
-                console.print(f"[dim]interrupted ({dropped} message(s) dropped)[/dim]")
+                _interrupted(engine, session_key)
 
 
-def _slash(opened: App, line: str, session_key: str) -> bool:
+def _interrupted(engine: Engine, session_key: str) -> None:
+    if engine.inline:
+        dropped = engine.app.inbox.drop_pending(session_key, "interrupted by the owner")
+        console.print(f"[dim]interrupted ({dropped} message(s) dropped)[/dim]")
+    else:
+        console.print(
+            "[dim]Stopped waiting. The background service is still working on it; "
+            "the answer will be shown when you next open the chat.[/dim]"
+        )
+
+
+def _slash(
+    engine: Engine, line: str, session_key: str, run: Callable[[Awaitable[bool]], bool]
+) -> bool:
     """Handle a /command. Returns False to leave the chat."""
-    command = line.split()[0].lower()
+    opened = engine.app
+    words = line.split()
+    command = words[0].lower()
     if command in ("/exit", "/quit"):
         return False
     if command == "/help":
@@ -277,6 +335,11 @@ def _slash(opened: App, line: str, session_key: str) -> bool:
         console.print(opened.memory.view("/memories"), markup=False)
     elif command == "/runs":
         _print_runs(opened, 8)
+    elif command == "/approvals":
+        _print_approvals(opened, include_decided=False)
+    elif command in ("/approve", "/deny"):
+        targets, note = _split_targets(words[1:])
+        _answer_approvals(engine, command == "/approve", targets, note, run)
     else:
         console.print(f"[yellow]Unknown command {command}.[/yellow] Try /help.")
     return True
@@ -289,7 +352,7 @@ def chat(
     ),
 ) -> None:
     """Talk to the agent."""
-    opened = _open(recover=True)
+    opened = _open()
     _enable_history(opened)
     try:
         chat_loop(opened, session)
@@ -297,25 +360,241 @@ def chat(
         opened.close()
 
 
+# ---- approvals ---------------------------------------------------------------------------
+_APPROVAL_ID = re.compile(r"#?(\d+)$")
+
+
+def _split_targets(words: list[str]) -> tuple[list[str], str | None]:
+    """ "3 4 not now" -> (["3", "4"], "not now"): leading numbers (or "all") pick the requests,
+    whatever follows is the note for the agent."""
+    targets: list[str] = []
+    for index, word in enumerate(words):
+        if word.lower() == "all" or _APPROVAL_ID.match(word):
+            targets.append(word.lower())
+        else:
+            return targets, " ".join(words[index:])
+    return targets, None
+
+
+def _pick_approvals(opened: App, targets: list[str]) -> list[int] | None:
+    pending = opened.approvals.pending()
+    if not pending:
+        console.print("[dim]Nothing is waiting for your answer.[/dim]")
+        return None
+    if not targets:
+        if len(pending) == 1:
+            return [pending[0].id]
+        ids = ", ".join(f"#{a.id}" for a in pending)
+        console.print(
+            f"[yellow]Several actions are waiting ({ids}): name one, or say `all`.[/yellow]"
+        )
+        return None
+    if "all" in targets:
+        return [a.id for a in pending]
+    return [int(m.group(1)) for t in targets if (m := _APPROVAL_ID.match(t))]
+
+
+def _answer_approvals(
+    engine: Engine,
+    approve: bool,
+    targets: list[str],
+    note: str | None,
+    run: Callable[[Awaitable[bool]], bool],
+) -> None:
+    """Record the owner's answer, then let the paused runs continue (here, or in the service)."""
+    opened = engine.app
+    ids = _pick_approvals(opened, targets)
+    if ids is None:
+        return
+    resume: list[str] = []
+    for approval_id in ids:
+        result = opened.approvals.decide(approval_id, approve, by="owner:cli", note=note)
+        colour = "green" if result.changed else "yellow"
+        console.print(f"[{colour}]{escape(result.message)}[/{colour}]")
+        if result.resume_queued and result.approval is not None:
+            resume.append(result.approval.session_key)
+    for session_key in dict.fromkeys(resume):
+        run(_turn(engine, session_key))
+
+
+def _remind_of_approvals(opened: App) -> None:
+    waiting = opened.approvals.pending()
+    if waiting:
+        console.print(
+            f"[yellow]{len(waiting)} action(s) are waiting for your answer:[/yellow] "
+            "/approvals to see them, /approve or /deny to answer."
+        )
+
+
+def _print_approvals(opened: App, *, include_decided: bool) -> None:
+    now = opened.clock.now()
+    rows = opened.approvals.recent(30) if include_decided else opened.approvals.pending()
+    if not rows:
+        console.print("[dim]Nothing is waiting for your answer.[/dim]")
+        return
+    table = Table(box=None, pad_edge=False)
+    for column in ("id", "status", "tool", "what", "session", "asked", "expires"):
+        table.add_column(column)
+    for item in rows:
+        table.add_row(
+            f"#{item.id}",
+            item.status,
+            item.tool,
+            escape(item.summary[:80]),
+            item.session_key,
+            _ago(item.created_at, now),
+            f"in {_span(item.expires_at - now)}" if item.status == "pending" else "-",
+        )
+    console.print(table)
+
+
+def _span(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
+@app.command()
+def approvals(
+    all_: bool = typer.Option(False, "--all", "-a", help="Also show answered requests."),
+) -> None:
+    """Actions the agent is waiting for your yes or no on."""
+    opened = _open()
+    try:
+        _print_approvals(opened, include_decided=all_)
+    finally:
+        opened.close()
+
+
+def _decide_command(approve: bool, words: list[str], note: str | None) -> None:
+    targets, trailing = _split_targets(words)
+    opened = _open()
+    engine = Engine.acquire(opened)
+    try:
+        _answer_approvals(engine, approve, targets, note or trailing, asyncio.run)
+    finally:
+        engine.close()
+        opened.close()
+
+
+@app.command()
+def approve(
+    ids: Annotated[
+        list[str] | None, typer.Argument(help="Request numbers from `pa approvals`, or `all`.")
+    ] = None,
+    note: str | None = typer.Option(None, "--note", "-m", help="A word for the agent."),
+) -> None:
+    """Allow a waiting action; the paused work continues."""
+    _decide_command(True, ids or [], note)
+
+
+@app.command()
+def deny(
+    ids: Annotated[
+        list[str] | None, typer.Argument(help="Request numbers from `pa approvals`, or `all`.")
+    ] = None,
+    note: str | None = typer.Option(None, "--note", "-m", help="Why, so the agent can adapt."),
+) -> None:
+    """Refuse a waiting action; the agent is told and carries on without it."""
+    _decide_command(False, ids or [], note)
+
+
+# ---- running in the background -----------------------------------------------------------
+@app.command()
+def serve(
+    show_messages: bool = typer.Option(
+        False,
+        "--console",
+        help="Print the agent's terminal messages here (otherwise they wait for `pa chat`).",
+    ),
+) -> None:
+    """Run the agent in the foreground: timers, background events and delivery, until Ctrl-C."""
+    opened = _open()
+    setup_logging(opened.paths, console=True)
+    channels = {"cli": CliChannel(console)} if show_messages else {}
+    daemon = Daemon(opened, channels, grace_s=opened.config.runtime.shutdown_grace_s)
+    try:
+        asyncio.run(_serve(daemon))
+    except AlreadyRunning as exc:
+        console.print(f"[red]{exc}.[/red] Stop it first (or use `pa chat` to talk to it).")
+        raise typer.Exit(1) from exc
+    finally:
+        opened.close()
+
+
+async def _serve(daemon: Daemon) -> None:
+    loop = asyncio.get_running_loop()
+
+    def on_signal() -> None:
+        if daemon.stopping:  # a second Ctrl-C means "now"
+            raise SystemExit(130)
+        console.print("[dim]Stopping: letting running work finish (Ctrl-C again to force)...[/dim]")
+        daemon.stop()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, on_signal)
+    running = asyncio.create_task(daemon.run())
+    ready = asyncio.create_task(daemon.wait_ready())
+    await asyncio.wait({running, ready}, return_when=asyncio.FIRST_COMPLETED)
+    if running.done():  # it could not start (for example another copy holds the lock)
+        ready.cancel()
+        await running
+        return
+    cfg = daemon.app.config
+    console.print(
+        f"[bold]{cfg.agent.name}[/bold] is running · model {cfg.model.main} · Ctrl-C to stop. "
+        "Talk to it from another terminal with `pa chat`."
+    )
+    await running
+    console.print("[dim]Stopped.[/dim]")
+
+
 # ---- inspecting state --------------------------------------------------------------------
 def _print_status(opened: App) -> None:
     now = opened.clock.now()
     cfg = opened.config
-    midnight = (
-        datetime.fromtimestamp(now, opened.tz)
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .timestamp()
-    )
     console.print(
         f"[bold]{cfg.agent.name}[/bold] · {cfg.model.main} · {format_local(now, opened.tz)}"
     )
+    state = daemon_state(opened)
+    if state.kind == "daemon":
+        console.print(
+            f"agent   [green]running in the background[/green] (pid {state.pid}, "
+            f"heartbeat {_span(state.heartbeat_age_s or 0)} ago)"
+        )
+    elif state.kind == "terminal":
+        console.print(f"agent   run by a terminal session (pid {state.pid})")
+    else:
+        console.print(
+            "agent   [yellow]not running[/yellow]: timers and background events wait until "
+            "`pa serve` (or `pa chat`) runs"
+        )
     inbox, outbox = opened.inbox.counts(), opened.outbox.counts()
     console.print(f"inbox   {_counts(inbox)}")
     console.print(f"outbox  {_counts(outbox)}")
     console.print(f"runs    {_counts(opened.runs.summary())}")
+    timers = opened.timers.list()
+    if timers:
+        upcoming = opened.timers.next_due()
+        soon = f", next in {_span(upcoming - now)}" if upcoming is not None else ""
+        console.print(f"timers  {len(timers)} active{soon}")
+    waiting = opened.approvals.pending()
+    if waiting:
+        console.print(
+            f"[yellow]approvals {len(waiting)} waiting for your answer[/yellow] (`pa approvals`)"
+        )
+    budget = opened.budget.status()
     console.print(
-        f"spend   today ${opened.runs.cost_since(midnight):.4f} · last 7 days ${opened.runs.cost_since(now - 7 * 86400):.4f}"
+        f"spend   today ${budget.spent_today:.4f} of ${budget.daily_limit:.2f} · "
+        f"last 7 days ${opened.runs.cost_since(now - 7 * 86400):.4f}"
     )
+    if budget.remaining_today <= 0:
+        console.print(
+            f"[yellow]Paused for the budget until local midnight (in {_span(budget.resets_in_s)}). "
+            "`pa budget extend 2` lets it continue today.[/yellow]"
+        )
     if outbox["maybe_sent"] or outbox["failed"]:
         console.print("[yellow]Some messages may not have reached you: run `pa outbox`.[/yellow]")
 
@@ -399,6 +678,207 @@ def run(run_id: str = typer.Argument(..., help="A run id from `pa runs`.")) -> N
                     str(part.get("text", "")) for part in body if isinstance(part, dict)
                 )
             console.print(f"[dim]{kind}[/dim] {str(body)[:600]}")
+    finally:
+        opened.close()
+
+
+# ---- timers ------------------------------------------------------------------------------
+_DURATION = re.compile(r"(\d+)\s*([smhd])$", re.IGNORECASE)
+_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def _parse_duration(text: str) -> float:
+    match = _DURATION.match(text.strip())
+    if not match:
+        raise typer.BadParameter("use a number and a unit, such as 90s, 45m, 2h or 1d")
+    return int(match.group(1)) * _UNIT_SECONDS[match.group(2).lower()]
+
+
+def _parse_local_time(opened: App, text: str) -> float:
+    try:
+        moment = datetime.fromisoformat(text.strip())
+    except ValueError as exc:
+        raise typer.BadParameter('use a local time like "2026-11-20 09:30"') from exc
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=opened.tz)
+    return moment.timestamp()
+
+
+def _print_timers(opened: App, *, include_finished: bool) -> None:
+    now = opened.clock.now()
+    rows = opened.timers.list(include_finished=include_finished)
+    if not rows:
+        console.print(
+            "[dim]No timers. Ask the agent to remind you of something, or use `pa timers add`.[/dim]"
+        )
+        return
+    table = Table(box=None, pad_edge=False)
+    for column in ("id", "name", "status", "repeats", "next", "in", "fired", "by"):
+        table.add_column(column)
+    for timer in rows:
+        live = timer.status in ("active", "paused")
+        table.add_row(
+            str(timer.id),
+            escape(timer.name),
+            timer.status,
+            f"{timer.cron} ({timer.tz})" if timer.cron else "once",
+            format_local(timer.due_at, opened.tz) if live else "-",
+            _span(timer.due_at - now) if timer.status == "active" else "-",
+            str(timer.fire_count),
+            timer.created_by,
+        )
+    console.print(table)
+
+
+@timers_app.callback()
+def _timers_list(
+    ctx: typer.Context,
+    all_: bool = typer.Option(False, "--all", "-a", help="Include finished and cancelled timers."),
+) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    opened = _open()
+    try:
+        _print_timers(opened, include_finished=all_)
+    finally:
+        opened.close()
+
+
+@timers_app.command("add")
+def timers_add(
+    name: str = typer.Argument(..., help="A short unique name, such as morning-brief."),
+    prompt: str = typer.Argument(..., help="What the agent should do when it fires."),
+    cron: str | None = typer.Option(None, "--cron", help='Recurring, e.g. "0 8 * * 1-5".'),
+    at: str | None = typer.Option(None, "--at", help='Once, at a local time: "2026-11-20 09:30".'),
+    in_: str | None = typer.Option(None, "--in", help="Once, after a delay: 90s, 45m, 2h, 1d."),
+    tz: str | None = typer.Option(None, "--tz", help="Time zone for --cron (default: yours)."),
+) -> None:
+    """Schedule something for the agent to do later (it tells you what it finds)."""
+    if sum(option is not None for option in (cron, at, in_)) != 1:
+        raise typer.BadParameter("give exactly one of --cron, --at or --in")
+    opened = _open()
+    try:
+        try:
+            if cron is not None:
+                timer = opened.timers.add_schedule(
+                    name=name, prompt=prompt, cron=cron, tz=tz, created_by="owner"
+                )
+            else:
+                due = (
+                    _parse_local_time(opened, at)
+                    if at is not None
+                    else opened.clock.now() + _parse_duration(in_ or "")
+                )
+                timer = opened.timers.add_followup(
+                    name=name, prompt=prompt, due_at=due, created_by="owner"
+                )
+        except TimerError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]")
+            raise typer.Exit(1) from exc
+        console.print(f"Scheduled '{timer.name}' for {format_local(timer.due_at, opened.tz)}.")
+        if daemon_state(opened).kind == "stopped":
+            console.print(
+                "[dim]It fires while the agent is running: start it with `pa serve`.[/dim]"
+            )
+    finally:
+        opened.close()
+
+
+_TIMER_DONE = {"cancel": "Cancelled", "pause": "Paused", "resume": "Resumed"}
+
+
+def _timer_action(verb: str, ref: str) -> None:
+    opened = _open()
+    try:
+        if not getattr(opened.timers, verb)(ref):
+            console.print(f"[yellow]Could not {verb} '{escape(ref)}': no such timer.[/yellow]")
+            raise typer.Exit(1)
+        console.print(f"{_TIMER_DONE[verb]} '{escape(ref)}'.")
+    finally:
+        opened.close()
+
+
+@timers_app.command("cancel")
+def timers_cancel(ref: str = typer.Argument(..., help="Timer name or id.")) -> None:
+    """Stop a timer for good."""
+    _timer_action("cancel", ref)
+
+
+@timers_app.command("pause")
+def timers_pause(ref: str = typer.Argument(..., help="Timer name or id.")) -> None:
+    """Keep a timer but stop it firing until resumed."""
+    _timer_action("pause", ref)
+
+
+@timers_app.command("resume")
+def timers_resume(ref: str = typer.Argument(..., help="Timer name or id.")) -> None:
+    """Un-pause a timer (a recurring one continues from its next regular time)."""
+    _timer_action("resume", ref)
+
+
+# ---- audit and budget --------------------------------------------------------------------
+@app.command()
+def audit(
+    limit: int = typer.Option(25, "--limit", "-n"),
+    tool: str | None = typer.Option(None, "--tool", help="Only this tool."),
+    verdict: str | None = typer.Option(None, "--verdict", help="allow, ask or deny."),
+    run_id: str | None = typer.Option(None, "--run", help="Only this run (from `pa runs`)."),
+) -> None:
+    """What the agent actually did: every tool call, what the policy decided and how it ended."""
+    opened = _open()
+    try:
+        now = opened.clock.now()
+        rows = opened.audit.recent(limit, run_id=run_id, tool=tool, verdict=verdict)
+        if not rows:
+            console.print("[dim]Nothing recorded yet.[/dim]")
+            return
+        table = Table(box=None, pad_edge=False)
+        for column in ("when", "tool", "decision", "how it ended", "what"):
+            table.add_column(column)
+        for row in rows:
+            decision = row.verdict + (f" ({row.layer})" if row.layer else "")
+            table.add_row(
+                _ago(row.ts, now),
+                row.tool + (" [yellow]tainted[/yellow]" if row.tainted else ""),
+                decision,
+                row.outcome or "-",
+                escape((row.detail or row.args or "")[:70]),
+            )
+        console.print(table)
+    finally:
+        opened.close()
+
+
+@budget_app.callback()
+def _budget_show(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    opened = _open()
+    try:
+        budget = opened.budget.status()
+        console.print(
+            f"today      ${budget.spent_today:.4f} of ${budget.daily_limit:.2f}"
+            + (f" (including ${budget.extra_today:.2f} you added)" if budget.extra_today else "")
+        )
+        console.print(f"per run    ${budget.per_run_limit:.2f}")
+        console.print(f"resets     in {_span(budget.resets_in_s)} (local midnight)")
+        if budget.remaining_today <= 0:
+            console.print("[yellow]Paused: `pa budget extend 2` lets work continue today.[/yellow]")
+    finally:
+        opened.close()
+
+
+@budget_app.command("extend")
+def budget_extend(
+    amount: float = typer.Argument(..., help="Dollars to add to today's limit."),
+) -> None:
+    """Raise today's limit and let paused work continue. Tomorrow the normal limit applies."""
+    if amount <= 0:
+        raise typer.BadParameter("the amount must be positive")
+    opened = _open()
+    try:
+        limit, released = opened.extend_budget(amount)
+        console.print(f"Today's limit is now ${limit:.2f}; {released} waiting event(s) released.")
     finally:
         opened.close()
 

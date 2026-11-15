@@ -16,7 +16,7 @@
 |------|------|------|
 | 0 | 调研（Anthropic 指南 + 9 个同类开源项目）、架构设计、脚手架、origin 仓库 | ✅ |
 | 1 | 内核：SQLite 收件箱 / 会话日志 / 发件箱 / 记忆 + Harness + CLI 对话 | ✅ |
-| 2 | 常驻循环：worker / scheduler / dispatcher、策略引擎、延迟审批、预算 | 🚧 |
+| 2 | 常驻循环：worker / scheduler / dispatcher、策略引擎、延迟审批、审计、预算、`pa serve` | ✅ |
 | 3 | 可插拔：MCP、Skills、沙箱、密钥代理、内置工具 | 🚧 |
 | 4 | 渠道与多模态：Web PWA（手机可用）、Telegram、Webhook、语音/图像 | 🚧 |
 | 5 | 记忆智能：做梦、检索、压缩、子代理 | 🚧 |
@@ -32,8 +32,20 @@ uv run pa doctor              # 检查环境；加 --live 会做两次真实调�
 uv run pa chat                # 对话；/help 查看命令，Ctrl-D 退出
 uv run pa ask "你好"           # 单次提问
 uv run pa prefs edit          # 写下你的长期规则；agent 每次运行都会重新读取，且无权修改
-uv run pa status              # 队列、运行记录、花费
+uv run pa status              # 后台是否在运行、队列、定时任务、待批准、花费
 ```
+
+让它在后台替你干活（定时任务、事件）：
+
+```bash
+uv run pa serve               # 前台常驻；Ctrl-C 优雅停止。之后另开终端 pa chat 就是在和它对话
+uv run pa timers add brief "给我今天的简报" --cron "0 8 * * 1-5"
+uv run pa approvals           # agent 想做的、等你点头的事；pa approve / pa deny 回答（聊天里是 /approve /deny）
+uv run pa audit               # 它实际做了什么：每次工具调用与策略判定
+uv run pa budget              # 今日花费与上限；pa budget extend 2 当天加额度并放行暂停的任务
+```
+
+默认模式 `supervised`：读取、记忆、通知放行，任何会改变世界的动作都先问你；想放开某类动作，在 `config.toml` 里写规则，例如 `[policy] allow = ["schedule"]`（让它不用问就能建定时任务）；`deny` 规则任何模式下都不可绕过。
 
 想先试用而不动你的主目录：`PA_HOME=./.pa-home uv run pa init`（`.pa-home/` 已被 git 忽略）。
 

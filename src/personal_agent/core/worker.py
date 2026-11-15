@@ -93,7 +93,14 @@ class Worker:
 
     # ---- telling the owner -----------------------------------------------------------
     def _notice(
-        self, *, channel: str, recipient: str | None, session_key: str, text: str, dedupe: str
+        self,
+        *,
+        channel: str,
+        recipient: str | None,
+        session_key: str,
+        text: str,
+        dedupe: str,
+        interactive: bool = False,
     ) -> None:
         self.app.outbox.enqueue(
             session_key=session_key,
@@ -102,6 +109,7 @@ class Worker:
             text=text,
             kind="notice",
             dedupe_key=dedupe,
+            extra={"interactive": interactive},
         )
 
     def _tell_owner_about_failure(self, batch: Batch, failure: Failure) -> None:
@@ -120,6 +128,7 @@ class Worker:
                 session_key=batch.session_key,
                 text=hint,
                 dedupe=f"{failure.notice_key}:{day}",
+                interactive=origin.interactive,
             )
             return
         if not origin.interactive:
@@ -130,6 +139,7 @@ class Worker:
             session_key=batch.session_key,
             text=f"{hint} I will retry automatically.",
             dedupe=f"fail:{batch.ids[0]}",
+            interactive=True,
         )
 
     def _tell_owner_about_dead(self, dead: list[Event]) -> None:
@@ -145,6 +155,7 @@ class Worker:
                     session_key=event.session_key,
                     text="I could not process your message and gave up on it. Please send it again.",
                     dedupe=f"dead:{event.id}",
+                    interactive=True,
                 )
             else:
                 self._notice(

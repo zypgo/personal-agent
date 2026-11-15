@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from personal_agent.channels.base import Channel, ChannelError
+from personal_agent.clock import in_quiet_hours, parse_quiet_hours, quiet_hours_end
 from personal_agent.core.outbox import OutMessage
 from personal_agent.memory.store import Actor
 
@@ -35,6 +36,8 @@ class DeliveryReport:
     failed: list[int] = field(default_factory=list)
     retrying: list[int] = field(default_factory=list)
     unknown: list[int] = field(default_factory=list)
+    held: list[int] = field(default_factory=list)
+    """Postponed by quiet hours or the hourly limit; they go out later."""
 
 
 class Dispatcher:
@@ -47,6 +50,11 @@ class Dispatcher:
         outbox = self.app.outbox
         for message in outbox.claim_due(channels=set(self.channels), limit=limit):
             channel = self.channels[message.channel]
+            until = self._not_before(message)
+            if until is not None:
+                outbox.hold(message.id, until)
+                report.held.append(message.id)
+                continue
             try:
                 await channel.send(message)
             except ChannelError as exc:
@@ -76,6 +84,26 @@ class Dispatcher:
                 report.sent.append(message.id)
                 self._commit(message)
         return report
+
+    def _not_before(self, message: OutMessage) -> float | None:
+        """When this message may go out if it must wait, or None to send it now.
+
+        Quiet hours and the hourly limit protect the owner's attention from *background* work.
+        Answers to something the owner just said, and urgent alerts, always go straight through.
+        """
+        if message.urgency == "urgent" or message.payload.get("interactive"):
+            return None
+        app = self.app
+        now = app.clock.now()
+        notify = app.config.notify
+        if notify.quiet_hours:
+            window = parse_quiet_hours(notify.quiet_hours)
+            if in_quiet_hours(now, app.tz, window):
+                return quiet_hours_end(now, app.tz, window)
+        recent = app.outbox.background_sends_since(message.channel, now - 3600)
+        if len(recent) >= notify.max_per_hour:
+            return recent[len(recent) - notify.max_per_hour] + 3600
+        return None
 
     @staticmethod
     def _backoff(attempts: int) -> float:

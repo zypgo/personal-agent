@@ -109,7 +109,12 @@ class ToolGuard:
             return cached
         app = self.app
         call = self._call(tool, args, rc)
-        decision = app.policy.evaluate(call)
+        problem = tool.problem_with(rc, args)
+        if problem:
+            # Not worth the owner's attention: it cannot work. The model is told what is wrong.
+            decision = Decision(Verdict.DENY, "invalid", problem)
+        else:
+            decision = app.policy.evaluate(call)
         if decision.verdict is Verdict.REVIEW:
             decision = await self._review(call, args, rc)
         rc.decisions[call_id] = decision
@@ -124,7 +129,13 @@ class ToolGuard:
             reason=decision.reason,
             args=args,
             detail=call.detail,
-            outcome="denied" if decision.verdict is Verdict.DENY else None,
+            outcome=(
+                "invalid"
+                if decision.layer == "invalid"
+                else "denied"
+                if decision.verdict is Verdict.DENY
+                else None
+            ),
             tainted=rc.tainted,
         )
         return decision
@@ -172,6 +183,8 @@ class ToolGuard:
             decision = await self.decide(tool, args, rc, call_id)
 
         if decision.verdict is Verdict.DENY:
+            if decision.layer == "invalid":
+                return f"Error: {decision.reason}"
             app.audit.set_outcome(rc.run_id, call_id, "denied")
             return DENIED_TEXT.format(reason=decision.reason)
         if decision.verdict is not Verdict.ALLOW:

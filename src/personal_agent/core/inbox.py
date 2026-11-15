@@ -96,6 +96,31 @@ class Inbox:
             return (row["lease_expires_at"] or 0) <= now
         return False
 
+    def has_ready(self, session_key: str | None = None) -> bool:
+        """Cheap read-only check that something could be claimed (idle loops use it so they
+        do not take the database write lock every second)."""
+        now = self.clock.now()
+        row = self.db.one(
+            """SELECT 1 FROM events
+               WHERE ((status = 'pending' AND available_at <= :now)
+                      OR (status = 'leased' AND lease_expires_at <= :now))
+                 AND (:session IS NULL OR session_key = :session) LIMIT 1""",
+            {"now": now, "session": session_key},
+        )
+        return row is not None
+
+    def active_for(self, session_key: str) -> int:
+        """Events of a session that are running or ready to run (not ones waiting to retry)."""
+        return int(
+            self.db.scalar(
+                """SELECT COUNT(*) FROM events
+                   WHERE session_key = :session
+                     AND (status = 'leased' OR (status = 'pending' AND available_at <= :now))""",
+                {"session": session_key, "now": self.clock.now()},
+                default=0,
+            )
+        )
+
     def claim(
         self,
         owner: str,

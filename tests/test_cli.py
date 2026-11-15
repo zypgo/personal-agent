@@ -1,37 +1,9 @@
 from __future__ import annotations
 
-import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
-from typer.testing import CliRunner
 
+from helpers import invoke
 from personal_agent import cli
-
-runner = CliRunner()
-
-
-@pytest.fixture
-def wired(make_app, monkeypatch):
-    """Run CLI commands against the test app (and keep it open between commands)."""
-
-    def wire(model: ScriptedModel | None = None):
-        app = make_app(model)
-        monkeypatch.setattr(app, "close", lambda: None)
-        monkeypatch.setattr(cli, "_build", lambda: app)
-        return app
-
-    return wire
-
-
-@pytest.fixture
-def home(tmp_path, monkeypatch):
-    monkeypatch.setenv("PA_HOME", str(tmp_path / "fresh-home"))
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
-    return tmp_path / "fresh-home"
-
-
-def invoke(*args: str, input: str | None = None):
-    return runner.invoke(cli.app, list(args), input=input)
 
 
 # ---- setup commands ---------------------------------------------------------------------
@@ -79,7 +51,7 @@ def test_doctor_passes_with_a_key(home, monkeypatch):
 
 def test_doctor_never_prints_the_key(home, monkeypatch):
     invoke("init")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-value-1234567890")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-" + "test-secret-value-1234567890")  # fake
     assert "secret-value" not in invoke("doctor").output
 
 

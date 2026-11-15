@@ -74,6 +74,8 @@ class RuntimeConfig(_Section):
     """A single run that takes longer than this is stopped."""
     poll_s: float = Field(1.0, ge=0.05)
     """How often an idle worker checks the inbox for events added by other processes."""
+    shutdown_grace_s: float = Field(30.0, ge=0)
+    """On Ctrl-C or SIGTERM, runs in flight get this long to finish; the rest are put back untouched."""
     tool_timeout_s: float = Field(120.0, gt=0)
     """A single tool call that takes longer than this is abandoned (its result says so)."""
     tool_output_chars: int = Field(20_000, ge=1_000)
@@ -184,6 +186,7 @@ index_max_bytes = 25000
 concurrency = 2                  # conversations worked on at once
 run_timeout_s = 900              # a run longer than this is stopped
 tool_timeout_s = 120             # a single tool call longer than this is abandoned
+shutdown_grace_s = 30            # on stop, runs in flight get this long to finish
 
 [policy]
 mode = "supervised"              # read_only | supervised | auto | autonomous

@@ -48,6 +48,9 @@ class ToolDef:
     """Short summary of one call for `tool:detail` rules and the audit log (a command, a host)."""
     category_for: Callable[[dict[str, Any]], Category] | None = None
     """Lets one tool change category by arguments (a reminder is lighter than a recurring job)."""
+    validate: Callable[[Any, dict[str, Any]], str | None] | None = None
+    """Called with (run context, arguments) before policy: returns why the call cannot work, so
+    the model hears about a mistake at once instead of the owner being asked to approve it."""
 
     def category_of(self, args: dict[str, Any]) -> Category:
         if self.category_for is not None:
@@ -56,6 +59,16 @@ class ToolDef:
             except Exception:
                 return self.category
         return self.category
+
+    def problem_with(self, ctx: Any, args: dict[str, Any]) -> str | None:
+        """Why this call cannot work, if the tool can tell in advance. A validator that crashes
+        says nothing: this is a convenience for the owner, never a security check."""
+        if self.validate is None:
+            return None
+        try:
+            return self.validate(ctx, args)
+        except Exception:
+            return None
 
     def detail_of(self, args: dict[str, Any]) -> str:
         if self.detail is None:

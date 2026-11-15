@@ -61,6 +61,13 @@ class App:
             **{f"outbox_{k}": v for k, v in stuck.items()},
         }
 
+    def extend_budget(self, amount: float) -> tuple[float, int]:
+        """Raise today's spending cap and let work that was paused for the budget continue.
+
+        Returns today's new limit and how many waiting events were released."""
+        limit = self.budget.extend_today(amount)
+        return limit, self.inbox.expedite("%budget reached%")
+
     def close(self) -> None:
         self.db.close()
 
