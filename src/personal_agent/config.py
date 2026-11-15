@@ -25,7 +25,9 @@ from pydantic import (
 )
 
 from personal_agent.clock import parse_quiet_hours
+from personal_agent.parsing import loads_toml
 from personal_agent.paths import Paths
+from personal_agent.validation import problems
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
@@ -934,7 +936,7 @@ def load_config(paths: Paths) -> Config:
     data: dict[str, Any] = {}
     if paths.config_file.exists():
         try:
-            data = tomllib.loads(read_text_file(paths.config_file))
+            data = loads_toml(read_text_file(paths.config_file))
         except tomllib.TOMLDecodeError as exc:
             raise ConfigError(f"cannot read {paths.config_file}: {exc}") from exc
     try:
@@ -944,13 +946,9 @@ def load_config(paths: Paths) -> Config:
 
 
 def _describe(exc: ValidationError) -> str:
-    """One line per problem: where it is and what is wrong. The value that was given is left out:
-    a secret pasted into the wrong setting must not end up on a terminal or in a log."""
-    lines = []
-    for error in exc.errors(include_input=False, include_url=False, include_context=False):
-        where = ".".join(str(part) for part in error["loc"]) or "(top level)"
-        lines.append(f"  {where}: {error['msg'].removeprefix('Value error, ')}")
-    return "\n".join(lines)
+    """One line per problem: where it is and what is wrong, with whatever was typed left out (a
+    secret pasted into the wrong setting must not end up on a terminal or in a log)."""
+    return "\n".join(f"  {where or '(top level)'}: {what}" for where, what in problems(exc))
 
 
 def load_env(paths: Paths) -> None:

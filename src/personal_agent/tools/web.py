@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from personal_agent.config import Config
 from personal_agent.harness.instructions import wrap_untrusted
 from personal_agent.harness.runctx import RunContext
+from personal_agent.parsing import loads_json
 from personal_agent.security.broker import PLACEHOLDER, SecretProblem
 from personal_agent.security.ssrf import Blocked, Fetched, check_url, fetch, origin_of
 from personal_agent.tools.base import FULL, SCHEDULED, Category, ToolDef, ToolRegistry
@@ -133,7 +134,7 @@ def _readable(response: Fetched) -> str | None:
             return None
         if kind == "application/json" or kind.endswith("+json"):
             try:
-                text = json.dumps(json.loads(text), ensure_ascii=False, indent=1)
+                text = json.dumps(loads_json(text), ensure_ascii=False, indent=1)
             except ValueError:
                 pass
         return text

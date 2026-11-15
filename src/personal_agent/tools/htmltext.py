@@ -14,6 +14,10 @@ from urllib.parse import urljoin
 
 log = logging.getLogger(__name__)
 
+INDENT_LEVELS = 6
+"""How far a nested list is indented. Indentation costs output proportional to depth for every item,
+so a page of lists nested thousands deep would otherwise cost the square of its size."""
+
 SKIP = frozenset(
     [
         "script",
@@ -148,7 +152,7 @@ class _Extractor(HTMLParser):
         if tag in ("h1", "h2", "h3", "h4", "h5", "h6") and self._live():
             self._emit("#" * int(tag[1]) + " ")
         elif tag == "li" and self._live():
-            self._emit("  " * max(0, self._list_depth - 1) + "- ")
+            self._emit("  " * min(max(0, self._list_depth - 1), INDENT_LEVELS) + "- ")
         elif tag in ("ul", "ol"):
             self._list_depth += 1
         elif tag == "pre":
@@ -224,10 +228,17 @@ def _extract(html: str, base_url: str, only_main: bool, skip: frozenset[str]) ->
         extractor.close()
     except Exception:  # html.parser is lenient, but never let a page break the tool
         log.debug("html parsing stopped early", exc_info=True)
-    text = "".join(extractor.parts)
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _tidy("".join(extractor.parts))
     return re.sub(r"\s+", " ", extractor.title).strip(), text.strip()
+
+
+def _tidy(text: str) -> str:
+    """No trailing spaces on a line and never more than one blank line in a row.
+
+    Not `re.sub(r"[ \t]+\n", ...)`: on a long run of spaces that tries every start, which costs
+    the square of the run."""
+    text = "\n".join(line.rstrip(" \t") for line in text.split("\n"))
+    return re.sub(r"\n{3,}", "\n\n", text)
 
 
 def html_to_text(html: str, base_url: str = "") -> str:

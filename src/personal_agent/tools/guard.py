@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import json
 import logging
 import os
 import time
@@ -24,6 +23,7 @@ from agents.tool_context import ToolContext
 
 from personal_agent.core.sessions import INTERRUPTED_RESULT
 from personal_agent.harness.runctx import RunContext
+from personal_agent.parsing import loads_json
 from personal_agent.security.audit import safe_args
 from personal_agent.security.policy import Decision, ToolCall, Verdict
 from personal_agent.security.redact import known_secret_values, redact
@@ -47,7 +47,7 @@ def parse_args(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
     try:
-        data = json.loads(raw or "{}")
+        data = loads_json(raw or "{}")
     except (TypeError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}

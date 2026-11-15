@@ -25,6 +25,7 @@ from personal_agent.core.worker import Worker, WorkResult
 from personal_agent.evals.spec import Scenario, Seed, Step
 from personal_agent.paths import Paths
 from personal_agent.security.sandbox import SandboxProvider
+from personal_agent.validation import problems
 
 KEPT_SECTIONS = ("agent", "model", "budget", "memory")
 """The owner's settings that decide how the agent thinks. Everything else is left at its default."""
@@ -110,10 +111,9 @@ def eval_config(
     try:
         return Config.model_validate(sections)
     except ValidationError as exc:
-        first = exc.errors()[0]
-        where = ".".join(str(p) for p in first["loc"])
+        where, what = problems(exc)[0]
         raise BenchError(
-            f"{scenario.id}: the config in the seed is not valid ({where}: {first['msg']})"
+            f"{scenario.id}: the config in the seed is not valid ({where}: {what})"
         ) from exc
 
 

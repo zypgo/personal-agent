@@ -29,6 +29,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from personal_agent.config import SkillsConfig
+from personal_agent.parsing import loads_json
 from personal_agent.paths import Paths
 from personal_agent.skills.parse import SkillFormatError, parse_skill
 from personal_agent.skills.store import SkillStore, read_skill_file
@@ -280,8 +281,8 @@ def install_bundled(paths: Paths) -> list[str]:
     root.mkdir(parents=True, exist_ok=True)
     marker = root / MARKER
     try:
-        done = set(json.loads(marker.read_text(encoding="utf-8")).get("installed", []))
-    except (OSError, ValueError, AttributeError):
+        done = set(loads_json(marker.read_text(encoding="utf-8")).get("installed", []))
+    except (OSError, ValueError, AttributeError, TypeError):
         done = set()
     added: list[str] = []
     for name in bundled_names():

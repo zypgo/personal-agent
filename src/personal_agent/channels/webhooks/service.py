@@ -50,6 +50,7 @@ from personal_agent.channels.webhooks.signatures import (
     verify,
 )
 from personal_agent.core.events import AddResult, Kind, NewEvent, Trust
+from personal_agent.parsing import loads_json
 
 if TYPE_CHECKING:
     from personal_agent.app import App
@@ -354,8 +355,8 @@ def parse_body(body: bytes, content_type: str) -> Any:
     ].strip().lower() == "application/x-www-form-urlencoded" and text.startswith("payload="):
         text = parse_qs(text, keep_blank_values=True, max_num_fields=50).get("payload", [""])[0]
     try:
-        value = json.loads(text)
-    except (ValueError, RecursionError):
+        value = loads_json(text)
+    except ValueError:
         return text
     return value if _shallow(value) else text
 

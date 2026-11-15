@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 
+from personal_agent.parsing import load_yaml
 from personal_agent.security.sanitize import strip_invisible
 
 MAX_FILE_BYTES = 262_144
@@ -83,10 +84,10 @@ def _quote_plain_values(front: str) -> str:
 def _load_yaml(front: str) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
     try:
-        data = yaml.safe_load(front)
+        data = load_yaml(front)
     except yaml.YAMLError:
         try:
-            data = yaml.safe_load(_quote_plain_values(front))
+            data = load_yaml(_quote_plain_values(front))
         except yaml.YAMLError as exc:
             raise SkillFormatError(
                 f"the front matter is not valid YAML ({_one_line(exc)})"
@@ -106,8 +107,12 @@ def _one_line(exc: Exception) -> str:
 
 
 def _text(value: Any) -> str | None:
-    if value is None:
+    """A front matter value as one line of text; a list reads as its items, a table as nothing
+    (it has no text to give)."""
+    if value is None or isinstance(value, dict):
         return None
+    if isinstance(value, list):
+        return " ".join(filter(None, (_text(item) for item in value))) or None
     return " ".join(str(value).split())
 
 
@@ -154,7 +159,7 @@ def parse_skill(text: str, *, folder_name: str | None = None) -> Parsed:
     raw_meta = data.get("metadata")
     metadata: dict[str, str] = {}
     if isinstance(raw_meta, dict):
-        metadata = {str(k): " ".join(str(v).split()) for k, v in raw_meta.items()}
+        metadata = {str(k): _text(v) or "" for k, v in raw_meta.items()}
     elif raw_meta is not None:
         warnings.append("metadata should be a mapping of text to text; ignored")
 

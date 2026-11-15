@@ -19,7 +19,9 @@ from typing import Annotated, Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from personal_agent.parsing import load_yaml
 from personal_agent.paths import Paths
+from personal_agent.validation import problems
 
 MAX_FILE_BYTES = 256 * 1024
 """A scenario is a page of YAML. Anything much larger is not one."""
@@ -452,17 +454,15 @@ class Scenario(_Model):
 
 # ---- loading --------------------------------------------------------------------------------------------
 def _problems(error: ValidationError) -> str:
-    lines = []
-    for item in error.errors()[:6]:
-        where = ".".join(str(part) for part in item["loc"]) or "(top level)"
-        lines.append(f"{where}: {item['msg']}")
-    more = len(error.errors()) - 6
+    found = problems(error)
+    lines = [f"{where or '(top level)'}: {what}" for where, what in found[:6]]
+    more = len(found) - 6
     return "; ".join(lines) + (f"; and {more} more" if more > 0 else "")
 
 
 def parse(text: str, *, source: str = "scenario") -> Scenario:
     try:
-        data = yaml.safe_load(text)
+        data = load_yaml(text)
     except yaml.YAMLError as exc:
         raise ScenarioError(f"{source}: not valid YAML ({type(exc).__name__})") from exc
     if not isinstance(data, dict):

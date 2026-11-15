@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from personal_agent.parsing import loads_json
 from personal_agent.security.sanitize import scrub_tree
 
 
@@ -344,8 +345,8 @@ def loads(text: str | None, default: Any = None) -> Any:
     if text is None or text == "":
         return default
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
+        return loads_json(text)
+    except ValueError:
         return default
 
 

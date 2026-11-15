@@ -17,6 +17,8 @@ from pydantic import ValidationError
 from tomlkit.exceptions import TOMLKitError
 
 from personal_agent.config import Config
+from personal_agent.parsing import loads_toml
+from personal_agent.validation import problems
 
 
 class ConfigEditError(Exception):
@@ -33,12 +35,9 @@ def _read(path: Path) -> tomlkit.TOMLDocument:
 
 
 def _problems(exc: ValidationError) -> str:
-    lines = []
-    for error in exc.errors():
-        where = ".".join(str(part) for part in error["loc"] if part != "servers")
-        message = str(error["msg"]).removeprefix("Value error, ")
-        lines.append(f"{where}: {message}" if where else message)
-    return "\n".join(lines)
+    return "\n".join(
+        f"{where}: {what}" if where else what for where, what in problems(exc, skip={"servers"})
+    )
 
 
 def _check(doc: tomlkit.TOMLDocument) -> None:
@@ -51,7 +50,7 @@ def _check(doc: tomlkit.TOMLDocument) -> None:
 def _write(path: Path, doc: tomlkit.TOMLDocument) -> None:
     text = tomlkit.dumps(doc)
     try:
-        tomllib.loads(text)  # never write a file that would not load
+        loads_toml(text)  # never write a file that would not load
     except tomllib.TOMLDecodeError as exc:
         raise ConfigEditError(f"the edited file would not be valid TOML: {exc}") from exc
     temporary = path.with_name(path.name + ".tmp")

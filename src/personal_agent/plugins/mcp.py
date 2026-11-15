@@ -23,7 +23,6 @@ calls `stop()` first; a hub that finds itself in another loop drops what it had 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -46,6 +45,7 @@ from personal_agent.clock import Clock
 from personal_agent.config import ENV_REFERENCE, McpConfig, McpServerConfig, RuntimeConfig
 from personal_agent.db import Database
 from personal_agent.harness.instructions import wrap_untrusted
+from personal_agent.parsing import loads_json
 from personal_agent.paths import Paths
 from personal_agent.plugins.mcp_convert import (
     describe,
@@ -630,7 +630,7 @@ class McpHub:
         if server is None or st.status != "connected":
             return f"Error: the MCP server {server_name!r} is not connected right now."
         try:
-            args = json.loads(raw_args) if raw_args and raw_args.strip() else {}
+            args = loads_json(raw_args) if raw_args and raw_args.strip() else {}
         except ValueError:
             return "Error: the arguments were not valid JSON."
         if not isinstance(args, dict):
