@@ -19,9 +19,8 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from personal_agent.clock import get_tz
+from personal_agent.clock import get_tz, valid_zone
 from personal_agent.config import Config, ConfigError, api_key, load_config, read_text_file
 from personal_agent.db import SCHEMA_VERSION
 from personal_agent.harness.pricing import is_known
@@ -122,10 +121,9 @@ def static_checks(paths: Paths) -> list[Check]:
             )
 
     if cfg.agent.timezone:
-        try:
-            ZoneInfo(cfg.agent.timezone)
+        if valid_zone(cfg.agent.timezone):
             add("timezone", "ok", cfg.agent.timezone)
-        except (ZoneInfoNotFoundError, ValueError):
+        else:
             add("timezone", "warn", f"unknown timezone {cfg.agent.timezone!r}; using the system's")
     else:
         add("timezone", "ok", f"detected: {get_tz(None)}")

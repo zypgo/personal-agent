@@ -43,7 +43,7 @@ class ManualClock:
 def detect_timezone() -> str:
     """Best-effort IANA timezone name of this machine ("UTC" if it cannot be determined)."""
     candidate = os.environ.get("TZ", "").lstrip(":")
-    if candidate and _valid_zone(candidate):
+    if candidate and valid_zone(candidate):
         return candidate
     try:
         target = os.readlink("/etc/localtime")
@@ -52,15 +52,29 @@ def detect_timezone() -> str:
     marker = "zoneinfo/"
     if marker in target:
         name = target.split(marker, 1)[1]
-        if _valid_zone(name):
+        if valid_zone(name):
             return name
     return "UTC"
 
 
-def _valid_zone(name: str) -> bool:
+MAX_ZONE_NAME = 64  # the longest real name, "America/Argentina/ComodRivadavia", has 32
+
+
+def load_zone(name: str) -> ZoneInfo:
+    """The zone called `name`, or a `ValueError`. Whatever the library or the file system says about
+    a name that is empty, absurdly long, a directory, a path or not even text is just "unknown"."""
+    if not name or len(name) > MAX_ZONE_NAME:
+        raise ValueError(f"unknown time zone {name[:MAX_ZONE_NAME]!r}")
     try:
-        ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return ZoneInfo(name)
+    except (ValueError, ZoneInfoNotFoundError, OSError) as exc:
+        raise ValueError(f"unknown time zone {name!r}") from exc
+
+
+def valid_zone(name: str) -> bool:
+    try:
+        load_zone(name)
+    except ValueError:
         return False
     return True
 
@@ -68,8 +82,8 @@ def _valid_zone(name: str) -> bool:
 def get_tz(name: str | None) -> tzinfo:
     """Resolve a configured zone name; fall back to the detected zone, then UTC."""
     for candidate in (name, detect_timezone()):
-        if candidate and _valid_zone(candidate):
-            return ZoneInfo(candidate)
+        if candidate and valid_zone(candidate):
+            return load_zone(candidate)
     return ZoneInfo("UTC")
 
 

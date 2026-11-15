@@ -94,6 +94,23 @@ class _Target:
     is_mount_root: bool = False
 
 
+def clean_text(text: str) -> str:
+    """Text as a memory file holds it: no lone surrogates (they cannot be written) and `\n` as the
+    only line ending. A file is read with universal newlines, so a `\r` written as it came would
+    read back as something else; `\n` is also the only separator `view` counts lines by."""
+    return scrub_surrogates(text).replace("\r\n", "\n").replace("\r", "\n")
+
+
+def lines_of(text: str) -> list[str]:
+    """The lines of `text` as `view` numbers them, each with its newline: cut at `\n` only (not at
+    a form feed, U+0085 or U+2028, where `str.splitlines` would cut and line numbers would drift)."""
+    parts = text.split("\n")
+    lines = [part + "\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
 def human_size(n: int) -> str:
     if n < 1024:
         return f"{n}B"
@@ -458,7 +475,7 @@ class MemoryStore:
     ) -> str:
         target = self._parse(path)
         self._require_writable(target, actor)
-        file_text = scrub_surrogates(file_text)
+        file_text = clean_text(file_text)
         with self._lock:
             if target.physical.exists():
                 return f"Error: File {target.virtual} already exists"
@@ -483,7 +500,7 @@ class MemoryStore:
     ) -> str:
         target = self._parse(path)
         self._require_writable(target, actor)
-        old_str, new_str = scrub_surrogates(old_str), scrub_surrogates(new_str)
+        old_str, new_str = clean_text(old_str), clean_text(new_str)
         with self._lock:
             if not target.physical.is_file():
                 return (
@@ -528,12 +545,12 @@ class MemoryStore:
     ) -> str:
         target = self._parse(path)
         self._require_writable(target, actor)
-        insert_text = scrub_surrogates(insert_text)
+        insert_text = clean_text(insert_text)
         with self._lock:
             if not target.physical.is_file():
                 return f"Error: The path {target.virtual} does not exist"
             text = self._read(target.physical)
-            lines = text.splitlines(keepends=True)
+            lines = lines_of(text)
             try:
                 line_no = int(insert_line)
             except (TypeError, ValueError):
@@ -625,7 +642,7 @@ class MemoryStore:
         mounts for agent-like actors)."""
         target = self._parse(virtual_path)
         self._require_writable(target, actor)
-        text = scrub_surrogates(text)
+        text = clean_text(text)
         with self._lock:
             old = self._read(target.physical) if target.physical.is_file() else None
             self._check_content(target, text)

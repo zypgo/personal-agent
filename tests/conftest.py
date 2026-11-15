@@ -14,10 +14,14 @@ from personal_agent.db import Database, open_database
 from personal_agent.paths import Paths
 from personal_agent.security.sandbox import SandboxProvider
 
-# Property tests: `HYPOTHESIS_PROFILE=thorough pytest` runs ten times as many examples. A slow
-# machine must not fail a property because one example took long, so there is no per-example
-# deadline (the tests that care about speed time themselves).
+# Property tests. Every profile has no per-example deadline: a slow machine must not fail a
+# property because one example took long (the tests that care about speed time themselves).
+#   default   random examples, a failing one is remembered in `.hypothesis/` and replayed
+#   ci        the same examples every run, so a red run means the code changed (scripts/check.sh)
+#   thorough  ten times as many; `quick` a fifth (a test that sets its own count keeps it, so
+#             to explore harder run the suite under several `--hypothesis-seed=N`)
 settings.register_profile("default", max_examples=100, deadline=None)
+settings.register_profile("ci", max_examples=100, deadline=None, derandomize=True)
 settings.register_profile("thorough", max_examples=1000, deadline=None)
 settings.register_profile(
     "quick", max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]

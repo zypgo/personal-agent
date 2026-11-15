@@ -200,6 +200,8 @@ JUNK_HEADERS = st.one_of(
     st.sampled_from(SCHEMES), JUNK_HEADERS, BODY, st.floats(0, 4e9), STANDARD_SECRET, PLAIN_SECRET
 )
 def test_junk_is_refused_and_never_crashes(scheme, headers, body, now, standard, plain):
+    # GitLab sends the secret itself, so "junk" that happens to be the secret is the right answer
+    assume(plain not in headers.values())
     key = secret_key(scheme, standard if scheme == "standard" else plain)
     with pytest.raises(Rejected):
         verify(scheme, key, headers, body, now=now)

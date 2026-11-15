@@ -19,11 +19,10 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from croniter import croniter
+from croniter import CroniterError, croniter
 
-from personal_agent.clock import Clock, SystemClock, format_local, get_tz
+from personal_agent.clock import Clock, SystemClock, format_local, get_tz, load_zone
 from personal_agent.config import SchedulerConfig
 from personal_agent.core.events import Kind, NewEvent, Trust
 from personal_agent.core.inbox import Inbox
@@ -34,6 +33,8 @@ log = logging.getLogger(__name__)
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 MAX_PROMPT_CHARS = 4000
 MAX_FOLLOWUP_DAYS = 366
+MAX_CRON_CHARS = 120  # a real expression is under 60; a megabyte of one is not a schedule
+SHOWN_CRON_CHARS = 60  # how much of a refused expression an error message repeats
 
 
 class TimerError(ValueError):
@@ -89,9 +90,17 @@ def _timer(row: sqlite3.Row) -> Timer:
 
 
 def next_fire(cron: str, tz_name: str, after: float) -> float:
-    """The first firing of `cron` (evaluated in `tz_name`) strictly after `after`."""
-    base = datetime.fromtimestamp(after, ZoneInfo(tz_name))
-    return croniter(cron, base).get_next(datetime).timestamp()
+    """The first firing of `cron` (evaluated in `tz_name`) strictly after `after`.
+
+    When the clocks go back an hour, that hour happens twice. A schedule that names its hours
+    ("daily at 01:30") fires in the first pass only, so it runs once that day, as cron itself does;
+    one that fires every hour or every few minutes keeps its pace through both passes."""
+    walker = croniter(cron, datetime.fromtimestamp(after, load_zone(tz_name)))
+    names_its_hours = croniter.expand(cron)[0][1] != ["*"]
+    while True:
+        candidate = walker.get_next(datetime)
+        if candidate.fold == 0 or not names_its_hours:
+            return candidate.timestamp()
 
 
 class Timers:
@@ -174,17 +183,21 @@ class Timers:
     ) -> tuple[str, str]:
         tz_name = tz or self.default_tz
         try:
-            ZoneInfo(tz_name)
-        except (ZoneInfoNotFoundError, ValueError) as exc:
-            raise TimerError(f"unknown time zone {tz_name!r}") from exc
+            load_zone(tz_name)
+        except ValueError as exc:
+            raise TimerError(str(exc)) from exc
         cron = " ".join(cron.split())
-        if len(cron.split()) != 5 or not croniter.is_valid(cron):
+        if len(cron) > MAX_CRON_CHARS or len(cron.split()) != 5 or not croniter.is_valid(cron):
+            shown = cron if len(cron) <= SHOWN_CRON_CHARS else cron[:SHOWN_CRON_CHARS] + "..."
             raise TimerError(
-                f"{cron!r} is not a valid 5-field cron expression (minute hour day month weekday)"
+                f"{shown!r} is not a valid 5-field cron expression (minute hour day month weekday)"
             )
         if misfire not in ("fire_once", "skip"):
             raise TimerError("misfire must be 'fire_once' or 'skip'")
-        self._check_interval(cron, tz_name, self.clock.now())
+        try:
+            self._check_interval(cron, tz_name, self.clock.now())
+        except CroniterError as exc:  # well formed, but no date satisfies it: "0 0 31 2 *"
+            raise TimerError(f"{cron!r} would never fire: there is no date it matches") from exc
         return cron, tz_name
 
     @staticmethod
@@ -413,7 +426,7 @@ class Timers:
             raise TimerError(f"timer {timer.name!r} has no schedule")
         try:
             return next_fire(timer.cron, timer.tz or self.default_tz, now)
-        except (ValueError, ZoneInfoNotFoundError) as exc:
+        except ValueError as exc:
             raise TimerError(
                 f"timer {timer.name!r} has a schedule that cannot be read ({exc})"
             ) from exc
