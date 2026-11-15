@@ -89,7 +89,7 @@ def test_answering_twice_or_a_wrong_number_changes_nothing(wired):
 
     invoke("approve", "1")
     again = invoke("approve", "1")
-    assert "Nothing is waiting" in again.output
+    assert "Approval #1 is already approved" in again.output
     assert spy.ran("shell") == ["git push origin main"]  # ran once
 
 
@@ -141,7 +141,7 @@ def test_a_new_message_closes_old_requests_instead_of_leaving_them_to_trigger_la
     app, spy, _ = suspended(wired, [[push()], [assistant_message("Never mind, then.")]])
     invoke("ask", "actually, forget it")
     assert app.approvals.pending() == []
-    assert "Nothing is waiting" in invoke("approve", "1").output
+    assert "already superseded" in invoke("approve", "1").output
     assert spy.ran() == []
 
 

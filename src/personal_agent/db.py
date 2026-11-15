@@ -216,6 +216,55 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (server, tool)
     );
     """,
+    # ---- 4: iteration 4a, chat channels --------------------------------------------------
+    """
+    -- Who may talk to the agent on a chat channel. Only the owner, at this machine, adds rows.
+    CREATE TABLE senders (
+        channel      TEXT NOT NULL,
+        sender       TEXT NOT NULL,          -- the channel's stable id (a Telegram user id)
+        label        TEXT NOT NULL DEFAULT '',   -- a display name, for the owner's eyes only
+        approved_at  REAL NOT NULL,
+        last_seen_at REAL,
+        PRIMARY KEY (channel, sender)
+    );
+
+    -- Someone who is not approved yet and was given a code to show the owner.
+    CREATE TABLE pairings (
+        code         TEXT PRIMARY KEY,
+        channel      TEXT NOT NULL,
+        sender       TEXT NOT NULL,
+        label        TEXT NOT NULL DEFAULT '',
+        created_at   REAL NOT NULL,
+        expires_at   REAL NOT NULL,
+        notified_at  REAL                    -- when the code was actually shown to the requester
+    );
+    CREATE UNIQUE INDEX pairings_sender ON pairings(channel, sender);
+
+    -- What the owner said and what reached them, in order, on every channel: the history the
+    -- apps show. Separate from session_events, which is what the *model* sees (and which
+    -- `/new` and compaction rewrite the view of).
+    CREATE TABLE transcript (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        at         REAL NOT NULL,
+        direction  TEXT NOT NULL,            -- in | out
+        channel    TEXT NOT NULL,
+        kind       TEXT NOT NULL,            -- message | notice | approval_request
+        text       TEXT NOT NULL,
+        outbox_id  INTEGER,                  -- the delivered message this row records
+        meta       TEXT NOT NULL DEFAULT '{}'    -- JSON: attachments, approval ids, urgency
+    );
+    CREATE UNIQUE INDEX transcript_outbox ON transcript(outbox_id) WHERE outbox_id IS NOT NULL;
+
+    -- Money spent outside of runs (speech-to-text). Counts toward the daily budget.
+    CREATE TABLE spend (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        at      REAL NOT NULL,
+        kind    TEXT NOT NULL,               -- transcription
+        usd     REAL NOT NULL,
+        detail  TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX spend_at ON spend(at);
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

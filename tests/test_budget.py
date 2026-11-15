@@ -175,3 +175,36 @@ async def test_a_paused_run_keeps_its_cost_on_the_record(make_app):
     await drain(app)
     run = app.runs.recent()[0]
     assert run.requests == 1 and abs(run.cost_usd - 0.005) < 1e-9
+
+
+# ---- money that is not a model run (speech-to-text) ---------------------------------------------
+def test_spend_outside_runs_counts_toward_today(guard, clock):
+    runs, budget = guard
+    spend(runs, "main", 1.0)
+    budget.record_spend("transcription", 0.5, "voice 60s")
+    assert budget.spent_today() == pytest.approx(1.5)
+    assert budget.status().spent_today == pytest.approx(1.5)
+    assert budget.status().remaining_today == pytest.approx(3.5)
+
+
+def test_spend_from_yesterday_is_not_counted_today(guard, clock):
+    _, budget = guard
+    budget.record_spend("transcription", 2.0)
+    clock.advance(86_400 * 2)
+    assert budget.spent_today() == 0.0
+    assert budget.spend_since(0) == pytest.approx(2.0)  # still on the record
+
+
+def test_enough_spend_outside_runs_pauses_the_agent_like_any_other(guard):
+    _, budget = guard
+    budget.record_spend("transcription", 5.01)
+    with pytest.raises(BudgetExceeded) as caught:
+        budget.check_day()
+    assert caught.value.scope == "daily"
+
+
+def test_negative_or_zero_spend_is_not_recorded(guard):
+    _, budget = guard
+    budget.record_spend("transcription", 0.0)
+    budget.record_spend("transcription", -1.0)
+    assert budget.spend_since(0) == 0.0

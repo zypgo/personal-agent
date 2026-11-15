@@ -24,7 +24,8 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("aws access key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     ("google api key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
     ("stripe key", re.compile(r"\b[rs]k_live_[0-9a-zA-Z]{20,}")),
-    ("telegram bot token", re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{30,}")),
+    # No `\b` in front: the token follows "bot" in every Bot API URL (`/bot123456789:AAA.../getMe`).
+    ("telegram bot token", re.compile(r"(?<!\d)\d{8,10}:[A-Za-z0-9_-]{30,}")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
     ("bearer token", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9_\-.=]{24,}")),
     (

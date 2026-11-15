@@ -119,8 +119,10 @@ class BudgetConfig(_Section):
 
 
 class NotifyConfig(_Section):
-    channel: str = "cli"
-    """Where messages go when no conversation is waiting (scheduled work, alerts)."""
+    channel: str = "auto"
+    """Where messages go when no conversation is waiting (scheduled work, alerts): `auto` (the
+    chat app you last wrote from, the terminal if you never used one), or a channel by name:
+    `cli`, `telegram`, `web`, ..."""
     quiet_hours: str | None = None
     """Local time window such as "23:00-08:00". Only urgent messages are delivered inside it."""
     max_per_hour: int = Field(6, ge=1)
@@ -220,6 +222,61 @@ class SkillsConfig(_Section):
     """Size of that list. Skills beyond it are shown by name only; the model can still load them."""
     max_body_chars: int = Field(40_000, ge=2_000)
     """A skill whose instructions are longer is cut when it is loaded (the model is told)."""
+
+
+class MediaConfig(_Section):
+    images: bool = True
+    """Accept pictures from the owner and show them to the model."""
+    max_image_bytes: int = Field(8_000_000, ge=100_000, le=20_000_000)
+    images_in_context: int = Field(2, ge=0, le=10)
+    """Each request carries only the newest N pictures; older ones become a one-line note, so a
+    long conversation does not keep paying for (and re-uploading) every picture."""
+    voice: bool = True
+    """Turn voice messages into text with OpenAI speech-to-text before the agent sees them."""
+    transcribe_model: str = "gpt-transcribe"
+    """`whisper-1` and the `gpt-4o-*-transcribe` models are scheduled to shut down on 2027-02-26."""
+    language: str | None = None
+    """ISO-639-1 hint such as "zh" or "en" (improves accuracy for short clips). `None` = detect."""
+    max_voice_seconds: int = Field(300, ge=5, le=3600)
+    max_voice_bytes: int = Field(20_000_000, ge=10_000, le=25_000_000)
+    """The speech API accepts files up to 25 MB."""
+
+
+class TelegramConfig(_Section):
+    enabled: bool = False
+    token_env: str = "TELEGRAM_BOT_TOKEN"  # noqa: S105 - the NAME of the variable
+    """Name of the `.env` entry holding the token from @BotFather. The token is never in config.toml."""
+    api_base: str = "https://api.telegram.org"
+    """Change only to reach Telegram through your own Bot API server or reverse proxy."""
+    proxy: str | None = None
+    """For example "socks5://127.0.0.1:1080" or "http://127.0.0.1:7890" when Telegram is not
+    reachable directly. By default the usual HTTPS_PROXY / ALL_PROXY variables are honoured."""
+    poll_timeout_s: int = Field(50, ge=1, le=60)
+    """Long-poll length. Telegram answers as soon as a message arrives."""
+    typing: bool = True
+    """Show "typing..." while the agent works on a message."""
+
+    @field_validator("token_env")
+    @classmethod
+    def _token_env_is_a_name(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError("token_env is the NAME of an environment variable, not the token")
+        return value
+
+    @field_validator("api_base")
+    @classmethod
+    def _api_base_is_https(cls, value: str) -> str:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(value)
+        host = (parts.hostname or "").lower()
+        if parts.scheme not in ("http", "https") or not host:
+            raise ValueError("api_base must be an http:// or https:// address")
+        if parts.username or parts.password:
+            raise ValueError("do not put credentials in api_base")
+        if parts.scheme == "http" and host not in _LOOPBACK_HOSTS:
+            raise ValueError("plain http is only allowed for this machine (localhost)")
+        return value.rstrip("/")
 
 
 ENV_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -435,6 +492,8 @@ class Config(_Section):
     skills: SkillsConfig = SkillsConfig()
     mcp: McpConfig = McpConfig()
     plugins: PluginsConfig = PluginsConfig()
+    media: MediaConfig = MediaConfig()
+    telegram: TelegramConfig = TelegramConfig()
     secrets: dict[str, SecretConfig] = {}
 
     @field_validator("secrets")
@@ -500,7 +559,7 @@ per_run_usd = 1.0                # one run above this is stopped and reported
 daily_usd = 5.0                  # all runs since local midnight; reaching it pauses work, loses nothing
 
 [notify]
-channel = "cli"                  # where unprompted messages go
+channel = "auto"                 # where unprompted messages go: auto (the chat app you last wrote from) | cli | telegram | web
 # quiet_hours = "23:00-08:00"    # local time; only urgent messages get through
 max_per_hour = 6                 # non-urgent messages per channel per hour
 
@@ -525,6 +584,21 @@ web_search = "auto"              # OpenAI hosted search; auto | cached | off
 enabled = true                   # offer what `pa skills install` put in ~/.personal-agent/skills
 # description_chars = 300        # length of each skill's one-line description in the list
 # catalog_chars = 8000           # size of that list; the rest are shown by name only
+
+[media]
+images = true                    # pictures you send are shown to the model
+images_in_context = 2            # each request carries only your newest N pictures
+voice = true                     # voice messages are turned into text first (OpenAI speech-to-text)
+transcribe_model = "gpt-transcribe"
+# language = "zh"                # ISO-639-1 hint; default: detect
+
+# Chat with the agent from Telegram. Create a bot with @BotFather, put its token in .env as
+# TELEGRAM_BOT_TOKEN, set enabled = true and run `pa serve`. Message the bot once: it answers
+# with a code that you approve here, on your computer: `pa channels approve telegram CODE`.
+# Strangers get nothing but a code and never reach the model.
+# [telegram]
+# enabled = true
+# proxy = "socks5://127.0.0.1:1080"    # if Telegram is not reachable directly
 
 # MCP servers add tools (files, GitHub, a database, ...). They run with your privileges, outside the
 # shell sandbox, so add only servers you trust. Nothing is offered until `pa mcp trust NAME` has

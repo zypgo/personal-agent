@@ -115,6 +115,7 @@ class RunAccounting(RunHooks[RunContext]):
 
     async def on_tool_start(self, context: RunContextWrapper[RunContext], agent, tool) -> None:
         self.app.runs.add_tool_call(context.context.run_id)
+        self.app.live.tool_started(str(getattr(tool, "name", "")))
 
 
 def _call_info(item: Any) -> tuple[str, str, str]:
@@ -154,7 +155,7 @@ class Harness:
                 return Origin(
                     channel=event.source, recipient=event.payload.get("recipient"), interactive=True
                 )
-        return Origin(channel=self.app.config.notify.channel, interactive=False)
+        return Origin(channel=self.app.notify_channel(), interactive=False)
 
     @staticmethod
     def owner_request_for(batch: Batch) -> str:
@@ -379,7 +380,12 @@ class Harness:
                     agent,
                     run_input,
                     session=SdkSession(
-                        app.sessions, ctx.session_key, ctx.run_id, window=cfg.agent.history_items
+                        app.sessions,
+                        ctx.session_key,
+                        ctx.run_id,
+                        window=cfg.agent.history_items,
+                        media=app.media,
+                        keep_images=cfg.media.images_in_context,
                     ),
                     context=None if resuming else ctx,
                     hooks=RunAccounting(app, model_name),

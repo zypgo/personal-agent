@@ -12,6 +12,7 @@ changes nothing.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -331,3 +332,41 @@ def request_text(approvals: Sequence[Approval]) -> str:
     if len(approvals) > 1:
         lines.append(f"Or answer all at once: `/approve all` / `/deny all` ({ids}).")
     return "\n".join(lines)
+
+
+_APPROVAL_ID = re.compile(r"#?(\d+)$")
+
+
+def split_targets(words: Sequence[str]) -> tuple[list[str], str | None]:
+    """ "3 4 not now" -> (["3", "4"], "not now"): leading numbers (or "all") pick the requests,
+    whatever follows is the note for the agent."""
+    targets: list[str] = []
+    for index, word in enumerate(words):
+        if word.lower() == "all" or _APPROVAL_ID.match(word):
+            targets.append(word.lower())
+        else:
+            return targets, " ".join(words[index:])
+    return targets, None
+
+
+def choose_approvals(
+    pending: Sequence[Approval], targets: Sequence[str]
+) -> tuple[list[int] | None, str | None]:
+    """Which requests an owner's `/approve` or `/deny` means.
+
+    Returns (ids, None), or (None, a sentence saying why it is not clear). A number is passed on
+    even when that request is no longer waiting (a button pressed on an old message): `decide`
+    then says what became of it, which is more use than "nothing is waiting"."""
+    if "all" in targets:
+        if not pending:
+            return None, "Nothing is waiting for your answer."
+        return [a.id for a in pending], None
+    named = [int(m.group(1)) for t in targets if (m := _APPROVAL_ID.match(t))]
+    if named:
+        return named, None
+    if not pending:
+        return None, "Nothing is waiting for your answer."
+    if len(pending) == 1:
+        return [pending[0].id], None
+    ids = ", ".join(f"#{a.id}" for a in pending)
+    return None, f"Several actions are waiting ({ids}): name one, or say `all`."

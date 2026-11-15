@@ -103,3 +103,67 @@
 
 - 本项目**没有复制**上述任何仓库的源代码；仅参考其设计、接口形态与文档中的公开结论，并用自己的实现重写。
 - 引用的第三方评测：[Anchor Terminal — Best harnesses for personal agents（2026-10-18）](https://www.anchorterminal.com/blog/best-harnesses-for-personal-agents)、[Personal Agent Bench — 15 personal agents](https://personalagentbench.com/open-source-personal-agents/)。其结论可能随版本变化，使用前请以对应仓库当前状态为准。
+
+## 六、迭代 4 补充调研：渠道、配对、Webhook、Web 认证、语音（2026-11-15）
+
+> 方法同前：只读 `references/` 里的实现与文档，比较设计与已知坑，用自己的代码重写，**不复制源码**。
+
+### 6.1 Telegram 渠道
+
+| 项目 | 做法 | 我们的取舍 |
+|------|------|-----------|
+| nanobot（`channels/telegram/runtime.py`，2200+ 行） | 基于 python-telegram-bot；Markdown→HTML 转换 + 在 4000 字符处切分，HTML 展开后超 4096 再用更小预算重切；流式编辑消息；429 读取 `retry_after`；`allowed_updates` 只收 `message`/`callback_query` | **只用 httpx 直连 Bot API**（不引入大依赖）；同样"先切 Markdown 再转 HTML、解析失败回退纯文本"；**不做流式编辑**（编辑消息会让"送达确认"语义变模糊） |
+| hermes-agent（`plugins/platforms/telegram`） | 适配器接口统一；未知发送者默认忽略，需白名单或配对码 | 采用统一 `Channel`/`Service` 形态（已有） |
+| openclaw | DM 默认"配对"策略 | 见 6.2 |
+
+踩坑清单（来自这些实现的处理痕迹 + Bot API 文档）：
+1. 消息上限 4096 字符；Markdown 渲染成 HTML 会变长，必须**切分在转换之前**，且切在围栏代码块中间时要补全围栏。
+2. `getUpdates` 与 webhook 互斥（409）；两个进程同时轮询也会 409 → 退避并给出明确提示，不要死循环。
+3. `offset` 必须在**事件已落库之后**才推进；崩溃重放靠收件箱的 `(source, external_id)` 唯一索引去重。
+4. 429 带 `retry_after`；网络层"请求发出后超时"= **结果未知**，不能当成"没发出"重发（我们的 `ChannelError` 语义已覆盖）。
+5. 多段消息发送到一半失败：整体重发会重复前几段 → 按"结果未知"处理，由发件箱标 `maybe_sent`，不盲目重发。
+6. Bot token 会出现在请求 URL 里：日志与异常必须脱敏（`redact` 已含 Telegram token 模式）。
+7. 中国大陆直连 `api.telegram.org` 常不通：httpx 默认读取 `HTTPS_PROXY`/`ALL_PROXY`，另提供 `api_base`（自建 Bot API 服务器或反代）与 `proxy` 配置。
+
+### 6.2 发送者配对（谁能和代理说话）
+
+| 项目 | 机制 |
+|------|------|
+| nanobot `pairing/store.py` | JSON 文件；8 位码（`ABCD-EFGH`），10 分钟过期；同一发送者重复请求返回同一个码；`approve/deny/revoke`；存储不可读时**拒绝**（fail closed） |
+| openclaw `docs/channels/pairing.md` | 1 小时过期；**只在创建请求时回复一次**（约每小时每发送者一次）；每个渠道账号**最多 3 个待审批请求**，其余忽略 |
+
+**采用**：8 位无歧义字符码；1 小时过期；同一发送者幂等；只回复一次（回复成功才记录）；每渠道最多 3 个待审批；陌生人的消息**永不产生事件**（不花钱、不进入模型）；批准只能在本机 CLI（`pa channels approve`）；存储放 SQLite（原子、可并发），读取失败即拒绝。
+
+### 6.3 Webhook 入口
+
+hermes-agent `gateway/platforms/webhook.py` 的要点（我们全部采纳）：
+- **每条路由必须有非空密钥**（空密钥的 HMAC 等于公开密钥），启动即校验；
+- 签名方案在路由上**固定**（`github` / `gitlab` / `standard` / `generic`），不自动探测，避免被降级；
+- 只有"绑定时间戳"的通用方案可防重放；纯 body 签名（GitHub 就是）靠**投递 ID 去重**；
+- 请求体大小在读取**之前/期间**限制；每路由限速（默认 30/分）；常量时间比较；
+- 幂等缓存按"路由 + 投递 ID"。
+
+我们的差异：webhook 事件一律 `Trust.UNTRUSTED`，由 `untrusted` 画像处理（只能读与通知），内容用 `<untrusted>` 围栏。
+
+### 6.4 Web 渠道与认证
+
+nanobot 的 WebSocket 渠道：默认绑定 `127.0.0.1`，绑 `0.0.0.0` 必须配 token；token 可经 **query 参数** 传递（会进入访问日志与 Referer）。
+
+**我们的做法更严**：一次性邀请码放在 URL **片段**（`#`，不会发给服务器，也不进日志）→ 页面脚本换取 `HttpOnly; SameSite=Strict` 的会话 cookie；服务器只存 token 的 SHA-256；会话可吊销；写请求要求自定义头 + `Origin` 校验；校验 `Host`（防 DNS 重绑）；严格 CSP；关闭 uvicorn 访问日志。
+
+### 6.5 语音转写（OpenAI 官方文档，2026-11 核对）
+
+- 推荐文件转写模型：`gpt-transcribe`（按音频分钟计费，约 $0.0045/分钟）；`whisper-1`、`gpt-4o-*-transcribe` 将于 **2027-02-26** 下线 → 默认用 `gpt-transcribe`，模型名可配置。
+- 文件上限 25 MB；官方支持格式 `mp3 mp4 mpeg mpga m4a wav webm`（**未列出 ogg**，而 Telegram 语音是 OGG/Opus）→ 有 `ffmpeg` 时先转 m4a，没有就原样上传并在失败时给出明确提示。
+- 费用不属于任何一次 run，因此新增 `spend` 记账表并计入每日预算。
+
+### 6.6 迭代 4 的设计决策
+
+| # | 决策 | 依据 |
+|---|------|------|
+| D11 | 渠道 = `Channel`（发）+ `Service`（收）的统一适配器；内置 Telegram/Web 与插件提供的渠道走同一接口 | hermes/openclaw 的适配器形态；用户要求可插拔 |
+| D12 | 所有渠道共享会话 `main`；回复回到发话的渠道；后台消息发往 `notify.channel`（可设 `auto`=最近一次对话的渠道） | 个人代理是"一个人、一个持续的对话" |
+| D13 | 新增 `transcript`（面向主人的对话时间线），与模型可见的会话日志分离 | `/new`、压缩、墓碑都不应让手机上的历史消失 |
+| D14 | 陌生发送者零成本零注入面：不产生事件、不进模型 | openclaw/nanobot/hermes 一致做法 |
+| D15 | 渠道文本命令（`/approve` `/deny` `/new` `/status`…）在渠道层处理，不经模型 | CLI 已有同样的命令 |
+| D16 | 图片入模型时只携带最近 N 张，更早的换成文字占位 | 控制 token 与请求体积 |

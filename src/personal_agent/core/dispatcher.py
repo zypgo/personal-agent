@@ -82,8 +82,16 @@ class Dispatcher:
             else:
                 outbox.mark_sent(message.id)
                 report.sent.append(message.id)
+                self._record(message)
                 self._commit(message)
         return report
+
+    def _record(self, message: OutMessage) -> None:
+        """Add the delivered message to the owner's history. Never allowed to break delivery."""
+        try:
+            self.app.transcript.add_out(message)
+        except Exception:
+            log.warning("could not record message %s in the transcript", message.id, exc_info=True)
 
     def _not_before(self, message: OutMessage) -> float | None:
         """When this message may go out if it must wait, or None to send it now.

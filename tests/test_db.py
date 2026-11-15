@@ -68,3 +68,43 @@ def test_nested_tx_uses_savepoints(db):
         db.execute("INSERT INTO kv(key,value,updated_at) VALUES('after','3',0)")
     keys = {r["key"] for r in db.query("SELECT key FROM kv")}
     assert keys == {"outer", "after"}
+
+
+def test_the_chat_channel_tables_exist(db):
+    tables = {r["name"] for r in db.query("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"senders", "pairings", "transcript", "spend"} <= tables
+
+
+def test_a_sender_is_unique_per_channel_and_a_sender_has_one_pending_code(db):
+    import sqlite3
+
+    db.execute("INSERT INTO senders(channel, sender, approved_at) VALUES('telegram','7',0)")
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute("INSERT INTO senders(channel, sender, approved_at) VALUES('telegram','7',0)")
+    db.execute("INSERT INTO senders(channel, sender, approved_at) VALUES('web','7',0)")
+
+    def code(c):
+        db.execute(
+            "INSERT INTO pairings(code, channel, sender, created_at, expires_at) VALUES(?, 'telegram', '9', 0, 1)",
+            (c,),
+        )
+
+    code("AAAA-BBBB")
+    with pytest.raises(sqlite3.IntegrityError):
+        code("CCCC-DDDD")
+
+
+def test_a_message_can_enter_the_history_only_once(db):
+    import sqlite3
+
+    def add(outbox_id):
+        db.execute(
+            "INSERT INTO transcript(at, direction, channel, kind, text, outbox_id) VALUES(0,'out','cli','message','x',?)",
+            (outbox_id,),
+        )
+
+    add(5)
+    with pytest.raises(sqlite3.IntegrityError):
+        add(5)
+    add(None)
+    add(None)  # inbound lines have no outbox id and may repeat

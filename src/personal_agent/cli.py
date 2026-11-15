@@ -21,13 +21,17 @@ from rich.table import Table
 from personal_agent import __version__
 from personal_agent.app import App, build_app
 from personal_agent.channels.cli import CliChannel
+from personal_agent.channels.registry import build_channels
 from personal_agent.clock import format_local
+from personal_agent.commands import channels as channels_commands
 from personal_agent.commands import mcp as mcp_commands
 from personal_agent.commands import plugins as plugins_commands
 from personal_agent.commands import skills as skills_commands
 from personal_agent.config import DEFAULT_CONFIG_TOML, DEFAULT_ENV, ConfigError, load_env
+from personal_agent.core.approvals import choose_approvals, split_targets
 from personal_agent.core.dispatcher import Dispatcher
 from personal_agent.core.events import Kind, NewEvent
+from personal_agent.core.sessions import DEFAULT_SESSION
 from personal_agent.core.timers import TimerError
 from personal_agent.daemon import AlreadyRunning, Daemon, Engine, daemon_state
 from personal_agent.doctor import capability_checks, live_checks, static_checks
@@ -70,8 +74,6 @@ console = Console()
 # Tests replace this to run the commands against a scripted model.
 _build: Callable[[], App] = build_app
 
-DEFAULT_SESSION = "main"
-
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -101,6 +103,7 @@ def _open() -> App:
 app.add_typer(skills_commands.build(lambda: _open(), console), name="skills")
 app.add_typer(mcp_commands.build(lambda: _open(), console), name="mcp")
 app.add_typer(plugins_commands.build(lambda: _open(), console), name="plugins")
+app.add_typer(channels_commands.build(lambda: _open(), console), name="channels")
 
 
 def _ago(ts: float | None, now: float) -> str:
@@ -216,9 +219,14 @@ def _service_handled(opened: App, event_id: int) -> bool:
 
 
 def _submit(opened: App, text: str, session_key: str) -> int:
-    return opened.inbox.add(
-        NewEvent(source="cli", kind=Kind.MESSAGE, session_key=session_key, payload={"text": text})
-    ).id
+    with opened.db.tx():
+        added = opened.inbox.add(
+            NewEvent(
+                source="cli", kind=Kind.MESSAGE, session_key=session_key, payload={"text": text}
+            )
+        )
+        opened.transcript.add_in("cli", text)
+    return added.id
 
 
 @app.command()
@@ -355,7 +363,7 @@ def _slash(
     elif command == "/approvals":
         _print_approvals(opened, include_decided=False)
     elif command in ("/approve", "/deny"):
-        targets, note = _split_targets(words[1:])
+        targets, note = split_targets(words[1:])
         _answer_approvals(engine, command == "/approve", targets, note, run)
     else:
         console.print(f"[yellow]Unknown command {command}.[/yellow] Try /help.")
@@ -378,37 +386,12 @@ def chat(
 
 
 # ---- approvals ---------------------------------------------------------------------------
-_APPROVAL_ID = re.compile(r"#?(\d+)$")
-
-
-def _split_targets(words: list[str]) -> tuple[list[str], str | None]:
-    """ "3 4 not now" -> (["3", "4"], "not now"): leading numbers (or "all") pick the requests,
-    whatever follows is the note for the agent."""
-    targets: list[str] = []
-    for index, word in enumerate(words):
-        if word.lower() == "all" or _APPROVAL_ID.match(word):
-            targets.append(word.lower())
-        else:
-            return targets, " ".join(words[index:])
-    return targets, None
-
-
 def _pick_approvals(opened: App, targets: list[str]) -> list[int] | None:
-    pending = opened.approvals.pending()
-    if not pending:
-        console.print("[dim]Nothing is waiting for your answer.[/dim]")
-        return None
-    if not targets:
-        if len(pending) == 1:
-            return [pending[0].id]
-        ids = ", ".join(f"#{a.id}" for a in pending)
-        console.print(
-            f"[yellow]Several actions are waiting ({ids}): name one, or say `all`.[/yellow]"
-        )
-        return None
-    if "all" in targets:
-        return [a.id for a in pending]
-    return [int(m.group(1)) for t in targets if (m := _APPROVAL_ID.match(t))]
+    ids, problem = choose_approvals(opened.approvals.pending(), targets)
+    if problem:
+        colour = "dim" if ids is None and "Nothing" in problem else "yellow"
+        console.print(f"[{colour}]{escape(problem)}[/{colour}]")
+    return ids
 
 
 def _answer_approvals(
@@ -486,7 +469,7 @@ def approvals(
 
 
 def _decide_command(approve: bool, words: list[str], note: str | None) -> None:
-    targets, trailing = _split_targets(words)
+    targets, trailing = split_targets(words)
     opened = _open()
     engine = Engine.acquire(opened)
     try:
@@ -530,8 +513,13 @@ def serve(
     """Run the agent in the foreground: timers, background events and delivery, until Ctrl-C."""
     opened = _open()
     setup_logging(opened.paths, console=True)
-    channels = {"cli": CliChannel(console)} if show_messages else {}
-    daemon = Daemon(opened, channels, grace_s=opened.config.runtime.shutdown_grace_s)
+    chosen = build_channels(opened, terminal=CliChannel(console) if show_messages else None)
+    daemon = Daemon(
+        opened,
+        chosen.channels,
+        services=chosen.services,
+        grace_s=opened.config.runtime.shutdown_grace_s,
+    )
     try:
         asyncio.run(_serve(daemon))
     except AlreadyRunning as exc:
@@ -564,6 +552,9 @@ async def _serve(daemon: Daemon) -> None:
         f"[bold]{cfg.agent.name}[/bold] is running · model {cfg.model.main} · Ctrl-C to stop. "
         "Talk to it from another terminal with `pa chat`."
     )
+    listening = sorted(s.name for s in daemon.services)
+    if listening:
+        console.print(f"Also listening on: {', '.join(listening)}")
     await running
     console.print("[dim]Stopped.[/dim]")
 
@@ -605,7 +596,7 @@ def _print_status(opened: App) -> None:
     budget = opened.budget.status()
     console.print(
         f"spend   today ${budget.spent_today:.4f} of ${budget.daily_limit:.2f} · "
-        f"last 7 days ${opened.runs.cost_since(now - 7 * 86400):.4f}"
+        f"last 7 days ${opened.runs.cost_since(now - 7 * 86400) + opened.budget.spend_since(now - 7 * 86400):.4f}"
     )
     if budget.remaining_today <= 0:
         console.print(

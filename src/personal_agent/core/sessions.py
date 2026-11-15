@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from personal_agent.clock import Clock, SystemClock
+from personal_agent.core.media import MediaStore, expand_media
 from personal_agent.db import Database, dumps, loads
+
+DEFAULT_SESSION = "main"
+"""The one ongoing conversation every channel shares: a personal agent talks to one person."""
 
 INTERRUPTED_RESULT = (
     "Error: this tool call was interrupted before its result was recorded. It may or may not "
@@ -236,16 +240,29 @@ class SdkSession:
     session_settings = None
 
     def __init__(
-        self, store: SessionStore, key: str, run_id: str | None = None, *, window: int | None = None
+        self,
+        store: SessionStore,
+        key: str,
+        run_id: str | None = None,
+        *,
+        window: int | None = None,
+        media: MediaStore | None = None,
+        keep_images: int = 2,
     ) -> None:
         self.store = store
         self.session_id = key
         self.run_id = run_id
         self.window = window
         """Newest items to show the model when the caller does not ask for a specific limit."""
+        self.media = media
+        self.keep_images = keep_images
+        """Only this many of the owner's newest pictures are sent inline (see core/media.py)."""
 
     async def get_items(self, limit: int | None = None) -> list[Any]:
-        return self.store.items(self.session_id, limit if limit is not None else self.window)
+        items = self.store.items(self.session_id, limit if limit is not None else self.window)
+        if self.media is not None:
+            items = expand_media(items, self.media.data_url, self.keep_images)
+        return items
 
     async def add_items(self, items: list[Any]) -> None:
         self.store.append(self.session_id, items, run_id=self.run_id)

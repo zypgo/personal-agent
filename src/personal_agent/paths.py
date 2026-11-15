@@ -63,6 +63,11 @@ class Paths:
     def run_dir(self) -> Path:
         return self.home / "run"
 
+    @property
+    def media_dir(self) -> Path:
+        """Pictures the owner sent, stored by content hash."""
+        return self.home / "media"
+
     @classmethod
     def resolve(cls, home: str | os.PathLike[str] | None = None) -> Paths:
         raw = home or os.environ.get("PA_HOME") or DEFAULT_HOME
@@ -79,6 +84,7 @@ class Paths:
             self.workspace_dir,
             self.logs_dir,
             self.run_dir,
+            self.media_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
             try:

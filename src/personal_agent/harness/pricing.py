@@ -66,3 +66,20 @@ def cost_usd(
         + output_tokens * out_rate
     )
     return total / 1_000_000
+
+
+# Speech-to-text is billed by the minute of audio (USD, OpenAI pricing page, 2026-11).
+TRANSCRIBE_PER_MINUTE: dict[str, float] = {
+    "gpt-transcribe": 0.0045,
+    "gpt-4o-mini-transcribe": 0.003,
+    "gpt-4o-transcribe": 0.006,
+    "whisper-1": 0.006,
+}
+_TRANSCRIBE_UNKNOWN = 0.006
+
+
+def transcription_cost_usd(model: str, seconds: float) -> float:
+    """Estimated cost of transcribing `seconds` of audio. Unknown models count at the highest
+    known rate, so a typo or a new model never makes the budget look better than it is."""
+    rate = TRANSCRIBE_PER_MINUTE.get(model, _TRANSCRIBE_UNKNOWN)
+    return max(0.0, seconds) / 60.0 * rate

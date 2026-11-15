@@ -11,15 +11,20 @@ from datetime import tzinfo
 from pathlib import Path
 from typing import Any
 
+from personal_agent.channels.pairing import PairingStore
+from personal_agent.channels.transcribe import OpenAITranscriber, Transcriber
 from personal_agent.clock import Clock, SystemClock, get_tz
 from personal_agent.config import Config, load_config, load_env
 from personal_agent.core.approvals import Approvals
 from personal_agent.core.budget import BudgetGuard
 from personal_agent.core.inbox import Inbox
+from personal_agent.core.live import LiveBus
+from personal_agent.core.media import MediaStore
 from personal_agent.core.outbox import Outbox
 from personal_agent.core.runs import RunStore
 from personal_agent.core.sessions import SessionStore
 from personal_agent.core.timers import Timers
+from personal_agent.core.transcript import Transcript
 from personal_agent.db import Database, open_database
 from personal_agent.harness.models import ModelFactory, OpenAIModels
 from personal_agent.memory.store import MemoryStore
@@ -66,7 +71,19 @@ class App:
     secrets: SecretBroker
     skills: SkillStore
     mcp: McpHub
+    pairing: PairingStore
+    transcript: Transcript
+    live: LiveBus
+    media: MediaStore
+    transcriber: Transcriber
     plugins: list[PluginInfo] = field(default_factory=list)
+
+    def notify_channel(self) -> str:
+        """Where unprompted messages go. `auto` means the chat app the owner last wrote from."""
+        configured = self.config.notify.channel
+        if configured != "auto":
+            return configured
+        return self.transcript.last_in_channel(exclude={"cli"}) or "cli"
 
     def recover(self) -> dict[str, int]:
         """Clean up after a previous process that died: orphaned runs and half-sent messages.
@@ -118,6 +135,7 @@ def build_app(
     create_templates: bool = True,
     mcp_factory: ServerFactory | None = None,
     plugin_entry_points: Iterable[Any] | None = None,
+    transcriber: Transcriber | None = None,
 ) -> App:
     paths = Paths.resolve(home)
     paths.ensure()
@@ -139,6 +157,7 @@ def build_app(
     inbox = Inbox(database, clock)
     runs = RunStore(database, clock)
     factory = model_factory or OpenAIModels(cfg.model)
+    live = LiveBus()
     return App(
         paths=paths,
         config=cfg,
@@ -179,5 +198,10 @@ def build_app(
             runtime=cfg.runtime,
             factory=mcp_factory,
         ),
+        pairing=PairingStore(database, clock),
+        transcript=Transcript(database, clock, live),
+        live=live,
+        media=MediaStore(paths.media_dir),
+        transcriber=transcriber or OpenAITranscriber(cfg.model, cfg.media),
         plugins=plugins,
     )

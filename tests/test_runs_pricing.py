@@ -113,3 +113,21 @@ def test_rejects_unknown_status(runs):
     a = runs.start(session_key="main", trigger="message", profile="full", model="m", event_ids=[])
     with pytest.raises(ValueError):
         runs.finish(a, "exploded")
+
+
+# ---- speech-to-text ----------------------------------------------------------------------------
+def test_listening_is_priced_per_minute():
+    from personal_agent.harness.pricing import TRANSCRIBE_PER_MINUTE, transcription_cost_usd
+
+    rate = TRANSCRIBE_PER_MINUTE["gpt-transcribe"]
+    assert transcription_cost_usd("gpt-transcribe", 60) == pytest.approx(rate)
+    assert transcription_cost_usd("gpt-transcribe", 90) == pytest.approx(rate * 1.5)
+    assert transcription_cost_usd("gpt-transcribe", 0) == 0.0
+
+
+def test_an_unknown_speech_model_is_priced_pessimistically_not_at_zero():
+    from personal_agent.harness.pricing import TRANSCRIBE_PER_MINUTE, transcription_cost_usd
+
+    assert (
+        transcription_cost_usd("some-new-model", 60) > max(TRANSCRIBE_PER_MINUTE.values()) - 1e-12
+    )

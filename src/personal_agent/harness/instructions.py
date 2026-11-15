@@ -13,10 +13,12 @@ from collections.abc import Sequence
 from datetime import tzinfo
 from functools import cache
 from importlib import resources
+from typing import Any
 
 from personal_agent.clock import format_local
 from personal_agent.config import AgentConfig
 from personal_agent.core.events import Event, Kind, Trust
+from personal_agent.core.media import image_part
 from personal_agent.memory.store import Preferences
 from personal_agent.security.sanitize import strip_invisible
 
@@ -151,7 +153,27 @@ def _timer_details(payload: dict) -> str:
     return f" ({'; '.join(details)})" if details else ""
 
 
-def event_to_item(event: Event, *, context: str | None = None, extra: str = "") -> dict[str, str]:
+VOICE_NOTE = (
+    "[This is a voice message that was turned into text automatically. It may contain "
+    "recognition mistakes, especially in names and numbers; check before doing anything "
+    "irreversible based on a doubtful word.]"
+)
+
+
+def _pictures(event: Event) -> list[str]:
+    """Ids of the pictures that came with an owner's message (only the owner's are shown)."""
+    if event.kind != Kind.MESSAGE or event.trust is not Trust.OWNER:
+        return []
+    found = []
+    for attachment in event.payload.get("attachments") or []:
+        if isinstance(attachment, dict) and attachment.get("kind") == "image":
+            media_id = attachment.get("id")
+            if isinstance(media_id, str) and media_id:
+                found.append(media_id)
+    return found
+
+
+def event_to_item(event: Event, *, context: str | None = None, extra: str = "") -> dict[str, Any]:
     """The user-role session item that represents one inbox event. `extra` is trusted text the
     harness adds to the same item (a skill the owner asked for), so that the event and what goes
     with it are stored together or not at all."""
@@ -159,6 +181,16 @@ def event_to_item(event: Event, *, context: str | None = None, extra: str = "") 
     if kind == Kind.MESSAGE:
         if event.trust is Trust.OWNER:
             body = event.text
+            if forwarded := payload.get("forwarded"):
+                fenced = (
+                    "[Forwarded to you, not written by the owner: "
+                    f"{wrap_untrusted(str(forwarded), 'forwarded message')}]"
+                )
+                body = f"{fenced}\n{body}" if body else fenced
+            if payload.get("voice"):
+                body = f"{VOICE_NOTE}\n{body}" if body else VOICE_NOTE
+            if reply_to := payload.get("reply_to"):
+                body = f"[Replying to: {wrap_untrusted(str(reply_to), 'quoted message')}]\n{body}"
         else:
             body = "A message arrived from outside; it is not from the owner.\n" + wrap_untrusted(
                 event.text, event.source
@@ -186,4 +218,11 @@ def event_to_item(event: Event, *, context: str | None = None, extra: str = "") 
         body = f"[{kind}]\n" + wrap_untrusted(_json(payload), event.source)
     if extra:
         body = f"{body}\n\n{extra}"
-    return {"role": "user", "content": f"{context}\n\n{body}" if context else body}
+    text = f"{context}\n\n{body}" if context else body
+    pictures = _pictures(event)
+    if pictures:
+        return {
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}, *(image_part(i) for i in pictures)],
+        }
+    return {"role": "user", "content": text}

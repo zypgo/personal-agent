@@ -95,7 +95,10 @@ src/personal_agent/
     outbox.py      ✅ 发件箱；on_sent 提交；maybe_sent
     runs.py        ✅ run 记录、用量、状态机
     worker.py      ✅ 领取批次、续租、失败归因
-    dispatcher.py  ✅ 投递与重试；静默时段与每小时限流
+    dispatcher.py  ✅ 投递与重试；静默时段与每小时限流；确认送达后写入对话历史
+    transcript.py  ✅ 面向主人的对话时间线（跨渠道、只增不改，与模型看到的会话日志分开）
+    live.py        ✅ 进程内的实时事件（谁在工作、用了哪个工具名、新一轮对话），给"正在输入…"与网页流用
+    media.py       ✅ 图片按内容寻址存放；会话里只存引用，每次请求只展开最新的几张
   harness/
     runner.py      ✅ Agents SDK 封装：偏好 fresh 读取、幂等落盘事件、实时记账、静默/投递规则、
                       审批挂起/恢复、模型调用前的预算检查
@@ -139,11 +142,20 @@ src/personal_agent/
     mcp_convert.py ✅ 服务器给的文字 → 模型看到的文字（命名、schema、结果、清洗）
     mcp_config.py  ✅ `pa mcp add/remove` 用的 config.toml 编辑（保留注释、先校验、原子写入）
     registry.py    ✅ Python 插件：entry point 组 `personal_agent.plugins` + `[plugins] enabled` 白名单
-  channels/        ✅ base（Channel 协议）、cli；web（Starlette + PWA）、telegram、webhook
+  channels/
+    base.py        ✅ Channel 协议；ChannelError（一定没送到）与"其他异常 = 结果未知"
+    cli.py         ✅ 终端渠道
+    pairing.py     ✅ 配对：8 位无歧义码、1 小时有效、每渠道最多 3 个待批、只能在本机批准
+    ingress.py     ✅ 所有聊天渠道交给 agent 的唯一入口：清洗、命令、语音转文字、图片入库、去重、记账
+    commands.py    ✅ `/new` `/status` `/approvals` `/approve` `/deny` `/help`：在渠道层处理，不经过模型
+    transcribe.py  ✅ 语音转文字端口（默认 OpenAI；Ogg 经 ffmpeg 转 m4a）；音频从不落盘
+    registry.py    ✅ 按配置装配渠道（内置与插件走同一条路）
+    telegram/      ✅ api（httpx 客户端，明确区分"一定没发出"与"结果未知"）、render（Markdown → Telegram HTML + 切分）、channel
+    web/           🚧 迭代 4b：Starlette + PWA；webhook
   daemon.py        ✅ 单实例锁 + worker / scheduler / dispatcher / 巡检循环 + 优雅停机；渠道服务（迭代 4）挂在这里
   cli.py           ✅ `pa` 命令：init / doctor / chat / ask / serve / status / runs / run / approvals / approve / deny /
                       timers / audit / budget / sessions / outbox / memory / prefs / skills / mcp / plugins
-  commands/        ✅ 拆出 cli.py 的子命令：skills、mcp、plugins
+  commands/        ✅ 拆出 cli.py 的子命令：skills、mcp、plugins、channels
   evals/           场景评测框架
 ```
 
@@ -152,11 +164,12 @@ src/personal_agent/
 ```
 config.toml          用户配置（不含密钥）
 .env                 密钥（0600）
-state.db             收件箱 / 会话日志 / 计时器 / 发件箱 / runs / approvals / audit / memory_versions
+state.db             收件箱 / 会话日志 / 计时器 / 发件箱 / runs / approvals / audit / memory_versions / senders / pairings / transcript / spend
 memory/
   preferences/       用户拥有，agent 只读（instructions.md、profile.md …）
   state/             agent 拥有，可读写（MEMORY.md 索引、notes/、tasks/、ledger.md、bookmarks.json、proposals.md、runs/）
 skills/              用户安装的 Agent Skills
+media/               收到的图片（文件名即内容哈希，0600；语音不保存）
 workspace/           shell / files 工具的工作目录（沙箱内唯一可写处）
 logs/ run/           日志、锁文件
 ```
@@ -315,9 +328,20 @@ MCP 做不到、又必须在进程内的扩展才用插件（首选 MCP：它在
 - 摘要（pin）按**原始**定义计算：只改了隐藏字符也算"改动"，要重新审阅。
 
 ### 渠道（`channels/`）
-统一适配器：入站 → 事件（标注信任）；出站 ← 发件箱（返回送达确认）。
-- **CLI**、**Web PWA**（手机优先，可"添加到主屏幕"，SSE 流式）、**Telegram**（长轮询，配对码 + 白名单）、**Webhook**（HMAC 校验，快速 202）。
-- Web 默认只监听 `127.0.0.1`，Bearer/Cookie 令牌；需要手机访问时推荐 Tailscale（HTTPS）。
+
+一个渠道 = `Channel`（`send`：投递发件箱消息）+ 通常也是 `Service`（`run`：监听主人）。内置渠道与插件提供的渠道走同一个注册表（`registry.py`），加渠道不需要改守护进程。
+
+**谁算主人由渠道决定，内容不决定信任。** Telegram 里"主人"= 在本机上批准过的账号；陌生人只会收到一次配对码，**他们的消息永远不会变成事件**（不花钱、没有注入面）。批准只能在本机终端做（`pa channels approve telegram 码`）——机器人收到的任何话都不能批准任何人。
+
+**一个人、一个持续的对话**：所有渠道共用会话 `main`；回复回到发话的渠道和聊天；后台消息发往 `notify.channel`（默认 `auto` = 你最近用过的聊天 App，没用过就是终端）。`transcript` 表是面向主人的历史（入站在进门时写，出站在**确认送达后**写），与模型看到的会话日志分开，所以 `/new`、压缩不会让手机上的历史消失。
+
+**入口只有一个**（`ingress.py`）：清掉终端控制码与隐藏字符 → 命令在这里就地回答（`/approve 3` 就是 `/approve 3`，不是模型对它的理解；同一个更新重复投递只执行一次）→ 语音转文字（先查预算、按分钟记账进每日上限；音频不保存）→ 图片按哈希入库 → 去重入收件箱 + 写历史 → 唤醒 worker。**转发来的内容**（别人写的话）不会作为主人的话进入：它被围进 `<untrusted>`、说明"不是主人写的"，也从不当作命令执行；引用的消息同理。
+
+**Telegram**（`telegram/`）：长轮询（不需要公网地址）；偏移量在更新被**持久处理之后**才推进，重启不丢也不重；非 Telegram 的失败（数据库被锁）重试几次，毒更新放弃并告知，不会堵住后面的消息；409（残留 webhook 就删掉；别的程序在轮询就等）、429（按 `retry_after`）、401（关闭渠道而不是狂刷）都有处理。发送遵循发件箱的约定：连不上 = `ChannelError`（可重试）；请求发出后超时/5xx = 结果未知，派发器不会盲目重发；长消息先切 Markdown 再转 HTML（代码块被切开会在上一条关闭、下一条重开），Telegram 解析不了就退回纯文本；多段消息中途失败 = 部分送达（也算结果未知）。审批请求带 ✅/❌ 按钮，只有已批准的账号能按。只处理私聊；群、频道、被编辑的消息都忽略。令牌只在 `.env`，URL 里的令牌在日志与错误里都被脱敏。
+
+**语音与图片**：语音默认走 `gpt-transcribe`（约 $0.0045/分钟；旧的 whisper 与 `gpt-4o-*-transcribe` 计划于 2027-02-26 下线）；Telegram 的 Ogg/Opus 不在 OpenAI 文档列出的格式里，装了 ffmpeg 就先转 m4a。图片会作为多模态输入给模型，但每次请求只带最新 `images_in_context` 张（默认 2），更早的变成一行说明——长对话不会一直为旧图片付费。
+
+**即将到来（4b）**：Web PWA（手机优先、SSE、只监听 127.0.0.1，推荐 Tailscale）、Webhook（HMAC 校验、快速 202、去重、限流）、插件提供的渠道。
 
 ### 做梦（`memory/dreaming.py`）
 夜间 system timer 触发 `dream` run（`dream` 画像：只有记忆与历史检索）：以转录为地面真相校验笔记、合并重复、把常用细节"晋升"到索引并保持索引在上限内、把偏好建议写入 `proposals.md`、产出报告。每次改动写入 `memory_versions`。
@@ -357,7 +381,8 @@ MCP 做不到、又必须在进程内的扩展才用插件（首选 MCP：它在
 | Agent Skills（渐进披露、安装审阅、`$name` 激活、起步技能） | ✅ 迭代 3b |
 | MCP（stdio / Streamable HTTP / SSE；定义审阅与扣下；`pa mcp`） | ✅ 迭代 3b |
 | Python 插件注册表（entry points + 白名单）、外部文字清洗 | ✅ 迭代 3b |
-| Web PWA / Telegram / Webhook / 配对 / 语音 / 图像 | 🚧 迭代 4 |
+| 渠道基础：配对、对话历史、命令、语音转文字、图片、实时事件；Telegram | ✅ 迭代 4a |
+| Web PWA / Webhook / 插件渠道 | 🚧 迭代 4b |
 | 检索 / 压缩 / 上下文裁剪 / 做梦 / 子代理 | 🚧 迭代 5 |
 | 评测 / launchd 服务 / 加固 | 🚧 迭代 6 |
 
@@ -419,7 +444,27 @@ MCP 做不到、又必须在进程内的扩展才用插件（首选 MCP：它在
 - **隐藏字符**：标签字符、双向控制、终端控制码在 MCP 描述、MCP 结果、`<untrusted>` 围栏与技能文件里都被去掉，ZWJ/ZWNJ 在正文里保留；`pa mcp trust` 与技能解析会告诉你"含隐藏字符"（`tests/test_sanitize.py`、`test_cli_mcp.py`、`test_skills.py`）。
 - **`pa doctor`**：程序找不到、环境变量没设、还没审阅、插件已启用却没安装，都会指名道姓（`tests/test_cli_mcp.py`、`test_plugins.py`）。
 
-### 已知限制（截至迭代 3b）
+### 迭代 4a 已被测试钉住的不变量
+
+（累计 1615 个测试；渠道相关的几处安全保护做过**变异验证**：把保护代码改坏，对应测试必须失败——全员放行、失败即放行、陌生人检查、发送前的批准检查、偏移量先于处理、图片 id 校验、图片嗅探、令牌正则、令牌进异常、路径穿越、下载上限、按钮鉴权、待批上限、历史去重、部分送达、5xx 当作"一定没送到"。过程中变异验证还揪出两处**测试本身太弱**并已加固，见下。）
+
+- **陌生人零成本**：未批准的 Telegram 账号只得到一条配对码（且只一次；码发送失败则下次再发）；不进收件箱、不进历史、不调用模型；每个渠道最多同时 3 个待批，更多的被无视；码 1 小时过期、同一发送者幂等、昵称里的控制字符进不了你的终端；批准只能在本机，批准码属于哪个渠道就只能批准哪个渠道（`tests/test_pairing.py`、`test_telegram_poll.py`、`test_cli_channels.py`、`test_telegram_e2e.py`）。
+- **读不出来就拒绝**：存储读失败时 `is_approved` 返回 False；发送前再查一次批准状态——被撤销的账号即使消息已在队列里也收不到（`tests/test_pairing.py`、`test_telegram_send.py`）。
+- **送达语义不被渠道弄混**：连接失败 → 一定没送到（可重试，异常里没有令牌）；请求发出后的超时 → 原样抛出（结果未知，派发器标 `maybe_sent`，不重发）；5xx 重试后仍失败 → 结果未知而不是"失败"；被拉黑/聊天不存在 → 永久失败；429 等得起就等、等不起交还派发器；多段消息后几段失败 → `PartialDelivery`（结果未知），第一段失败 → 一定没送到（`tests/test_telegram_send.py`、`test_telegram_api.py`）。
+- **不丢也不重**：偏移量在持久处理之后才推进（被中途中止的更新下次重来）；同一更新重复到达只入一次；瞬时失败重试，毒更新放弃但后面的照常处理且主人被告知（`tests/test_telegram_poll.py`）。
+- **渲染永远合法且装得下**：把 Markdown 切成 ≤ 3500 字符再转 HTML；代码块被切开会关闭再重开；HTML 转义、只放行 `http(s)` 链接、语言名不会变成属性；任意随机 Markdown（3000 种子试过，提交的是其中 40 个）转出来的每一段都标签配平且不超 4096；不合法就退回转义后的纯文本（`tests/test_telegram_render.py`）。
+- **文件下载有上限且不信任路径**：先看声称的大小、再在流式下载时数实际字节（说谎的文件被截断）；`..` 与绝对路径被拒绝；图片按内容嗅探，不信 MIME，SVG/HTML 一律不收；图片 id 必须是 64 位十六进制，路径穿越到不了文件系统（`tests/test_telegram_api.py`、`test_media.py`）。
+- **语音有闸门**：先查开关、大小、时长、当日预算，才调用转写；没有时长时按字节估算；转写失败/静音给主人一句人话，不入队；成功调用（含静音）按分钟记入当日花费（`tests/test_ingress.py`、`test_budget.py`）。
+- **模型只看到该看的图**：会话日志里存的是引用，每次请求才展开最新 N 张，更早的变成说明，缺失的文件说"已不在"；用户在文字里打出 `pa-media:…` 不会读文件（`tests/test_media.py`、`test_ingress.py`）。
+- **转发和引用是数据**：转发来的文字不是主人的话（围栏 + 说明、不执行命令、不激活技能、不算"主人写的地址"）；转发的语音也一样；引用与 Telegram 的 `quote` 同理（`tests/test_ingress.py`、`test_telegram_poll.py`、`test_instructions.py`）。
+- **命令不经模型**：`/status` `/approvals` `/approve` `/deny` `/new` `/help` 就地回答，同一更新只执行一次；`/approve` 不带编号且有多个待批时不乱猜；过期的按钮会说"该请求已被处理"而不是"没有待批"（`tests/test_chat_commands.py`）。
+- **背景消息有去处**：`notify.channel = auto` 指向你最近用过的聊天 App（在终端里聊两句不会把它拉回终端）；回复回到发话的渠道和聊天（`tests/test_channel_config.py`、`test_telegram_e2e.py`）。
+- **令牌不泄露**：令牌形态检测不再被 `/bot123:AAA…` 里的 "bot" 前缀躲开（这是为它写测试时发现的一处真实漏洞：令牌在每个 Bot API 地址里都紧跟在 `bot` 之后，原来的正则要求词边界所以匹配不到；已修）；日志里 httpx 的请求地址被压到 WARNING；`TELEGRAM_BOT_TOKEN` 配成令牌本身会被校验拒绝（它是变量**名**）；`api_base` 只允许 https 或本机 http（`tests/test_redact.py`、`test_logs.py`、`test_channel_config.py`）。
+- **整条链路**：真实守护进程里 Telegram 进 → worker → Telegram 出；陌生人配对后再对话；需要批准的动作带按钮发出、点了才运行、点拒绝就不运行；命令不调用模型；后台提醒发到你最近用的手机（`tests/test_telegram_e2e.py`）。
+
+变异验证暴露的两处**测试太弱**（现已加固）：图片 id 的穿越测试原本打不到文件（`..` 要经过一个存在的目录才解析，测试里该目录还没创建）；"偏移量先于处理"的变异原本能存活（现在有"处理到一半被中止"的测试）。
+
+### 已知限制（截至迭代 4a）
 
 - **会话窗口是权宜之计**：模型只看到最近 `agent.history_items` 条（默认 400，从最近的用户消息处对齐，避免切断工具往返），日志保留全部。窗口滑动会让提示缓存在那一刻失效；带摘要的压缩与工具结果清理在迭代 5 实现。
 - `search_history` 与子代理在迭代 5。
@@ -427,7 +472,10 @@ MCP 做不到、又必须在进程内的扩展才用插件（首选 MCP：它在
 - **MCP 的资源、提示词、sampling、elicitation、roots、OAuth 都没有接**；图片/音频结果只留一行说明。需要 OAuth 的远程服务器目前只能用你自己拿到的令牌放进 `.env` 再写进 `headers`。
 - **审阅只管工具定义，管不了工具的行为**：一个审阅通过的工具以后行为变坏（描述不变、实现变了）看不出来；这是 `exec`/`net_write` 仍要逐次问你、结果仍是污点的原因。
 - **插件是进程内的普通代码**，没有隔离；`category` 是插件作者的声明。只启用你读过的插件。
-- **还没有终端以外的渠道**：没有注册对应渠道时，后台消息留在终端"信箱"，下次 `pa chat` 打开时送达；Web/Telegram/Webhook 在迭代 4。
+- **没有注册对应渠道时**，发往它的消息留在发件箱里（`pa outbox` 可见）；终端的消息留到下次 `pa chat` 打开。Web 与 Webhook 在迭代 4b。
+- **Telegram 的边界**：只有私聊；不支持群、频道、视频、文件（PDF 等）与贴纸——会明说"只能读文字、图片与语音"，不会只回答说明文字；机器人只能通过 Bot API 收发，Telegram 看得到消息明文（它不是端到端加密）。
+- **转发内容的围栏是软隔离**：模型被明确告知"这不是主人写的"，但这和所有提示注入防御一样不是硬边界；真正的边界仍是"会改变世界的动作要问你"。图片里的字模型也会读，没法围栏。
+- **语音需要 ffmpeg**（Telegram 语音是 Ogg/Opus）；没有就把原文件发给 API，失败时提示安装。转写按分钟计费，单条受 `max_voice_seconds` 限制并计入每日预算；音频不保存。
 - **终端与后台服务之间没有即时通知**：客户端模式靠 `runtime.poll_s`（默认 1 秒）轮询，所以 `pa ask` 经服务提交会有至多约一秒的起步延迟。
 - **服务不会开机自启**：`pa serve` 在前台运行；launchd 常驻服务在迭代 6。
 - **底线是启发式的**：它读命令文本，拦不住运行时拼出来的命令；真正的边界是沙箱。选 `backend = none` 就等于只剩底线。
@@ -445,3 +493,4 @@ MCP 做不到、又必须在进程内的扩展才用插件（首选 MCP：它在
 另外两处同样只能在有 key 时验证：
 - **托管 `web_search`**：`web_search_call` 的 `action`/`sources` 与 `url_citation` 的解析按 SDK 的类型编写、用同类型的对象测过，但没有对真实 API 的返回验证；请求里附带的 `include = web_search_call.action.sources` 是否被你的模型接受也需要真实调用确认（不接受时把 `[tools] web_search = "off"`，其余功能不受影响）。
 - **docker 沙箱后端**：命令行参数没有对真实 Docker daemon 跑过（macOS 上默认用 seatbelt，已用真实进程验证）。
+- **Telegram 与语音转文字**：整套逻辑对着一个伪造的 Bot API（`httpx.MockTransport`）与替身转写器测过，没有对真实的 Telegram 服务器和 OpenAI 语音接口跑过。请在本机验证：`pa channels test telegram`（只问机器人"你是谁"，不发消息）→ 在 `.env` 填好令牌、`config.toml` 里 `[telegram] enabled = true` → `pa serve` → 给机器人发一句话 → `pa channels approve telegram 码` → 再发一句；再试一条语音与一张图片。能连不上 Telegram 的地区请设 `[telegram] proxy`。

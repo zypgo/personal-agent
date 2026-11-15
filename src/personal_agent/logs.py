@@ -27,6 +27,9 @@ def setup_logging(paths: Paths, *, console: bool = False, level: int = logging.I
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(level)
     logger.propagate = False
+    for noisy in ("httpx", "httpcore"):
+        # At INFO, httpx logs every request address, and a Telegram address carries the bot token.
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     formatter = RedactingFormatter(_FORMAT)
     if not any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
         paths.logs_dir.mkdir(parents=True, exist_ok=True)

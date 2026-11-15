@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from typing import Any
 
 from agents import ModelSettings, OpenAIChatCompletionsModel, OpenAIResponsesModel
 from agents.models.interface import Model
@@ -21,6 +22,19 @@ from personal_agent.harness.errors import ModelUnavailable
 ModelFactory = Callable[[str], Model]
 
 
+def make_client(cfg: ModelConfig, **options: Any) -> AsyncOpenAI:
+    """An OpenAI client for the configured endpoint (`options` are passed on: timeout, retries)."""
+    key = os.environ.get("OPENAI_API_KEY") or None
+    base_url = cfg.base_url or os.environ.get("OPENAI_BASE_URL") or None
+    if key is None:
+        if base_url is None:
+            raise ModelUnavailable(
+                "OPENAI_API_KEY is not set. Put it in ~/.personal-agent/.env (see .env.example)."
+            )
+        key = "not-needed"  # many local OpenAI-compatible servers ignore the key
+    return AsyncOpenAI(api_key=key, base_url=base_url, **options)
+
+
 class OpenAIModels:
     """Creates models that share one lazily-created `AsyncOpenAI` client."""
 
@@ -31,17 +45,9 @@ class OpenAIModels:
     @property
     def client(self) -> AsyncOpenAI:
         if self._client is None:
-            key = os.environ.get("OPENAI_API_KEY") or None
-            base_url = self.cfg.base_url or os.environ.get("OPENAI_BASE_URL") or None
-            if key is None:
-                if base_url is None:
-                    raise ModelUnavailable(
-                        "OPENAI_API_KEY is not set. Put it in ~/.personal-agent/.env (see .env.example)."
-                    )
-                key = "not-needed"  # many local OpenAI-compatible servers ignore the key
             # Retries are managed by the SDK runner (ModelSettings.retry); it turns off the
             # client's own retries automatically so the two layers do not multiply.
-            self._client = AsyncOpenAI(api_key=key, base_url=base_url, timeout=self.cfg.timeout_s)
+            self._client = make_client(self.cfg, timeout=self.cfg.timeout_s)
         return self._client
 
     def __call__(self, name: str) -> Model:

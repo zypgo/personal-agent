@@ -78,3 +78,29 @@ def test_injection_hints(text, hint):
 
 def test_benign_notes_have_no_hints():
     assert injection_hints("Frank prefers answers in Chinese. Dentist on Friday at 3pm.") == []
+
+
+# ---- the Telegram bot token, which lives in every Bot API address ----------------------------------
+TELEGRAM_TOKEN = "123456789" + ":" + "A" * 35  # built in pieces: not a real token
+
+
+def test_a_telegram_token_alone_or_in_prose_is_hidden():
+    text = f"my bot is {TELEGRAM_TOKEN} ok"
+    assert find_secrets(text)
+    assert TELEGRAM_TOKEN not in redact(text)
+
+
+def test_a_bot_api_address_with_the_token_is_hidden():
+    # The token follows "bot" in the path, so there is no word boundary in front of it.
+    for url in (
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe",
+        f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/files/photo.jpg",
+        f"http://127.0.0.1:8081/bot{TELEGRAM_TOKEN}/sendMessage",
+    ):
+        assert find_secrets(url), url
+        assert TELEGRAM_TOKEN not in redact(f"request to {url} failed")
+
+
+def test_a_longer_number_followed_by_a_colon_is_not_taken_for_a_token():
+    assert not find_secrets("order 12345678901:" + "A" * 35)
+    assert not find_secrets("ratio 12:" + "A" * 35)

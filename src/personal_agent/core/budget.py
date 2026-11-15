@@ -71,7 +71,21 @@ class BudgetGuard:
         return self.cfg.daily_usd + self.extra_today()
 
     def spent_today(self) -> float:
-        return self.runs.cost_since(start_of_day(self.clock.now(), self.tz))
+        since = start_of_day(self.clock.now(), self.tz)
+        return self.runs.cost_since(since) + self.spend_since(since)
+
+    # ---- money spent outside of runs (speech-to-text) ----------------------------------
+    def record_spend(self, kind: str, usd: float, detail: str = "") -> None:
+        """Count money that no run paid for, so the daily cap sees it."""
+        self.db.execute(
+            "INSERT INTO spend(at, kind, usd, detail) VALUES (?, ?, ?, ?)",
+            (self.clock.now(), kind, max(0.0, float(usd)), detail[:200]),
+        )
+
+    def spend_since(self, since: float) -> float:
+        return float(
+            self.db.scalar("SELECT SUM(usd) FROM spend WHERE at >= ?", (since,), default=0.0)
+        )
 
     def resets_in(self) -> float:
         now = self.clock.now()

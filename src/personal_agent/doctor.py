@@ -234,6 +234,7 @@ def capability_checks(paths: Paths) -> list[Check]:
     checks.extend(_skills_checks(paths, cfg))
     checks.extend(_mcp_checks(paths, cfg))
     checks.extend(_plugin_checks(cfg))
+    checks.extend(_channel_checks(paths, cfg))
 
     for name, secret in cfg.secrets.items():
         hosts = ", ".join(secret.hosts)
@@ -329,6 +330,86 @@ def _mcp_checks(paths: Paths, cfg) -> list[Check]:
         else:
             reviewed_text = f"{count} tool(s) reviewed" if count else "tools accepted on first use"
             checks.append(Check(label, "ok", f"{server.transport}; {reviewed_text}"))
+    return checks
+
+
+def _approved_senders(paths: Paths, channel: str) -> int | None:
+    """How many accounts are approved on `channel` (None if the database cannot say)."""
+    if not paths.db_file.exists():
+        return 0  # nothing has run yet, so nobody can have been approved
+    try:
+        conn = sqlite3.connect(f"file:{paths.db_file}?mode=ro", uri=True, timeout=1.0)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM senders WHERE channel = ?", (channel,)
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    return int(row[0]) if row else 0
+
+
+def _channel_checks(paths: Paths, cfg) -> list[Check]:
+    """Chat channels: is what they need there, and will unprompted messages have somewhere to go?"""
+    checks: list[Check] = []
+    telegram = cfg.telegram
+    if telegram.enabled:
+        if not os.environ.get(telegram.token_env):
+            checks.append(
+                Check(
+                    "telegram",
+                    "fail",
+                    f"enabled, but {telegram.token_env} is not set",
+                    f"Create a bot with @BotFather and put {telegram.token_env}=... in {paths.env_file}",
+                )
+            )
+        else:
+            approved = _approved_senders(paths, "telegram")
+            if approved == 0:
+                checks.append(
+                    Check(
+                        "telegram",
+                        "warn",
+                        "the token is set, but no Telegram account is approved yet",
+                        "Start `pa serve`, message your bot, then run "
+                        "`pa channels approve telegram CODE` with the code it sends back.",
+                    )
+                )
+            else:
+                checks.append(
+                    Check(
+                        "telegram",
+                        "ok",
+                        "token set"
+                        + (f"; {approved} account(s) approved" if approved else "")
+                        + (
+                            f"; via proxy {telegram.proxy.split('@')[-1]}" if telegram.proxy else ""
+                        ),
+                    )
+                )
+        if cfg.media.voice and shutil.which("ffmpeg") is None:
+            checks.append(
+                Check(
+                    "voice notes",
+                    "warn",
+                    "Telegram voice notes are Ogg/Opus, which the speech API's documented formats "
+                    "leave out, and ffmpeg (which converts them) is not installed",
+                    "brew install ffmpeg   (or set [media] voice = false)",
+                )
+            )
+    notify = cfg.notify.channel
+    known = {"cli", "auto"} | ({"telegram"} if telegram.enabled else set())
+    if notify not in known:
+        checks.append(
+            Check(
+                "notify channel",
+                "warn",
+                f"[notify] channel = {notify!r}, but no such channel is switched on",
+                "Messages the agent sends on its own would wait for a channel that never runs. "
+                "Enable it in config.toml or pick another.",
+            )
+        )
     return checks
 
 

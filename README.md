@@ -19,7 +19,8 @@
 | 2 | 常驻循环：worker / scheduler / dispatcher、策略引擎、延迟审批、审计、预算、`pa serve` | ✅ |
 | 3a | 双手与出站：沙箱 shell（seatbelt）、硬性底线、文件工具、SSRF 安全的 `web_fetch` / `http_request`、托管 `web_search`、密钥代理、"地址会带走数据"的出站控制 | ✅ |
 | 3b | 可插拔：MCP（定义先审阅再启用）、Agent Skills（渐进披露）、Python 插件注册表、外部文字清洗 | ✅ |
-| 4 | 渠道与多模态：Web PWA（手机可用）、Telegram、Webhook、语音/图像 | 🚧 |
+| 4a | 渠道基础与 Telegram：配对（只能在本机批准）、对话历史、聊天内命令与审批按钮、语音转文字、图片、实时事件 | ✅ |
+| 4b | Web PWA（手机可用）、Webhook、插件提供的渠道 | 🚧 |
 | 5 | 记忆智能：做梦、检索、压缩、子代理 | 🚧 |
 | 6 | 评测、launchd 常驻服务、加固 | 🚧 |
 
@@ -57,6 +58,18 @@ uv run pa mcp tools files              # 连上去看它有哪些工具、各会
 uv run pa mcp trust files              # 读过工具的描述并接受；新增/改动的工具以后会再问你
 uv run pa plugins                      # Python 插件（装了也要在 config.toml 的 [plugins] enabled 里列出才生效）
 ```
+
+在手机上用它（Telegram，不需要公网地址）：
+
+```bash
+# 1. 在 Telegram 里找 @BotFather 创建机器人，把令牌填进 ~/.personal-agent/.env 的 TELEGRAM_BOT_TOKEN（不要贴进聊天）
+# 2. 在 ~/.personal-agent/config.toml 里写  [telegram]  enabled = true   （连不上 Telegram 的地区再加 proxy）
+uv run pa channels test telegram       # 只问机器人"你是谁"，确认令牌与网络没问题
+uv run pa serve                        # 常驻；给机器人发一句话，它会回一个配对码
+uv run pa channels approve telegram ABCD-EFGH   # 只在你自己的电脑上批准；陌生人的消息永远不会进到 agent
+```
+
+之后手机上直接聊天即可：文字、语音（需要 `brew install ffmpeg` 才能处理 Telegram 的 Ogg 语音）和图片都行；`/status`、`/approvals` 查看状态，需要你点头的动作会带 ✅/❌ 按钮；它主动找你的消息会发到你最近用的那个聊天 App。
 
 想先试用而不动你的主目录：`PA_HOME=./.pa-home uv run pa init`（`.pa-home/` 已被 git 忽略）。
 

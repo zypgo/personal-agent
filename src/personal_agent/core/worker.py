@@ -58,7 +58,8 @@ class Worker:
 
         beat = asyncio.create_task(self._keep_lease(batch))
         try:
-            outcome = await self.harness.run(batch)
+            with app.live.working(batch.session_key, channel=self._asked_on(batch)):
+                outcome = await self.harness.run(batch)
         except asyncio.CancelledError:
             app.inbox.release(batch)
             raise
@@ -81,6 +82,14 @@ class Worker:
                 await beat
         app.inbox.complete(batch)
         return WorkResult(batch, outcome=outcome)
+
+    @staticmethod
+    def _asked_on(batch: Batch) -> str | None:
+        """The channel the owner wrote on, if this batch is an answer to something they said."""
+        for event in reversed(batch.events):
+            if event.kind == Kind.MESSAGE and event.trust is Trust.OWNER:
+                return event.source
+        return None
 
     async def _keep_lease(self, batch: Batch) -> None:
         """Extend the lease while the run is alive so a slow run is not mistaken for a crash."""
@@ -159,7 +168,7 @@ class Worker:
                 )
             else:
                 self._notice(
-                    channel=app.config.notify.channel,
+                    channel=app.notify_channel(),
                     recipient=None,
                     session_key=event.session_key,
                     text=f"An event from '{event.source}' ({event.kind}) failed repeatedly and was dropped.",
@@ -177,7 +186,7 @@ class Worker:
         app.approvals.drop_run(run_id)
         app.runs.finish(run_id, "failed", error="could not resume after the approval")
         run = app.runs.get(run_id)
-        channel = app.config.notify.channel
+        channel = app.notify_channel()
         recipient = None
         origin = saved.meta.get("origin") or {}
         channel = origin.get("channel") or channel
