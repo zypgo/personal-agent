@@ -111,9 +111,12 @@ def known_secret_values(env: Mapping[str, str] | None = None, *, min_length: int
 
 
 def redact(text: str, known: Iterable[str] = ()) -> str:
-    """Replace credential-looking strings and any exact `known` secret values."""
-    for value in known:
-        if value and value in text:
+    """Replace credential-looking strings and any exact `known` secret values.
+
+    Longer values go first whatever order they come in: replacing `abc` before `abcdef` would
+    leave `def` of the longer secret in the text."""
+    for value in sorted({v for v in known if v}, key=len, reverse=True):
+        if value in text:
             text = text.replace(value, "[REDACTED]")
     matches = find_secrets(text)
     if not matches:

@@ -430,6 +430,26 @@ def test_redacting_removes_every_known_secret_and_twice_changes_nothing(text, kn
     assert redact(once, known) == once
 
 
+@given(
+    secrets=st.lists(st.text("abc", min_size=3, max_size=9), min_size=2, max_size=5, unique=True),
+    data=st.data(),
+)
+def test_a_secret_is_redacted_whole_whatever_order_the_known_values_come_in(secrets, data):
+    """Replacing `abc` before `abcdef` would leave `def` of the longer secret behind."""
+    order = data.draw(st.permutations(secrets))
+    secret = data.draw(st.sampled_from(secrets))
+    text = f"the key is {secret}, twice: {secret}"
+
+    out = redact(text, order)
+
+    assert all(value not in out for value in secrets)
+    assert out == redact(text, sorted(secrets, key=len, reverse=True))
+
+
+def test_a_shorter_secret_inside_a_longer_one_does_not_leave_the_rest_of_it_behind():
+    assert redact("abcdef", ["abc", "abcdef"]) == "[REDACTED]"
+
+
 @given(SECRET_BODY, st.text(max_size=30), st.text(max_size=30))
 def test_a_key_is_found_wherever_it_sits_and_nothing_of_it_survives(body, before, after):
     key = "sk-" + body

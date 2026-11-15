@@ -34,12 +34,20 @@ def _flat_loader() -> type[yaml.SafeLoader]:
     import yaml  # not at the top: most commands never read YAML, and the import is not free
 
     class FlatLoader(yaml.SafeLoader):
-        """`SafeLoader` that refuses aliases (`*name`).
+        """`SafeLoader` that refuses aliases (`*name`) and keeps dates as text.
 
         A document of a few hundred bytes can define each list as nine references to the one
         before ("billion laughs"); the loader shares them, so loading is instant, but anything
         that then walks, prints or validates the result takes longer than the machine has. Nothing
-        this program reads (skill front matter, scenarios) has a use for an alias."""
+        this program reads (skill front matter, scenarios) has a use for an alias.
+
+        Nothing has a use for a date type either, and `2023-02-30` would be an error in a field
+        that is only ever shown: as text it stays what the author wrote."""
+
+        yaml_implicit_resolvers = {
+            first: [(tag, rule) for tag, rule in rules if tag != "tag:yaml.org,2002:timestamp"]
+            for first, rules in yaml.SafeLoader.yaml_implicit_resolvers.items()
+        }
 
         def compose_node(self, parent: Any, index: Any) -> Any:
             if self.check_event(yaml.AliasEvent):
@@ -53,14 +61,16 @@ def _flat_loader() -> type[yaml.SafeLoader]:
 
 
 def load_yaml(text: str) -> Any:
-    """`yaml.safe_load` without aliases, raising `yaml.YAMLError` for them and for too deep a
-    nesting."""
+    """`yaml.safe_load` without aliases, raising `yaml.YAMLError` for them, for too deep a nesting
+    and for a number the machine cannot hold (a literal of thousands of digits)."""
     import yaml
 
     try:
         return yaml.load(text, Loader=_flat_loader())  # noqa: S506 (a safe loader, see above)
     except RecursionError as exc:
         raise yaml.YAMLError(TOO_DEEP) from exc
+    except (ValueError, OverflowError) as exc:
+        raise yaml.YAMLError("a value in the document is out of range") from exc
 
 
 def loads_toml(text: str) -> dict[str, Any]:
