@@ -10,6 +10,7 @@ import pytest
 from helpers import invoke
 from personal_agent.commands import evals as evals_commands
 from personal_agent.config import DEFAULT_CONFIG_TOML
+from personal_agent.evals import runner
 from personal_agent.evals.checks import Verdict
 from personal_agent.evals.runner import (
     LiveRun,
@@ -338,7 +339,7 @@ def with_key(initialised, monkeypatch):
 
 def test_live_needs_a_home_and_spends_nothing_without_one(home, monkeypatch):
     spy = Spy([])
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     result = invoke("eval", "run", "--live")
     assert result.exit_code == 2 and "Run `pa init` first" in flat(result.output)
     assert spy.calls == []
@@ -346,7 +347,7 @@ def test_live_needs_a_home_and_spends_nothing_without_one(home, monkeypatch):
 
 def test_live_needs_a_key_and_says_where_to_put_it(initialised, monkeypatch):
     spy = Spy([])
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     result = invoke("eval", "run", "--live")
     out = flat(result.output)
     assert result.exit_code == 2
@@ -360,7 +361,7 @@ def test_a_custom_endpoint_needs_no_openai_key(initialised, monkeypatch):
         DEFAULT_CONFIG_TOML.replace("[model]", '[model]\nbase_url = "http://127.0.0.1:9/v1"', 1)
     )
     spy = Spy([ScenarioResult("quiet-when-nothing-new", "Quiet", [good_trial()])])
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     result = invoke("eval", "run", "quiet-when-nothing-new", "--live", "--no-report")
     assert result.exit_code == 0, result.output
     assert len(spy.calls) == 1
@@ -369,7 +370,7 @@ def test_a_custom_endpoint_needs_no_openai_key(initialised, monkeypatch):
 def test_the_base_url_variable_stands_for_a_custom_endpoint_too(initialised, monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
     spy = Spy([ScenarioResult("quiet-when-nothing-new", "Quiet", [good_trial()])])
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     result = invoke("eval", "run", "quiet-when-nothing-new", "--live", "--no-report")
     assert result.exit_code == 0, result.output
     assert len(spy.calls) == 1
@@ -377,7 +378,7 @@ def test_the_base_url_variable_stands_for_a_custom_endpoint_too(initialised, mon
 
 def test_a_config_that_cannot_be_read_stops_a_live_run_before_it_starts(initialised, monkeypatch):
     spy = Spy([])
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     (initialised / "config.toml").write_text("[budget]\nper_run_usd = -3\n")
     result = invoke("eval", "run", "--live")
     assert result.exit_code == 2 and spy.calls == []
@@ -385,7 +386,7 @@ def test_a_config_that_cannot_be_read_stops_a_live_run_before_it_starts(initiali
 
 def test_a_live_run_passes_the_owners_choices_on_and_reports_what_it_cost(with_key, monkeypatch):
     spy = Spy([ScenarioResult("quiet-when-nothing-new", "Quiet", [good_trial(0), good_trial(1)])])
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     result = invoke(
         "eval", "run", "quiet-when-nothing-new", "--live", "--trials", "2", "--max-cost", "0.5",
         "--model", "some-model", "--effort", "high",
@@ -415,7 +416,7 @@ def test_a_live_run_passes_the_owners_choices_on_and_reports_what_it_cost(with_k
 
 def test_a_live_run_with_the_owners_defaults_names_them(with_key, monkeypatch):
     spy = Spy([ScenarioResult("quiet-when-nothing-new", "Quiet", [good_trial()])])
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     result = invoke("eval", "run", "quiet-when-nothing-new", "--live", "--no-report")
     out = flat(result.output)
     assert result.exit_code == 0
@@ -435,7 +436,7 @@ def test_a_live_failure_exits_with_one_and_shows_the_first_failed_trial_only(wit
             )
         ]
     )
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     result = invoke("eval", "run", "quiet-when-nothing-new", "--live", "--trials", "3")
     out = flat(result.output)
     assert result.exit_code == 1
@@ -458,7 +459,7 @@ def test_a_trial_that_could_not_be_played_is_shown_with_its_reason(with_key, mon
             )
         ]
     )
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     result = invoke("eval", "run", "quiet-when-nothing-new", "--live", "--no-report")
     assert result.exit_code == 1 and "step 'ask': bad message" in flat(result.output)
 
@@ -473,7 +474,7 @@ def test_scenarios_left_unplayed_because_the_money_ran_out_are_said_to_be_failur
         ],
         cost=1.02,
     )
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     result = invoke("eval", "run", "quiet-when-nothing-new", "news-once", "--live", "--no-report")
     out = flat(result.output)
     assert result.exit_code == 1
@@ -485,6 +486,6 @@ def test_scenarios_left_unplayed_because_the_money_ran_out_are_said_to_be_failur
 
 def test_no_noise_line_when_no_scenario_asked_for_silence(with_key, monkeypatch):
     spy = Spy([ScenarioResult("news-once", "News", [good_trial(scenario_id="news-once", quiet=0)])])
-    monkeypatch.setattr(evals_commands, "run_live", spy)
+    monkeypatch.setattr(runner, "run_live", spy)
     result = invoke("eval", "run", "news-once", "--live", "--no-report")
     assert result.exit_code == 0 and "Noise:" not in result.output

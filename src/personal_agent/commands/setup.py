@@ -1,0 +1,76 @@
+"""`pa init` and `pa doctor`: make a home for the agent, and check that what it needs works."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+
+import typer
+from rich.markup import escape
+
+from personal_agent.commands.common import console, opened, say
+from personal_agent.config import DEFAULT_CONFIG_TOML, DEFAULT_ENV, ConfigError, load_env
+from personal_agent.doctor import capability_checks, live_checks, static_checks
+from personal_agent.paths import Paths
+from personal_agent.skills.install import install_bundled
+
+app = typer.Typer()
+
+MARKS = {"ok": "[green]ok[/green]  ", "warn": "[yellow]warn[/yellow]", "fail": "[red]FAIL[/red]"}
+
+
+@app.command()
+def init() -> None:
+    """Create the agent's home (~/.personal-agent), config and database. Safe to run again."""
+    paths = Paths.resolve()
+    paths.ensure()
+    created: list[str] = []
+    if not paths.config_file.exists():
+        paths.config_file.write_text(DEFAULT_CONFIG_TOML, encoding="utf-8")
+        created.append(str(paths.config_file))
+    if not paths.env_file.exists():
+        paths.env_file.write_text(DEFAULT_ENV, encoding="utf-8")
+        paths.env_file.chmod(0o600)
+        created.append(str(paths.env_file))
+    with opened():  # creates the database and the memory templates, and loads .env
+        pass
+    starter = install_bundled(paths)
+    say(f"[green]Ready.[/green] Home: {escape(str(paths.home))}")
+    for item in created:
+        say(f"  created {escape(item)}")
+    if starter:
+        say(f"  added starter skills: {', '.join(starter)} (see `pa skills`)")
+    if not os.environ.get("OPENAI_API_KEY"):
+        say(
+            f"\nNext: put your key in [bold]{escape(str(paths.env_file))}[/bold] "
+            "(OPENAI_API_KEY=...), then run [bold]pa doctor[/bold]."
+        )
+    else:
+        say("\nNext: run [bold]pa doctor[/bold], then [bold]pa chat[/bold].")
+
+
+@app.command()
+def doctor(
+    live: bool = typer.Option(
+        False, "--live", help="Also make two real model calls (a few cents)."
+    ),
+) -> None:
+    """Check the setup and explain how to fix what is wrong."""
+    paths = Paths.resolve()
+    with contextlib.suppress(ConfigError):  # a .env that cannot be read is reported below
+        load_env(paths)
+    checks = static_checks(paths)
+    checks += capability_checks(paths)  # says nothing if the config is broken (already reported)
+    skipped_live = live and any(c.status == "fail" for c in checks)
+    if live and not skipped_live:
+        with opened() as agent, console.status("[dim]calling the model...[/dim]"):
+            checks += asyncio.run(live_checks(agent))
+    for check in checks:
+        say(f"{MARKS[check.status]} {check.name}: {escape(check.detail)}")
+        if check.fix and check.status != "ok":
+            say(f"       [dim]-> {escape(check.fix)}[/dim]")
+    if skipped_live:
+        say("[dim]Skipped the live check: fix the failures above first.[/dim]")
+    if any(c.status == "fail" for c in checks):
+        raise typer.Exit(1)

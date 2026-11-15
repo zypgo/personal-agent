@@ -32,16 +32,12 @@ def flat(output: str) -> str:
 
 
 @pytest.fixture
-def wire(make_app, monkeypatch):
+def wire(make_app, use_app):
     """`wire(config, *fakes)` -> the app that `pa` commands now run against."""
-    from personal_agent import cli
 
     def go(cfg: Config | None = None, *fakes: FakeServer):
         factory, _ = factory_for(*fakes)
-        app = make_app(config=cfg or Config(), mcp_factory=factory)
-        monkeypatch.setattr(app, "close", lambda: None)
-        monkeypatch.setattr(cli, "_build", lambda: app)
-        return app
+        return use_app(make_app(config=cfg or Config(), mcp_factory=factory))
 
     return go
 

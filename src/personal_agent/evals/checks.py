@@ -11,9 +11,8 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from personal_agent.core.outbox import OutMessage
-from personal_agent.evals.bench import StepResult, Trial
 from personal_agent.evals.spec import (
     Check,
     MaxMessages,
@@ -30,6 +29,10 @@ from personal_agent.evals.spec import (
     ToolsNotUsed,
     ToolsUsed,
 )
+
+if TYPE_CHECKING:
+    from personal_agent.core.outbox import OutMessage
+    from personal_agent.evals.bench import StepResult, Trial
 
 MAX_FILE_CHARS = 200_000
 

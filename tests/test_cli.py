@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import click
 from agents.testing import ScriptedModel, assistant_message, function_call
 
 from helpers import invoke
-from personal_agent import cli
+from personal_agent.commands import conversation
 
 
 # ---- setup commands ---------------------------------------------------------------------
@@ -118,7 +119,7 @@ def test_chat_loop_runs_commands_and_turns(wired, capsys):
     app = wired(ScriptedModel([[assistant_message("Hello there!")]]))
     lines = iter(["hi", "/help", "/status", "/bogus", "/exit", "never reached"])
 
-    cli.chat_loop(app, "main", read_line=lambda _prompt: next(lines))
+    conversation.chat_loop(app, "main", read_line=lambda _prompt: next(lines))
 
     output = capsys.readouterr().out
     assert "Hello there!" in output  # the agent's reply was printed
@@ -136,7 +137,7 @@ def test_chat_ends_on_end_of_input(wired):
     def eof(_prompt):
         raise EOFError
 
-    cli.chat_loop(app, "main", read_line=eof)  # returns instead of hanging or raising
+    conversation.chat_loop(app, "main", read_line=eof)  # returns instead of hanging or raising
 
 
 def test_chat_new_starts_a_fresh_conversation(wired):
@@ -144,7 +145,7 @@ def test_chat_new_starts_a_fresh_conversation(wired):
     app = wired(model)
     lines = iter(["first topic", "/new", "second topic", "/exit"])
 
-    cli.chat_loop(app, "main", read_line=lambda _prompt: next(lines))
+    conversation.chat_loop(app, "main", read_line=lambda _prompt: next(lines))
 
     second_call = " ".join(str(i) for i in model.calls[1].input)
     assert "second topic" in second_call and "first topic" not in second_call
@@ -156,7 +157,7 @@ def test_chat_delivers_messages_that_arrived_while_away(wired, capsys):
         session_key="timer:brief", channel="cli", text="Your morning brief is ready."
     )
 
-    cli.chat_loop(app, "main", read_line=lambda _prompt: "/exit")
+    conversation.chat_loop(app, "main", read_line=lambda _prompt: "/exit")
 
     assert "morning brief" in capsys.readouterr().out
     assert app.outbox.counts()["sent"] == 1
@@ -230,7 +231,7 @@ def test_prefs_show_and_proposals(wired):
 
 def test_prefs_edit_saves_through_the_versioned_store(wired, monkeypatch):
     app = wired()
-    monkeypatch.setattr(cli.click, "edit", lambda text, **_: "Never call me before 9.\n")
+    monkeypatch.setattr(click, "edit", lambda text, **_: "Never call me before 9.\n")
 
     result = invoke("prefs", "edit")
 
@@ -243,5 +244,5 @@ def test_prefs_edit_saves_through_the_versioned_store(wired, monkeypatch):
 
 def test_prefs_edit_with_no_change_does_nothing(wired, monkeypatch):
     wired()
-    monkeypatch.setattr(cli.click, "edit", lambda text, **_: None)
+    monkeypatch.setattr(click, "edit", lambda text, **_: None)
     assert "No changes" in invoke("prefs", "edit").output

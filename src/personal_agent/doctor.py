@@ -25,6 +25,7 @@ from personal_agent.config import Config, ConfigError, api_key, load_config, rea
 from personal_agent.db import SCHEMA_VERSION
 from personal_agent.harness.pricing import is_known
 from personal_agent.paths import Paths
+from personal_agent.presence import LOCK_NAME, EngineLock
 
 if TYPE_CHECKING:
     from personal_agent.app import App
@@ -539,8 +540,6 @@ def _port_check(name: str, paths: Paths, host: str, port: int) -> Check | None:
     """Can `pa serve` take this address? Asked only while nothing is running the agent: a running
     agent holds its own ports."""
     import ipaddress
-
-    from personal_agent.daemon import LOCK_NAME, EngineLock
 
     if EngineLock.is_taken(paths.run_dir / LOCK_NAME):
         return None

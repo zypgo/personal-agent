@@ -78,10 +78,11 @@ def invoke(*args: str, input: str | None = None):
 
     The terminal is made very wide: Rich wraps at 80 columns when there is no terminal, and a long
     temporary path would otherwise split a sentence across lines and break `in output` checks."""
-    from personal_agent import cli
+    from personal_agent.cli import app
+    from personal_agent.commands.common import console
 
-    cli.console.size = (10_000, 50)  # Rich only honours a width that comes with a height
-    return CliRunner().invoke(cli.app, list(args), input=input)
+    console.size = (10_000, 50)  # Rich only honours a width that comes with a height
+    return CliRunner().invoke(app, list(args), input=input)
 
 
 @contextmanager

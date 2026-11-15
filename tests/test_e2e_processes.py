@@ -77,8 +77,7 @@ class Program:
     def kill(self) -> None:
         """SIGKILL: no handler runs, nothing is cleaned up."""
         self.process.kill()
-        self.process.wait(timeout=10)
-        self._reader.join(timeout=5)
+        self.close()
 
     def terminate(self) -> None:
         """SIGTERM: what `launchctl stop` and a shutdown send."""
@@ -86,8 +85,17 @@ class Program:
 
     def wait(self, timeout: float = 30.0) -> int:
         code = self.process.wait(timeout=timeout)
-        self._reader.join(timeout=5)
+        self.close()
         return code
+
+    def close(self) -> None:
+        """Make sure the process is over, take what it printed to the last line, let go of the pipe."""
+        if self.process.poll() is None:
+            self.process.kill()
+        self.process.wait(timeout=10)
+        self._reader.join(timeout=5)
+        if self.process.stdout is not None:
+            self.process.stdout.close()
 
 
 class Home:
@@ -132,9 +140,7 @@ class Home:
 
     def stop_everything(self) -> None:
         for program in self.programs:
-            if program.process.poll() is None:
-                program.process.kill()
-                program.process.wait(timeout=10)
+            program.close()
 
     # ---- the owner and the database ---------------------------------------------------------
     def say(self, text: str) -> None:

@@ -1,4 +1,4 @@
-"""The always-on loop, and the lock that says who is running the agent.
+"""The always-on loop, and the engine a one-off command uses to run the agent.
 
 The agent sleeps most of the time. This process does four cheap things in a loop:
 
@@ -17,12 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import fcntl
 import logging
 import os
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from personal_agent.channels.base import Channel
@@ -30,74 +28,18 @@ from personal_agent.core.dispatcher import Dispatcher
 from personal_agent.core.events import AddResult, NewEvent
 from personal_agent.core.worker import Worker, WorkResult
 from personal_agent.harness.dreaming import Dreamer
+from personal_agent.presence import (
+    HEARTBEAT_KEY,
+    HOUSEKEEPING_S,
+    LOCK_NAME,
+    AlreadyRunning,
+    EngineLock,
+)
 
 if TYPE_CHECKING:
     from personal_agent.app import App
 
 log = logging.getLogger(__name__)
-
-LOCK_NAME = "engine.lock"
-HEARTBEAT_KEY = "daemon:heartbeat"
-HOUSEKEEPING_S = 15.0
-
-
-class AlreadyRunning(RuntimeError):
-    def __init__(self, pid: int | None) -> None:
-        super().__init__(f"another process is already running the agent (pid {pid or 'unknown'})")
-        self.pid = pid
-
-
-class EngineLock:
-    """Exclusive "I run the agent" lock. Held by the daemon, or by a lone CLI session.
-
-    An advisory `flock`: the kernel releases it when the process dies, so it can never go stale.
-    """
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._fd: int | None = None
-
-    def acquire(self) -> bool:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(fd)
-            return False
-        os.ftruncate(fd, 0)
-        os.write(fd, f"{os.getpid()}\n".encode())
-        self._fd = fd
-        return True
-
-    def release(self) -> None:
-        if self._fd is None:
-            return
-        with contextlib.suppress(OSError):
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
-        with contextlib.suppress(OSError):
-            os.close(self._fd)
-        self._fd = None
-
-    @property
-    def held(self) -> bool:
-        return self._fd is not None
-
-    def holder_pid(self) -> int | None:
-        """The pid written by whoever holds the lock (only meaningful while it is held)."""
-        try:
-            return int(self.path.read_text().strip())
-        except (OSError, ValueError):
-            return None
-
-    @classmethod
-    def is_taken(cls, path: Path) -> bool:
-        """True if some process currently holds the lock."""
-        probe = cls(path)
-        if probe.acquire():
-            probe.release()
-            return False
-        return True
 
 
 class _Wakeups:
@@ -345,28 +287,6 @@ class Daemon:
                 backoff = min(backoff * 2, 60.0)
 
 
-@dataclass(frozen=True)
-class DaemonState:
-    kind: str
-    """"daemon" (the background service), "terminal" (a chat or command is running the agent
-    itself) or "stopped"."""
-    pid: int | None = None
-    heartbeat_age_s: float | None = None
-
-
-def daemon_state(app: App) -> DaemonState:
-    lock_path = app.paths.run_dir / LOCK_NAME
-    if not EngineLock.is_taken(lock_path):
-        return DaemonState("stopped")
-    pid = EngineLock(lock_path).holder_pid()
-    beat = (app.db.kv_get(HEARTBEAT_KEY) or "").split()
-    if len(beat) == 2 and beat[0] == str(pid):
-        age = max(0.0, app.clock.now() - float(beat[1]))
-        if age < 4 * HOUSEKEEPING_S:
-            return DaemonState("daemon", pid, age)
-    return DaemonState("terminal", pid)
-
-
 # ---- who runs the agent for a CLI command --------------------------------------------------
 class Engine:
     """Either this process runs the agent (inline), or an already-running daemon does and this
@@ -394,6 +314,12 @@ class Engine:
     def close(self) -> None:
         if self.lock is not None:
             self.lock.release()
+
+    def __enter__(self) -> Engine:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     async def settle(
         self,

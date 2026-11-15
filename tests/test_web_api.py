@@ -285,6 +285,36 @@ def test_a_picture_comes_along(web):
     assert web.app.media.read(media_id) is not None
 
 
+@pytest.mark.parametrize(
+    ("images", "voice", "status"),
+    [
+        ([(PNG, "image/png"), (JPEG, "image/jpeg")], None, 200),
+        ([(b"<html>not an image</html>", "image/png")], None, 422),  # refused after being read
+        ([(PNG, "image/png")] * (MAX_IMAGES + 1), None, 422),
+        ([], (b"\x00" * 2_000, "audio/webm"), 200),
+    ],
+)
+def test_every_uploaded_file_is_closed_whatever_became_of_the_message(
+    web, monkeypatch, images, voice, status
+):
+    from starlette.datastructures import UploadFile
+
+    opened: list[UploadFile] = []
+    original = UploadFile.__init__
+
+    def counting(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        opened.append(self)
+
+    monkeypatch.setattr(UploadFile, "__init__", counting)
+
+    response = web.send("here", images=images, voice=voice, voice_seconds=3.0 if voice else None)
+
+    assert response.status_code == status
+    assert opened, "the request carried no files"
+    assert all(upload.file.closed for upload in opened), "an uploaded file was left open"
+
+
 def test_a_file_that_is_not_a_picture_is_refused_whatever_it_claims_to_be(web):
     response = web.send("look", images=[(b"<html>not an image</html>", "image/png")])
     assert response.status_code == 422 and "not a picture" in response.json()["error"]

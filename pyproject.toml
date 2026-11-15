@@ -66,6 +66,9 @@ testpaths = ["tests"]
 addopts = "-ra"
 filterwarnings = [
     "ignore::DeprecationWarning:websockets.*",
+    # Something opened and never closed (a database, a file, a socket) is a bug, not noise.
+    "error::ResourceWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
 ]
 
 [tool.ruff]

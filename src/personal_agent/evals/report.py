@@ -11,11 +11,13 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from personal_agent.evals.runner import CheckedScenario, LiveRun, TrialResult
 from personal_agent.paths import Paths
 from personal_agent.security.redact import known_secret_values, redact
+
+if TYPE_CHECKING:
+    from personal_agent.evals.runner import CheckedScenario, LiveRun, TrialResult
 
 SHOWN_CHARS = 400
 """How much of a message a report shows; the full text is in the throwaway home that is deleted."""

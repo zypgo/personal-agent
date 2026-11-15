@@ -22,10 +22,10 @@ from personal_agent import launchd
 from personal_agent.commands import service as service_commands
 from personal_agent.commands.service import follow
 from personal_agent.config import DEFAULT_CONFIG_TOML
-from personal_agent.daemon import HEARTBEAT_KEY, LOCK_NAME, EngineLock
 from personal_agent.db import open_database
 from personal_agent.launchd import ServiceManager
 from personal_agent.paths import Paths
+from personal_agent.presence import HEARTBEAT_KEY, LOCK_NAME, EngineLock
 from test_launchd import RUNNING, WAITING, FakeLaunchctl
 
 UID = 501
@@ -273,7 +273,7 @@ def test_launchd_refusing_the_job_is_reported_and_exits_with_an_error(service):
 def test_a_home_that_was_never_set_up_says_to_run_init(tmp_path, monkeypatch):
     monkeypatch.setenv("PA_HOME", str(tmp_path / "never-created"))
     result = invoke("service", "install")
-    assert result.exit_code == 1 and "pa init" in flat(result.output)
+    assert result.exit_code == 2 and "pa init" in flat(result.output)
     assert not (tmp_path / "never-created").exists()
 
 

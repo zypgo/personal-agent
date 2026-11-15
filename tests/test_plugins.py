@@ -271,14 +271,9 @@ async def test_a_deny_rule_hides_a_plugin_tool_from_the_model(make_app):
 
 # ---- pa plugins and pa doctor ----------------------------------------------------------------------------
 @pytest.fixture
-def wire(make_app, monkeypatch):
-    from personal_agent import cli
-
+def wire(make_app, use_app):
     def go(config: Config, *entry_points):
-        app = make_app(config=config, plugin_entry_points=list(entry_points))
-        monkeypatch.setattr(app, "close", lambda: None)
-        monkeypatch.setattr(cli, "_build", lambda: app)
-        return app
+        return use_app(make_app(config=config, plugin_entry_points=list(entry_points)))
 
     return go
 

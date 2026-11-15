@@ -9,13 +9,8 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from helpers import owner_message
 from personal_agent import daemon as daemon_module
 from personal_agent.config import Config, PolicyConfig, RuntimeConfig
-from personal_agent.daemon import (
-    LOCK_NAME,
-    AlreadyRunning,
-    Daemon,
-    Engine,
-    EngineLock,
-)
+from personal_agent.daemon import Daemon, Engine
+from personal_agent.presence import HEARTBEAT_KEY, LOCK_NAME, AlreadyRunning, EngineLock
 from test_dispatcher import FakeChannel
 from tooling import Spy, install
 
@@ -221,7 +216,7 @@ def _fast_sleep(real):
 async def test_the_heartbeat_tells_other_processes_the_daemon_is_alive(make_app):
     app = make_app(ScriptedModel([]), config=cfg())
     async with running(app):
-        beat = app.db.kv_get(daemon_module.HEARTBEAT_KEY)
+        beat = app.db.kv_get(HEARTBEAT_KEY)
     assert beat is not None and beat.split()[1] == str(app.clock.now())
 
 

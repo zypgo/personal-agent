@@ -10,10 +10,10 @@ import pytest
 from personal_agent.channels.pairing import PairingStore
 from personal_agent.channels.web.auth import WebAuth
 from personal_agent.clock import ManualClock
-from personal_agent.daemon import LOCK_NAME, EngineLock
 from personal_agent.db import open_database
 from personal_agent.doctor import capability_checks
 from personal_agent.paths import Paths
+from personal_agent.presence import LOCK_NAME, EngineLock
 
 
 @pytest.fixture(autouse=True)

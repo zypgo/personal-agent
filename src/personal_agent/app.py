@@ -149,6 +149,12 @@ class App:
     def close(self) -> None:
         self.db.close()
 
+    def __enter__(self) -> App:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
 
 def build_app(
     *,

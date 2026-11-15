@@ -150,6 +150,11 @@ class ToolInfo:
     withheld: str = ""
     """Why a tool that passed the filters is still not offered."""
 
+    @property
+    def reads_only(self) -> bool:
+        """It only looks at things, so it runs without asking."""
+        return self.category is Category.READ
+
 
 @dataclass
 class ServerState:

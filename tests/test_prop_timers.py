@@ -5,7 +5,9 @@ as a schedule may end in anything but a message that says what is wrong with it.
 
 from __future__ import annotations
 
+import contextlib
 import itertools
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -177,9 +179,11 @@ def test_a_schedule_that_runs_all_day_keeps_its_pace_through_a_change_of_clocks(
 
 
 # ---- anything typed as a schedule ----------------------------------------------------------------------
-def timers() -> Timers:
-    db = open_database(":memory:")
-    return Timers(db, Inbox(db), SchedulerConfig(), clock=ManualClock())
+@contextlib.contextmanager
+def timers() -> Iterator[Timers]:
+    """A scheduler on a database of its own, gone again when the block ends."""
+    with contextlib.closing(open_database(":memory:")) as db:
+        yield Timers(db, Inbox(db), SchedulerConfig(), clock=ManualClock())
 
 
 JUNK_CRON = st.one_of(
@@ -234,24 +238,25 @@ JUNK_ZONE = st.one_of(
 @settings(max_examples=400, deadline=None)
 @given(JUNK_CRON, JUNK_ZONE)
 def test_nothing_typed_as_a_schedule_fails_with_anything_but_a_message(cron, zone):
-    t = timers()
-    why = t.check_schedule("junk", "p", cron, zone)  # asking never raises either
-    try:
-        timer = t.add_schedule(name="junk", prompt="p", cron=cron, tz=zone)
-    except TimerError as problem:
-        assert str(problem) == why
-        assert len(str(problem)) < 400, "the message repeats what was typed in full"
-    else:
-        assert why is None
-        assert timer.due_at > t.clock.now()
+    with timers() as t:
+        why = t.check_schedule("junk", "p", cron, zone)  # asking never raises either
+        try:
+            timer = t.add_schedule(name="junk", prompt="p", cron=cron, tz=zone)
+        except TimerError as problem:
+            assert str(problem) == why
+            assert len(str(problem)) < 400, "the message repeats what was typed in full"
+        else:
+            assert why is None
+            assert timer.due_at > t.clock.now()
 
 
 @pytest.mark.parametrize("cron", ["0 0 31 2 *", "0 0 30 2 *", "0 0 31 4,6,9,11 *"])
 def test_a_schedule_no_date_satisfies_is_refused_in_words(cron):
-    with pytest.raises(TimerError, match="never fire"):
-        timers().add_schedule(name="never", prompt="p", cron=cron, tz="UTC")
+    with timers() as t, pytest.raises(TimerError, match="never fire"):
+        t.add_schedule(name="never", prompt="p", cron=cron, tz="UTC")
 
 
 @pytest.mark.parametrize("cron", ["0 0 1,31 2 *", "0 0 29 2 *", "0 0 L * *", "0 0 31 * *"])
 def test_a_schedule_some_dates_satisfy_is_accepted_even_if_it_rarely_comes(cron):
-    assert timers().add_schedule(name="rare", prompt="p", cron=cron, tz="UTC").due_at > 0
+    with timers() as t:
+        assert t.add_schedule(name="rare", prompt="p", cron=cron, tz="UTC").due_at > 0

@@ -447,6 +447,11 @@ class WebConfig(_Section):
                 raise ValueError(f"{name!r} is not a host name (no scheme, no port)")
         return [name.lower() for name in value]
 
+    @property
+    def address(self) -> str:
+        """Where to open the page: the public address if there is one, else this computer."""
+        return self.public_url or f"http://127.0.0.1:{self.port}"
+
 
 WEBHOOK_SCHEMES = ("github", "gitlab", "standard", "generic")
 _ROUTE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")

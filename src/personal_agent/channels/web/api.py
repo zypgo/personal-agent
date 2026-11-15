@@ -73,6 +73,16 @@ class Asset:
     etag: str
 
 
+@dataclass(frozen=True)
+class Sent:
+    """A message as the page's form carried it."""
+
+    text: str
+    client_id: str
+    images: list[Upload]
+    voice: Upload | None
+
+
 def load_assets(
     directory: Path = STATIC_DIR, *, agent: str = "Agent"
 ) -> tuple[dict[str, Asset], str]:
@@ -281,38 +291,49 @@ class WebApi:
         more = len(turns) > limit
         return self._json({"turns": [self.turn_json(t) for t in turns[-limit:]], "more": more})
 
+    async def _read_message(self, request: Request) -> Sent:
+        """What the page's form holds, read in full and closed again.
+
+        Uploads arrive as temporary files; leaving the form open would keep them (and any disk
+        they spilled onto) until the garbage collector got round to them.
+        """
+        async with request.form(max_files=MAX_IMAGES + 2, max_fields=12) as form:
+
+            def text_field(name: str) -> str:
+                value = form.get(name)
+                return value if isinstance(value, str) else ""
+
+            async def upload(item: Any) -> Upload | None:
+                if not hasattr(item, "read"):
+                    return None
+                return Upload(
+                    await item.read(), mime=item.content_type or "", name=item.filename or ""
+                )
+
+            images = [u for u in [await upload(i) for i in form.getlist("image")] if u is not None]
+            voice = await upload(form.get("voice")) if form.get("voice") is not None else None
+            try:
+                seconds = float(text_field("voice_seconds")) if voice is not None else None
+            except ValueError:
+                seconds = None
+            if voice is not None and seconds and seconds > 0:
+                voice = Upload(voice.data, mime=voice.mime, name=voice.name, duration_s=seconds)
+            client_id = text_field("client_id")
+            if not _CLIENT_ID.fullmatch(client_id):
+                client_id = uuid.uuid4().hex
+            return Sent(text_field("text"), client_id, images, voice)
+
     async def messages(self, request: Request) -> Response:
         self._need(request)  # before the body is read: a stranger's upload is never parsed
         if not request.headers.get("content-type", "").startswith("multipart/form-data"):
             raise HTTPException(415, "Send the message as a form.")
-        form = await request.form(max_files=MAX_IMAGES + 2, max_fields=12)
-
-        def text_field(name: str) -> str:
-            value = form.get(name)
-            return value if isinstance(value, str) else ""
-
-        async def upload(item: Any) -> Upload | None:
-            if not hasattr(item, "read"):
-                return None
-            return Upload(await item.read(), mime=item.content_type or "", name=item.filename or "")
-
-        images = [u for u in [await upload(i) for i in form.getlist("image")] if u is not None]
-        voice = await upload(form.get("voice")) if form.get("voice") is not None else None
-        try:
-            seconds = float(text_field("voice_seconds")) if voice is not None else None
-        except ValueError:
-            seconds = None
-        if voice is not None and seconds and seconds > 0:
-            voice = Upload(voice.data, mime=voice.mime, name=voice.name, duration_s=seconds)
-        client_id = text_field("client_id")
-        if not _CLIENT_ID.fullmatch(client_id):
-            client_id = uuid.uuid4().hex
+        sent = await self._read_message(request)
         accepted = await self.ingress.owner_message(
             channel="web",
-            text=text_field("text"),
-            images=images,
-            voice=voice,
-            external_id=f"web:{client_id}",
+            text=sent.text,
+            images=sent.images,
+            voice=sent.voice,
+            external_id=f"web:{sent.client_id}",
         )
         if accepted.status == "rejected":
             return self._json({"status": "rejected", "error": accepted.reply}, 422)

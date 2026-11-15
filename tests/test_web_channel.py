@@ -13,7 +13,7 @@ import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
 
 from personal_agent.channels.web import api
-from personal_agent.channels.web.channel import WebChannel, base_url
+from personal_agent.channels.web.channel import WebChannel
 from personal_agent.config import Config, RuntimeConfig, WebConfig
 from personal_agent.core.approvals import PendingCall
 from test_daemon import eventually, running
@@ -427,11 +427,11 @@ async def test_the_server_refuses_what_a_hostile_page_would_send(make_app):
 
 async def test_the_address_to_open_is_the_public_one_when_there_is_one(make_app):
     plain = build(make_app)
-    assert base_url(plain) == "http://127.0.0.1:8765"
+    assert plain.config.web.address == "http://127.0.0.1:8765"
     public = make_app(
         config=Config(web=WebConfig(enabled=True, public_url="https://mac.tail1234.ts.net"))
     )
-    assert base_url(public) == "https://mac.tail1234.ts.net"
+    assert public.config.web.address == "https://mac.tail1234.ts.net"
 
 
 async def test_a_taken_port_is_reported_and_does_not_stop_the_other_channels(make_app, caplog):

@@ -7,10 +7,10 @@ import os
 from agents.testing import ScriptedModel, assistant_message, function_call
 
 from helpers import invoke
-from personal_agent import cli
+from personal_agent.commands import conversation
 from personal_agent.config import BudgetConfig, Config, PolicyConfig
 from personal_agent.core.approvals import DENIED_MESSAGE
-from personal_agent.daemon import HEARTBEAT_KEY, LOCK_NAME, EngineLock, daemon_state
+from personal_agent.presence import HEARTBEAT_KEY, LOCK_NAME, EngineLock, daemon_state
 from test_budget import spend
 from tooling import Spy, install
 
@@ -107,7 +107,7 @@ def test_chat_can_approve_with_slash_commands(wired, capsys):
     spy = install(app, Spy())
     lines = iter(["push my branch", "/approvals", "/approve", "/exit"])
 
-    cli.chat_loop(app, "main", read_line=lambda _prompt: next(lines))
+    conversation.chat_loop(app, "main", read_line=lambda _prompt: next(lines))
 
     output = capsys.readouterr().out
     assert "git push origin main" in output  # the request, then the table
@@ -121,7 +121,7 @@ def test_chat_deny_takes_a_reason_after_the_number(wired, capsys):
     spy = install(app, Spy())
     lines = iter(["push", "/deny 1 not today, I am travelling", "/exit"])
 
-    cli.chat_loop(app, "main", read_line=lambda _prompt: next(lines))
+    conversation.chat_loop(app, "main", read_line=lambda _prompt: next(lines))
 
     assert spy.ran() == []
     assert "not today, I am travelling" in str(model.calls[1].input)
@@ -132,7 +132,7 @@ def test_chat_reminds_about_requests_that_are_still_waiting(wired, capsys):
     app, _, _ = suspended(wired, [[push()]])
     capsys.readouterr()
 
-    cli.chat_loop(app, "main", read_line=lambda _prompt: "/exit")
+    conversation.chat_loop(app, "main", read_line=lambda _prompt: "/exit")
 
     assert "1 action(s) are waiting" in capsys.readouterr().out
 

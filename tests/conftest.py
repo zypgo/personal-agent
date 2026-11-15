@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import os
 
 import pytest
@@ -27,6 +28,22 @@ settings.register_profile(
     "quick", max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
 )
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
+
+
+# A database, file or socket nobody closed is reported (and, see `filterwarnings` in pyproject.toml,
+# fails a test) when the garbage collector finds it, which can be many tests after the one that
+# forgot. So every test ends with a collection, which makes the one that forgot the one that fails.
+# Collecting the whole heap each time would triple the run; freezing what is alive between tests
+# keeps each collection to what that test itself made.
+def pytest_sessionstart(session: pytest.Session) -> None:
+    gc.collect()
+    gc.freeze()
+
+
+@pytest.hookimpl(trylast=True)  # after the fixtures have been torn down
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
+    gc.collect()
+    gc.freeze()
 
 
 @pytest.fixture(autouse=True)
@@ -104,15 +121,34 @@ def make_app(tmp_path, clock, monkeypatch):
 
 
 @pytest.fixture
-def wired(make_app, monkeypatch):
-    """Run CLI commands against the test app (and keep it open between commands)."""
-    from personal_agent import cli
+def use_app(make_app, monkeypatch):
+    """`use_app(app)`: from now on `pa` commands (see `helpers.invoke`) run against `app`, which
+    stays open between commands: a command closes the app it opened, and the test goes on using it.
+
+    The app's `close` is switched off only until this fixture ends, which is before `make_app`
+    closes it for real; patching it with `monkeypatch` would last until the end of the whole test
+    and leave the database connection open."""
+    from personal_agent.commands import common
+
+    borrowed: list[App] = []
+
+    def use(app: App) -> App:
+        app.close = lambda: None  # type: ignore[method-assign]
+        borrowed.append(app)
+        monkeypatch.setattr(common, "build", lambda: app)
+        return app
+
+    yield use
+    for app in borrowed:
+        del app.close
+
+
+@pytest.fixture
+def wired(make_app, use_app):
+    """Run CLI commands against a test app wired to a scripted model."""
 
     def wire(model: ScriptedModel | None = None, *, config: Config | None = None) -> App:
-        app = make_app(model, config=config)
-        monkeypatch.setattr(app, "close", lambda: None)
-        monkeypatch.setattr(cli, "_build", lambda: app)
-        return app
+        return use_app(make_app(model, config=config))
 
     return wire
 

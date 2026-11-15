@@ -28,12 +28,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def base_url(app: App) -> str:
-    """The address to open the page at: the public address if there is one, else this machine."""
-    cfg = app.config.web
-    return cfg.public_url or f"http://127.0.0.1:{cfg.port}"
-
-
 class WebChannel:
     name = "web"
 
@@ -71,7 +65,7 @@ class WebChannel:
                 secure=bool(cfg.public_url and cfg.public_url.startswith("https://")),
                 wake=daemon.wake,
             )
-            log.info("web page at %s (listening on %s:%s)", base_url(app), self.host, port)
+            log.info("web page at %s (listening on %s:%s)", app.config.web.address, self.host, port)
             await listener.serve(asgi)
         finally:
             listener.close()
