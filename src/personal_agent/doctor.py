@@ -1,6 +1,8 @@
 """`pa doctor`: find setup problems before they surface as confusing runtime failures.
 
-`static_checks` never calls the network and never creates anything. `live_checks` makes two
+`static_checks` never calls the network and never creates anything. `capability_checks` starts a
+trivial process to find out whether the sandbox really isolates (it creates the sandbox's scratch
+directories). `live_checks` makes two
 real model calls (a few cents) to prove the parts that cannot be unit-tested: the API key, the
 tool schemas, and replaying stored history (including encrypted reasoning) back to the API.
 """
@@ -8,9 +10,11 @@ tool schemas, and replaying stored history (including encrypted reasoning) back 
 from __future__ import annotations
 
 import os
+import socket
 import sqlite3
 import stat
 import sys
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -164,6 +168,169 @@ def static_checks(paths: Paths) -> list[Check]:
     else:
         add("preferences", "ok", str(paths.preferences_dir))
     return checks
+
+
+PROBE_HOST = "example.com"
+
+
+def _resolve_probe(name: str, timeout: float = 3.0) -> list[str]:
+    """The addresses DNS gives for `name` on this machine; empty if it cannot be resolved in time."""
+    found: list[str] = []
+
+    def work() -> None:
+        try:
+            found.extend(
+                sorted(
+                    {str(a[4][0]) for a in socket.getaddrinfo(name, 443, type=socket.SOCK_STREAM)}
+                )
+            )
+        except OSError:
+            pass
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    return list(found)
+
+
+def capability_checks(paths: Paths) -> list[Check]:
+    """What the agent will be able to do on this machine: sandbox, secrets for the web tools."""
+    from personal_agent.security.sandbox import SandboxProvider
+
+    try:
+        cfg = load_config(paths)
+    except ConfigError:
+        return []  # static_checks reports the broken config
+    checks: list[Check] = []
+
+    if not cfg.tools.shell:
+        checks.append(Check("shell", "ok", "switched off in config.toml"))
+    else:
+        sandbox, reason = SandboxProvider(paths, cfg.sandbox).resolve()
+        if sandbox is None:
+            checks.append(
+                Check(
+                    "shell sandbox",
+                    "warn",
+                    f"the shell tool is off: {reason}",
+                    "On macOS the built-in sandbox needs /usr/bin/sandbox-exec; elsewhere install "
+                    f"Docker and run `docker pull {cfg.sandbox.image}`.",
+                )
+            )
+        elif sandbox.name == "none":
+            checks.append(
+                Check(
+                    "shell sandbox",
+                    "warn",
+                    sandbox.describe(),
+                    "Remove backend = none to isolate it.",
+                )
+            )
+        else:
+            checks.append(Check("shell sandbox", "ok", sandbox.describe()))
+
+    checks.extend(_web_checks(cfg))
+
+    for name, secret in cfg.secrets.items():
+        hosts = ", ".join(secret.hosts)
+        if os.environ.get(secret.env):
+            checks.append(
+                Check(f"secret {name}", "ok", f"{secret.env} is set; sent only to {hosts}")
+            )
+        else:
+            checks.append(
+                Check(
+                    f"secret {name}",
+                    "warn",
+                    f"{secret.env} is not set, so {{{{secret:{name}}}}} will not work",
+                    f"Put {secret.env}=... in {paths.env_file}",
+                )
+            )
+    return checks
+
+
+def _web_checks(cfg) -> list[Check]:
+    import ipaddress
+
+    from personal_agent.security.ssrf import FAKE_IP_NETWORK, NetPolicy
+
+    tools = [
+        name
+        for name, on in (
+            ("web_fetch", cfg.tools.web_fetch),
+            ("http_request", cfg.tools.http_request),
+        )
+        if on
+    ]
+    if cfg.tools.web_search == "off":
+        search = "off"
+    elif cfg.model.api != "responses":
+        search = "unavailable (needs model.api = responses)"
+    else:
+        search = cfg.tools.web_search
+    checks = [Check("web", "ok", f"tools: {', '.join(tools) or 'none'}; hosted search: {search}")]
+
+    if tools:
+        checks.extend(_fake_ip_check(cfg, NetPolicy, FAKE_IP_NETWORK))
+
+    broad: list[str] = []
+    for entry in cfg.net.allow_private:
+        try:
+            network = ipaddress.ip_network(entry.strip(), strict=False)
+        except ValueError:
+            continue  # a host name
+        if network.num_addresses > 65_536:
+            broad.append(entry)
+    if broad:
+        checks.append(
+            Check(
+                "private network access",
+                "warn",
+                f"net.allow_private opens very large ranges ({', '.join(broad)})",
+                "List only the hosts or small networks the agent needs, such as 192.168.1.0/24.",
+            )
+        )
+    elif cfg.net.allow_private:
+        checks.append(
+            Check("private network access", "ok", f"allowed: {', '.join(cfg.net.allow_private)}")
+        )
+    return checks
+
+
+def _fake_ip_check(cfg, policy_type, fake_net) -> list[Check]:
+    """A VPN/proxy in fake-IP mode makes every public name resolve to 198.18.x.x, which the network
+    gate refuses by default: all web tools would fail. Say so, with the fix and its price."""
+    import ipaddress
+
+    fake = []
+    for text in _resolve_probe(PROBE_HOST):
+        try:
+            if ipaddress.ip_address(text) in fake_net:
+                fake.append(text)
+        except ValueError:
+            continue
+    if not fake:
+        return []
+    policy = policy_type.from_config(cfg.net)
+    if all(policy.check(PROBE_HOST, ipaddress.ip_address(a)) is None for a in fake):
+        return [
+            Check(
+                "proxy fake-IP DNS",
+                "ok",
+                f"a VPN/proxy tool answers DNS with {fake_net} addresses; [net] allow_private allows it",
+            )
+        ]
+    return [
+        Check(
+            "proxy fake-IP DNS",
+            "warn",
+            f"{PROBE_HOST} resolves to {fake[0]}: a VPN/proxy tool is answering DNS in fake-IP mode, "
+            "so web_fetch and http_request refuse every site",
+            f'Add "{fake_net}" to [net] allow_private in config.toml (the proxy then decides where '
+            "connections really go and the agent cannot check the destination itself), or turn "
+            "fake-IP mode off.",
+        )
+    ]
 
 
 LIVE_PROMPTS = (

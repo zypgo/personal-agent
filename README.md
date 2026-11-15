@@ -17,7 +17,8 @@
 | 0 | 调研（Anthropic 指南 + 9 个同类开源项目）、架构设计、脚手架、origin 仓库 | ✅ |
 | 1 | 内核：SQLite 收件箱 / 会话日志 / 发件箱 / 记忆 + Harness + CLI 对话 | ✅ |
 | 2 | 常驻循环：worker / scheduler / dispatcher、策略引擎、延迟审批、审计、预算、`pa serve` | ✅ |
-| 3 | 可插拔：MCP、Skills、沙箱、密钥代理、内置工具 | 🚧 |
+| 3a | 双手与出站：沙箱 shell（seatbelt）、硬性底线、文件工具、SSRF 安全的 `web_fetch` / `http_request`、托管 `web_search`、密钥代理、"地址会带走数据"的出站控制 | ✅ |
+| 3b | 可插拔：MCP、Agent Skills、插件注册表 | 🚧 |
 | 4 | 渠道与多模态：Web PWA（手机可用）、Telegram、Webhook、语音/图像 | 🚧 |
 | 5 | 记忆智能：做梦、检索、压缩、子代理 | 🚧 |
 | 6 | 评测、launchd 常驻服务、加固 | 🚧 |

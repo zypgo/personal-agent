@@ -10,7 +10,7 @@ from agents.testing import ModelStep, ScriptedModel, assistant_message, function
 from helpers import owner_message, usage, webhook
 from personal_agent.config import Config, PolicyConfig, RuntimeConfig
 from personal_agent.tools.base import FULL
-from tooling import Spy, drain, install
+from tooling import FILE_TOOLS, WEB_TOOLS, Spy, drain, install
 
 GIT_STATUS = [function_call("shell", {"command": "git status --short"}, call_id="c1")]
 GIT_PUSH = [function_call("shell", {"command": "git push"}, call_id="c1")]
@@ -77,7 +77,9 @@ async def test_a_tool_denied_on_every_call_is_not_even_offered(make_app):
     app = make_app(model, config=config(deny=["shell", "notes:*"]))
     install(app, Spy())
     await ask(app)
-    assert tool_names(model) == {"memory", "send_message", "schedule", "fetch", "leaky"}
+    assert tool_names(model) == (
+        {"memory", "send_message", "schedule", "fetch", "leaky"} | FILE_TOOLS | WEB_TOOLS
+    )
 
 
 async def test_read_only_mode_hides_everything_that_changes_the_world(make_app):
@@ -85,8 +87,12 @@ async def test_read_only_mode_hides_everything_that_changes_the_world(make_app):
     app = make_app(model, config=config(mode="read_only"))
     install(app, Spy())
     await ask(app)
-    # `schedule` stays: a one-off reminder is harmless, recurring jobs are refused per call.
-    assert tool_names(model) == {"memory", "send_message", "schedule", "fetch", "leaky"}
+    # `schedule` and the web tools stay: a one-off reminder and a plain GET are harmless, the
+    # variants that change something are refused per call.
+    assert tool_names(model) == {
+        "memory", "send_message", "schedule", "fetch", "leaky", "list_files", "read_file",
+        "web_fetch", "http_request", "web_search",
+    }  # fmt: skip
 
 
 async def test_in_read_only_mode_a_reminder_works_but_a_recurring_job_is_refused(make_app):

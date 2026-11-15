@@ -190,6 +190,7 @@ class Daemon:
             report = self.app.recover()
             if any(report.values()):
                 log.info("recovered after an unclean stop: %s", report)
+            await self.app.warm_up()
             self.stats.started_at = self.app.clock.now()
             self._beat()
             tasks = [
@@ -389,6 +390,7 @@ class Engine:
         messages) as time passes. Events waiting to retry later are not waited for.
         """
         if self.inline:
+            await self.app.warm_up()
             worker = Worker(self.app)
             results: list[WorkResult] = []
             while (

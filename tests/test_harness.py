@@ -205,7 +205,18 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
     app.inbox.add(owner_message("hello"))
     await Worker(app).run_once()
 
-    assert tool_names(model) == ["memory", "schedule", "send_message"]
+    assert tool_names(model) == [
+        "edit_file",
+        "http_request",
+        "list_files",
+        "memory",
+        "read_file",
+        "schedule",
+        "send_message",
+        "web_fetch",
+        "web_search",
+        "write_file",
+    ]  # no `shell`: the test app has no sandbox, so none is offered
 
 
 # ---- background runs --------------------------------------------------------------------

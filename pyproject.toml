@@ -9,7 +9,10 @@ dependencies = [
     # Engine. 0.x API still moves: pin the minor, upgrade only through the eval suite.
     "openai-agents>=0.24,<0.25",
     "openai>=3,<4",
-    "httpx>=0.28",
+    # The egress gate (security/ssrf.py) plugs into httpcore's network-backend interface and
+    # rebuilds httpx's connection pool, so both are pinned: an upgrade must pass tests/test_ssrf.py.
+    "httpx>=0.28.1,<0.29",
+    "httpcore>=1.0.9,<1.1",
     # Web channel (starlette is already a transitive dependency of the SDK).
     "starlette>=1.3.1",
     "uvicorn>=0.30",
@@ -72,4 +75,4 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S105", "S106", "S108", "B011"]
+"tests/**" = ["S104", "S105", "S106", "S108", "B011"]  # S104: addresses under test, never binds

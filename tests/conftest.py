@@ -8,6 +8,7 @@ from personal_agent.clock import ManualClock
 from personal_agent.config import Config
 from personal_agent.db import Database, open_database
 from personal_agent.paths import Paths
+from personal_agent.security.sandbox import SandboxProvider
 
 
 @pytest.fixture
@@ -35,13 +36,20 @@ def make_app(tmp_path, clock, monkeypatch):
     monkeypatch.setenv("TZ", "UTC")
     created: list[App] = []
 
-    def make(model: ScriptedModel | None = None, *, config: Config | None = None) -> App:
+    def make(
+        model: ScriptedModel | None = None,
+        *,
+        config: Config | None = None,
+        sandbox: SandboxProvider | None = None,
+    ) -> App:
         scripted = model if model is not None else ScriptedModel([])
         app = build_app(
             home=tmp_path / "pa-home",
             clock=clock,
             config=config,
             model_factory=lambda name: scripted,
+            # Hermetic by default: no probing of the machine, so no shell unless a test wants one.
+            sandbox=sandbox or SandboxProvider.fixed(None, "tests run without a sandbox"),
             read_env=False,
         )
         created.append(app)
@@ -73,3 +81,29 @@ def home(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     return tmp_path / "fresh-home"
+
+
+@pytest.fixture
+def site():
+    """A web server on 127.0.0.1 (see tests/webserver.py)."""
+    from webserver import Site
+
+    running = Site().start()
+    yield running
+    running.stop()
+
+
+@pytest.fixture
+def other_site():
+    """A second server, on another port, which counts as another site."""
+    from webserver import Site
+
+    running = Site().start()
+    yield running
+    running.stop()
+
+
+@pytest.fixture(autouse=True)
+def no_dns_probe(monkeypatch):
+    """`pa doctor` looks up a public name to detect proxy fake-IP DNS; tests never touch the network."""
+    monkeypatch.setattr("personal_agent.doctor._resolve_probe", lambda name, timeout=3.0: [])

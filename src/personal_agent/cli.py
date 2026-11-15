@@ -27,7 +27,7 @@ from personal_agent.core.dispatcher import Dispatcher
 from personal_agent.core.events import Kind, NewEvent
 from personal_agent.core.timers import TimerError
 from personal_agent.daemon import AlreadyRunning, Daemon, Engine, daemon_state
-from personal_agent.doctor import live_checks, static_checks
+from personal_agent.doctor import capability_checks, live_checks, static_checks
 from personal_agent.logs import setup_logging
 from personal_agent.memory.store import INSTRUCTIONS_PATH, PROFILE_PATH, PROPOSALS_PATH, Actor
 from personal_agent.paths import Paths
@@ -141,6 +141,7 @@ def doctor(
     paths = Paths.resolve()
     load_env(paths)
     checks = static_checks(paths)
+    checks += capability_checks(paths)  # says nothing if the config is broken (already reported)
     skipped_live = live and any(c.status == "fail" for c in checks)
     if live and not skipped_live:
         opened = _open()

@@ -43,6 +43,8 @@ from personal_agent.harness.runctx import Origin, RunContext
 from personal_agent.memory.store import PreferencesUnavailable
 from personal_agent.security.audit import safe_args
 from personal_agent.tools.guard import ToolGuard, parse_args, summarize
+from personal_agent.tools.urls import find_urls
+from personal_agent.tools.web import hosted_tools, record_hosted_search
 
 if TYPE_CHECKING:
     from personal_agent.app import App
@@ -89,6 +91,7 @@ class RunAccounting(RunHooks[RunContext]):
             getattr(getattr(usage, "output_tokens_details", None), "reasoning_tokens", 0) or 0
         )
         run_id = context.context.run_id
+        record_hosted_search(self.app, context.context, response)
         self.app.runs.add_usage(
             run_id,
             requests=1,
@@ -160,6 +163,16 @@ class Harness:
                 return event.payload["prompt"]
         return ""
 
+    @staticmethod
+    def owner_urls_for(batch: Batch) -> list[str]:
+        """Web addresses the owner wrote in this batch (messages, or a timer's prompt)."""
+        texts = [
+            e.text if e.kind == Kind.MESSAGE else str(e.payload.get("prompt") or "")
+            for e in batch.events
+            if e.trust is Trust.OWNER and e.kind in (Kind.MESSAGE, Kind.TIMER)
+        ]
+        return find_urls("\n".join(t for t in texts if t))
+
     # ---- entry point -------------------------------------------------------------------
     async def run(self, batch: Batch) -> RunOutcome:
         """Handle one batch of events. Returns an outcome for every ordinary ending (including a
@@ -210,6 +223,7 @@ class Harness:
             tainted=not batch.trusted,
             owner_request=self.owner_request_for(batch),
         )
+        ctx.know_urls(self.owner_urls_for(batch))
         return await self._settle(ctx, self._execute(batch, ctx, model_name))
 
     async def _settle(self, ctx: RunContext, work, *, resuming: bool = False) -> RunOutcome:
@@ -248,15 +262,19 @@ class Harness:
 
     def _agent(self, ctx: RunContext, instructions: str, model) -> Agent:
         app, cfg = self.app, self.app.config
+        hosted = hosted_tools(app, ctx.profile)
         return Agent(
             name=cfg.agent.name,
             instructions=instructions,
             model=model,
-            model_settings=model_settings(cfg.model),
+            model_settings=model_settings(cfg.model, hosted_search=bool(hosted)),
             tools=[
-                self.guard.wrap(t)
-                for t in app.tools.for_profile(ctx.profile)
-                if self.guard.offered(t, ctx.profile)
+                *(
+                    self.guard.wrap(t)
+                    for t in app.tools.for_profile(ctx.profile)
+                    if self.guard.offered(t, ctx.profile)
+                ),
+                *hosted,
             ],
         )
 

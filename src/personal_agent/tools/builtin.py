@@ -1,4 +1,4 @@
-"""Built-in tools: `memory`, `send_message` and `schedule` (more arrive with later iterations)."""
+"""Built-in tools: `memory`, `send_message`, `schedule`, the file tools, `shell` and the web tools."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from agents import RunContextWrapper, function_tool
 from pydantic import BaseModel
 
 from personal_agent.clock import format_local
+from personal_agent.config import Config
 from personal_agent.core.events import Trust
 from personal_agent.core.timers import Timer, TimerError
 from personal_agent.harness.runctx import RunContext
@@ -278,7 +279,7 @@ async def schedule_tool(
     return f"Scheduled. {_describe(rc, timer)}{note}"
 
 
-def _schedule_category(args: dict[str, Any]) -> Category:
+def _schedule_category(_rc: RunContext, args: dict[str, Any]) -> Category:
     """Listing and cancelling are harmless, a one-off reminder is light, a recurring job is a standing
     authorization and is treated like any other action that changes the world."""
     if args.get("action") in ("list", "cancel"):
@@ -286,7 +287,13 @@ def _schedule_category(args: dict[str, Any]) -> Category:
     return Category.SCHEDULE if args.get("cron") else Category.REMIND
 
 
-def register_builtin(registry: ToolRegistry) -> None:
+def register_builtin(registry: ToolRegistry, config: Config | None = None) -> None:
+    """The tools every agent has. `config.tools` switches the optional families on and off."""
+    from personal_agent.tools.files import register_files
+    from personal_agent.tools.shell import register_shell
+    from personal_agent.tools.web import register_web
+
+    switches = (config or Config()).tools
     registry.register(
         ToolDef(
             name="memory",
@@ -321,3 +328,9 @@ def register_builtin(registry: ToolRegistry) -> None:
             ),
         )
     )
+    if switches.files:
+        register_files(registry)
+    if switches.shell:
+        register_shell(registry)
+    if switches.web_fetch or switches.http_request:
+        register_web(registry, config or Config())

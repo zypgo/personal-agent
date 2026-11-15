@@ -50,17 +50,22 @@ class OpenAIModels:
         return OpenAIResponsesModel(model=name, openai_client=self.client)
 
 
-def model_settings(cfg: ModelConfig) -> ModelSettings:
+def model_settings(cfg: ModelConfig, *, hosted_search: bool = False) -> ModelSettings:
+    """`hosted_search`: also return the sources of OpenAI's web searches, so the addresses the
+    model was shown can be told apart from ones it made up (see `tools/urls.py`)."""
     reasoning = Reasoning(effort=cfg.reasoning_effort)
     if cfg.reasoning_context is not None:
         reasoning = Reasoning(effort=cfg.reasoning_effort, context=cfg.reasoning_context)
     stateless_responses = cfg.api == "responses" and not cfg.store
+    include = ["reasoning.encrypted_content"] if stateless_responses else []
+    if hosted_search:
+        include.append("web_search_call.action.sources")
     return ModelSettings(
         reasoning=reasoning,
         verbosity=cfg.verbosity,
         store=cfg.store if cfg.api == "responses" else None,
         # Stateless mode: ask for encrypted reasoning so it can be replayed from our own log.
-        response_include=["reasoning.encrypted_content"] if stateless_responses else None,
+        response_include=include or None,
         timeout=cfg.timeout_s,
         retry=ModelRetrySettings(
             max_retries=cfg.max_retries,

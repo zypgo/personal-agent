@@ -65,7 +65,7 @@ class ToolGuard:
     # ---- what the model is offered -------------------------------------------------------
     def offered(self, tool: ToolDef, profile: str) -> bool:
         """Tools that policy would refuse on every call are not shown to the model at all."""
-        if profile not in tool.profiles:
+        if profile not in tool.profiles or tool.unavailable(self.app):
             return False
         return not self.app.policy.blocks_entirely(
             tool.name, tool.category, can_vary=bool(tool.category_for)
@@ -93,7 +93,7 @@ class ToolGuard:
     def _call(self, tool: ToolDef, args: dict[str, Any], rc: RunContext) -> ToolCall:
         return ToolCall(
             tool=tool.name,
-            category=tool.category_of(args),
+            category=tool.category_of(rc, args),
             detail=tool.detail_of(args),
             profile=rc.profile,
             tainted=rc.tainted,
@@ -110,7 +110,9 @@ class ToolGuard:
         app = self.app
         call = self._call(tool, args, rc)
         problem = tool.problem_with(rc, args)
-        if problem:
+        if floor := tool.floor_of(rc, args):
+            decision = Decision(Verdict.DENY, "floor", floor)
+        elif problem:
             # Not worth the owner's attention: it cannot work. The model is told what is wrong.
             decision = Decision(Verdict.DENY, "invalid", problem)
         else:
@@ -172,13 +174,15 @@ class ToolGuard:
             # resume this run, its effect is unknown: say so instead of doing it a second time.
             if app.audit.outcome_of(rc.run_id, call_id) not in (None, "pending"):
                 return INTERRUPTED_RESULT
-            # The owner said yes. Hard rules still win: a deny rule added since cannot be bypassed.
+            # The owner said yes. Hard rules still win: neither a safety floor nor a deny rule
+            # added since the question was asked can be bypassed.
             base = app.policy.evaluate(self._call(tool, args, rc))
-            decision = (
-                base
-                if base.verdict is Verdict.DENY
-                else Decision(Verdict.ALLOW, "approval", "approved by the owner")
-            )
+            if floor := tool.floor_of(rc, args):
+                decision = Decision(Verdict.DENY, "floor", floor)
+            elif base.verdict is Verdict.DENY:
+                decision = base
+            else:
+                decision = Decision(Verdict.ALLOW, "approval", "approved by the owner")
         else:
             decision = await self.decide(tool, args, rc, call_id)
 
@@ -194,7 +198,7 @@ class ToolGuard:
         started = time.monotonic()
         outcome = "ok"
         app.audit.set_outcome(rc.run_id, call_id, "running")  # durable marker: it may have started
-        limit = app.config.runtime.tool_timeout_s
+        limit = tool.timeout_of(app, args) or app.config.runtime.tool_timeout_s
         try:
             result = await asyncio.wait_for(original.on_invoke_tool(tool_context, raw_args), limit)
         except TimeoutError:

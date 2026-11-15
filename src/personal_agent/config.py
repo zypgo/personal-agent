@@ -6,7 +6,9 @@ Unknown keys are rejected so typos are noticed instead of silently ignored.
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import re
 import tomllib
 from typing import Literal
 
@@ -141,6 +143,74 @@ class SchedulerConfig(_Section):
     max_timers: int = Field(50, ge=1)
 
 
+class SandboxConfig(_Section):
+    backend: Literal["auto", "seatbelt", "docker", "none"] = "auto"
+    """Where shell commands run. `auto` picks seatbelt on macOS, else docker. If neither works the
+    shell tool is simply not offered (we never quietly run commands unprotected)."""
+    i_understand_no_sandbox: bool = False
+    """Required for `backend = "none"`: commands then run as you, with all your files and network."""
+    image: str = "python:3.13-slim"
+    """Docker image for the docker backend. We never pull it for you: `docker pull` it yourself."""
+    memory_mb: int = Field(512, ge=64)
+    default_timeout_s: float = Field(60.0, gt=0)
+    max_timeout_s: float = Field(600.0, gt=0)
+    extra_read: list[str] = []
+    """Extra directories commands may read (for example a toolchain in your home directory)."""
+    extra_write: list[str] = []
+    """Extra directories commands may write. Think twice before adding anything here."""
+
+
+class NetConfig(_Section):
+    allow_private: list[str] = []
+    """Hostnames, IPs or CIDRs that may be reached even though they are on your own network
+    (for example "homeassistant.local" or "192.168.1.0/24"). Everything private is blocked by
+    default; cloud metadata addresses stay blocked even if listed here."""
+    timeout_s: float = Field(20.0, gt=0)
+    max_response_bytes: int = Field(2_000_000, ge=10_000)
+    max_redirects: int = Field(5, ge=0, le=10)
+    user_agent: str = "personal-agent/0.1"
+
+    @field_validator("allow_private")
+    @classmethod
+    def _entries_are_hosts_ips_or_networks(cls, value: list[str]) -> list[str]:
+        for entry in value:
+            text = entry.strip()
+            try:
+                if "/" in text:
+                    ipaddress.ip_network(text, strict=False)
+                elif not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?", text):
+                    ipaddress.ip_address(text.split("%", 1)[0])  # an IPv6 literal
+            except ValueError as exc:
+                raise ValueError(
+                    f"{entry!r} is not a host name, an IP address or a network like 192.168.1.0/24"
+                ) from exc
+        return value
+
+
+class SecretConfig(_Section):
+    env: str
+    """Name of the environment variable (or `.env` entry) that holds the value."""
+    hosts: list[str] = Field(min_length=1)
+    """Hosts the value may be sent to: an exact name or `*.example.com`. The model writes
+    `{{secret:NAME}}` and never sees the value; a request to any other host is refused."""
+
+
+class ToolsConfig(_Section):
+    files: bool = True
+    """list_files, read_file, write_file, edit_file inside the workspace."""
+    file_max_bytes: int = Field(1_000_000, ge=1_000)
+    """Largest file the agent may write; reading pages through bigger files line by line."""
+    shell: bool = True
+    """Offered only when a sandbox works (see [sandbox])."""
+    web_fetch: bool = True
+    http_request: bool = True
+    web_search: Literal["auto", "cached", "off"] = "auto"
+    """OpenAI's hosted search, offered only on the OpenAI Responses API. `cached` searches OpenAI's
+    index without opening live pages, so a page cannot be made to receive anything from you."""
+    web_search_call_usd: float = Field(0.01, ge=0)
+    """Estimated cost of one hosted search, added to the run's spend (the API bills it separately)."""
+
+
 class Config(_Section):
     agent: AgentConfig = AgentConfig()
     model: ModelConfig = ModelConfig()
@@ -150,6 +220,21 @@ class Config(_Section):
     budget: BudgetConfig = BudgetConfig()
     notify: NotifyConfig = NotifyConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
+    sandbox: SandboxConfig = SandboxConfig()
+    net: NetConfig = NetConfig()
+    tools: ToolsConfig = ToolsConfig()
+    secrets: dict[str, SecretConfig] = {}
+
+    @field_validator("secrets")
+    @classmethod
+    def _secret_names_are_simple(cls, value: dict[str, SecretConfig]) -> dict[str, SecretConfig]:
+        for name in value:
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,40}", name):
+                raise ValueError(
+                    f"secret name {name!r} must be letters, digits and underscores, "
+                    "starting with a letter"
+                )
+        return value
 
 
 DEFAULT_CONFIG_TOML = """\
@@ -193,6 +278,9 @@ mode = "supervised"              # read_only | supervised | auto | autonomous
 # always_ask = ["shell:*"]       # patterns that ask in every mode except read_only
 # allow = ["shell:git status*"]  # patterns that are pre-approved
 # deny = ["shell:rm -rf *"]      # patterns that are never allowed
+# After a run has read outside content, new web addresses and other actions that change things ask
+# first. These patterns are the exceptions you trust (a pattern is tool or tool:detail):
+# allow_when_tainted = ["web_fetch:https://docs.python.org/*", "http_request:GET https://api.open-meteo.com/*"]
 approval_timeout_hours = 12      # an unanswered request counts as a refusal
 
 [budget]
@@ -208,6 +296,30 @@ max_per_hour = 6                 # non-urgent messages per channel per hour
 misfire_grace_s = 3600           # how late a recurring job may run after the computer slept
 min_interval_s = 300             # shortest allowed gap between firings of a recurring job
 max_timers = 50
+
+[sandbox]
+backend = "auto"                 # auto | seatbelt | docker | none  (shell is off if none works)
+# image = "python:3.13-slim"     # docker backend: `docker pull` it yourself
+# extra_read = ["~/.local/share/uv"]   # more directories commands may read (never write)
+
+[tools]
+files = true                     # list/read/write/edit files in the workspace
+shell = true                     # needs a working sandbox
+web_fetch = true                 # read web pages; never reaches your own network (see [net])
+http_request = true              # call APIs; anything but GET/HEAD asks first
+web_search = "auto"              # OpenAI hosted search; auto | cached | off
+
+# [net]
+# allow_private = ["homeassistant.local", "192.168.1.0/24"]   # your own network is blocked unless listed
+# timeout_s = 20
+# max_response_bytes = 2000000
+# max_redirects = 5
+
+# Secrets the agent can *use* but never *see*: it writes {{secret:github}} in an http_request,
+# and the value is filled in only for the listed hosts. The value itself stays in .env.
+# [secrets.github]
+# env = "GITHUB_TOKEN"
+# hosts = ["api.github.com"]
 """
 
 

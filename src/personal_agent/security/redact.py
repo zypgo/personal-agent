@@ -68,6 +68,13 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 _SECRET_ENV_NAME = re.compile(r"(?i)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)")
+_EXTRA_SECRET_ENV: set[str] = set()
+
+
+def register_secret_envs(names: Iterable[str]) -> None:
+    """Environment variables to scrub from output even though their names do not look secret
+    (the owner listed them under `[secrets]`). Process-wide: one process hosts one agent."""
+    _EXTRA_SECRET_ENV.update(names)
 
 
 @dataclass(frozen=True)
@@ -95,7 +102,9 @@ def known_secret_values(env: dict[str, str] | None = None, *, min_length: int = 
     """Values of environment variables that look like secrets (by name)."""
     source = os.environ if env is None else env
     values = {
-        v for k, v in source.items() if v and len(v) >= min_length and _SECRET_ENV_NAME.search(k)
+        v
+        for k, v in source.items()
+        if v and len(v) >= min_length and (_SECRET_ENV_NAME.search(k) or k in _EXTRA_SECRET_ENV)
     }
     return sorted(values, key=len, reverse=True)  # replace longer values first
 

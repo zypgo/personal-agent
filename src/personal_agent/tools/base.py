@@ -46,16 +46,28 @@ class ToolDef:
     source: str = "builtin"
     detail: Callable[[dict[str, Any]], str] | None = None
     """Short summary of one call for `tool:detail` rules and the audit log (a command, a host)."""
-    category_for: Callable[[dict[str, Any]], Category] | None = None
-    """Lets one tool change category by arguments (a reminder is lighter than a recurring job)."""
+    category_for: Callable[[Any, dict[str, Any]], Category] | None = None
+    """Called with (run context, arguments): lets one tool change category by what it is asked to
+    do (a reminder is lighter than a recurring job) or by what the run has already seen."""
     validate: Callable[[Any, dict[str, Any]], str | None] | None = None
     """Called with (run context, arguments) before policy: returns why the call cannot work, so
     the model hears about a mistake at once instead of the owner being asked to approve it."""
+    floor: Callable[[Any, dict[str, Any]], str | None] | None = None
+    """Called with (run context, arguments) before everything else: returns why this call must
+    never run. Unlike `validate` this is a safety rule: no mode, rule or approval overrides it,
+    and a check that crashes counts as a refusal."""
+    available: Callable[[Any], str | None] | None = None
+    """Called with the app: returns why the tool cannot be offered right now (no sandbox, say)."""
+    timeout: Callable[[Any, dict[str, Any]], float] | None = None
+    """Called with (app, arguments): how long one call may run, for tools that know better than
+    the global tool timeout (a shell command that was given ten minutes)."""
 
-    def category_of(self, args: dict[str, Any]) -> Category:
+    def category_of(self, ctx: Any, args: dict[str, Any]) -> Category:
+        """The category of this call. A category function that crashes gives the tool's own
+        (strictest) category, never a lighter one."""
         if self.category_for is not None:
             try:
-                return self.category_for(args)
+                return self.category_for(ctx, args)
             except Exception:
                 return self.category
         return self.category
@@ -69,6 +81,33 @@ class ToolDef:
             return self.validate(ctx, args)
         except Exception:
             return None
+
+    def floor_of(self, ctx: Any, args: dict[str, Any]) -> str | None:
+        """Why this call is forbidden outright. Fails closed: a broken check blocks the call."""
+        if self.floor is None:
+            return None
+        try:
+            return self.floor(ctx, args)
+        except Exception:
+            return "this call could not be checked against the safety rules"
+
+    def unavailable(self, app: Any) -> str | None:
+        """Why the tool cannot be offered right now. Fails closed: a broken check hides it."""
+        if self.available is None:
+            return None
+        try:
+            return self.available(app)
+        except Exception:
+            return "its availability could not be determined"
+
+    def timeout_of(self, app: Any, args: dict[str, Any]) -> float | None:
+        if self.timeout is None:
+            return None
+        try:
+            seconds = float(self.timeout(app, args))
+        except Exception:
+            return None
+        return seconds if seconds > 0 else None
 
     def detail_of(self, args: dict[str, Any]) -> str:
         if self.detail is None:
@@ -87,6 +126,9 @@ class ToolRegistry:
         if tool.name in self._tools:
             raise ValueError(f"tool {tool.name!r} is already registered")
         self._tools[tool.name] = tool
+
+    def unregister(self, name: str) -> bool:
+        return self._tools.pop(name, None) is not None
 
     def get(self, name: str) -> ToolDef | None:
         return self._tools.get(name)

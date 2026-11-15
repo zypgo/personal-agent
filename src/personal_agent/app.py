@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 from dataclasses import dataclass
 from datetime import tzinfo
 from pathlib import Path
@@ -21,8 +23,12 @@ from personal_agent.memory.store import MemoryStore
 from personal_agent.memory.templates import bootstrap
 from personal_agent.paths import Paths
 from personal_agent.security.audit import Audit
+from personal_agent.security.broker import SecretBroker
 from personal_agent.security.guardian import Guardian, LLMGuardian
 from personal_agent.security.policy import Policy
+from personal_agent.security.redact import register_secret_envs
+from personal_agent.security.sandbox import SandboxProvider
+from personal_agent.security.ssrf import NetPolicy
 from personal_agent.tools.base import ToolRegistry
 from personal_agent.tools.builtin import register_builtin
 
@@ -47,6 +53,9 @@ class App:
     policy: Policy
     budget: BudgetGuard
     guardian: Guardian
+    sandbox: SandboxProvider
+    net: NetPolicy
+    secrets: SecretBroker
 
     def recover(self) -> dict[str, int]:
         """Clean up after a previous process that died: orphaned runs and half-sent messages.
@@ -60,6 +69,12 @@ class App:
             "interrupted_tool_calls": interrupted,
             **{f"outbox_{k}": v for k, v in stuck.items()},
         }
+
+    async def warm_up(self) -> None:
+        """Do the slow, once-only setup now so it never blocks a conversation later (finding out
+        whether a sandbox works means starting a process or asking Docker)."""
+        if self.config.tools.shell:
+            await asyncio.to_thread(self.sandbox.resolve)
 
     def extend_budget(self, amount: float) -> tuple[float, int]:
         """Raise today's spending cap and let work that was paused for the budget continue.
@@ -79,6 +94,7 @@ def build_app(
     clock: Clock | None = None,
     model_factory: ModelFactory | None = None,
     db: Database | None = None,
+    sandbox: SandboxProvider | None = None,
     read_env: bool = True,
     create_templates: bool = True,
 ) -> App:
@@ -93,7 +109,8 @@ def build_app(
     if create_templates:
         bootstrap(memory)
     tools = ToolRegistry()
-    register_builtin(tools)
+    register_builtin(tools, cfg)
+    register_secret_envs(secret.env for secret in cfg.secrets.values())
     tz = get_tz(cfg.agent.timezone)
     inbox = Inbox(database, clock)
     runs = RunStore(database, clock)
@@ -125,4 +142,7 @@ def build_app(
         policy=Policy(cfg.policy),
         budget=BudgetGuard(runs, database, cfg.budget, clock=clock, tz=tz),
         guardian=LLMGuardian(factory, cfg.model),
+        sandbox=sandbox or SandboxProvider(paths, cfg.sandbox),
+        net=NetPolicy.from_config(cfg.net),
+        secrets=SecretBroker(cfg.secrets, os.environ),
     )

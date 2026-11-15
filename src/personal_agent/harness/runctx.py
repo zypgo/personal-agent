@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from personal_agent.core.events import Trust
+from personal_agent.tools.urls import keys_of, url_key
 
 if TYPE_CHECKING:
     from personal_agent.app import App
     from personal_agent.security.policy import Decision
 
 PROFILES = ("full", "scheduled", "untrusted", "dream")
+MAX_KNOWN_URLS = 4000
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,21 @@ class RunContext:
     """What the owner last asked (trusted text), shown to the reviewer in `auto` mode."""
     decisions: dict[str, Decision] = field(default_factory=dict)
     """Policy decisions by tool call id, so a call is judged once."""
+    known_urls: dict[str, None] = field(default_factory=dict)
+    """Fingerprints of web addresses this run has legitimately seen (the owner wrote them, a page
+    or search result linked to them, or a request to them went ahead). After the run has read
+    content the owner did not write, an address outside this set needs the owner's approval: an
+    address can carry data out. Insertion-ordered so the oldest can be dropped."""
+
+    def know_urls(self, urls: Iterable[str]) -> None:
+        for key in keys_of(urls):
+            self.known_urls.setdefault(key)
+        while len(self.known_urls) > MAX_KNOWN_URLS:
+            del self.known_urls[next(iter(self.known_urls))]
+
+    def knows_url(self, url: str) -> bool:
+        key = url_key(url)
+        return key is not None and key in self.known_urls
 
     def taint(self, reason: str) -> None:
         """Record that this run has read content the owner did not write.
@@ -76,6 +94,7 @@ class RunContext:
             "taint_reasons": list(self.taint_reasons),
             "queued_messages": list(self.queued_messages),
             "owner_request": self.owner_request,
+            "known_urls": list(self.known_urls),
         }
 
     @classmethod
@@ -91,4 +110,5 @@ class RunContext:
             taint_reasons=list(meta.get("taint_reasons") or []),
             queued_messages=[int(i) for i in meta.get("queued_messages") or []],
             owner_request=str(meta.get("owner_request") or ""),
+            known_urls=dict.fromkeys(str(k) for k in meta.get("known_urls") or []),
         )

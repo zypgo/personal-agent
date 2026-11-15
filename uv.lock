@@ -942,6 +942,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "croniter" },
+    { name = "httpcore" },
     { name = "httpx" },
     { name = "openai" },
     { name = "openai-agents" },
@@ -974,7 +975,8 @@ requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "croniter", specifier = ">=6" },
     { name = "docker", marker = "extra == 'docker'", specifier = ">=6.1" },
-    { name = "httpx", specifier = ">=0.28" },
+    { name = "httpcore", specifier = ">=1.0.9,<1.1" },
+    { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "numpy", marker = "extra == 'vector'", specifier = ">=2" },
     { name = "openai", specifier = ">=3,<4" },
     { name = "openai-agents", specifier = ">=0.24,<0.25" },

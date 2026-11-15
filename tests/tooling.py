@@ -12,6 +12,9 @@ from personal_agent.core.worker import Worker
 from personal_agent.harness.runctx import RunContext
 from personal_agent.tools.base import ALL_PROFILES, Category, ToolDef
 
+FILE_TOOLS = {"list_files", "read_file", "write_file", "edit_file"}
+WEB_TOOLS = {"web_fetch", "http_request", "web_search"}  # web_search is hosted by OpenAI
+
 
 @dataclass
 class Spy:
@@ -46,6 +49,8 @@ def install(app: App, spy: Spy, *, shell_profiles=ALL_PROFILES, delay: float = 0
         spy.calls.append(("leaky", ""))
         return "key is sk-" + "a" * 30 + " " + "y" * 30_000
 
+    for name in ("shell", "fetch", "notes", "leaky"):
+        app.tools.unregister(name)  # the real tools of the same name give way to the spies
     app.tools.register(
         ToolDef(
             name="shell",
@@ -71,3 +76,12 @@ async def drain(app: App, *, limit: int = 20, session_key: str | None = None) ->
             return results
         results.append(result)
     raise AssertionError("the inbox never went idle")
+
+
+def outputs(app: App, key: str = "main") -> dict[str, str]:
+    """Tool results the model saw in a session, by call id."""
+    return {
+        i["call_id"]: i["output"]
+        for i in app.sessions.items(key)
+        if i.get("type") == "function_call_output"
+    }
