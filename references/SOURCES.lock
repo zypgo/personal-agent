@@ -1,0 +1,10 @@
+name	url	commit	commit_date	license_file	why
+openai-agents-python	https://github.com/openai/openai-agents-python.git	64fbde5d02b42ae5f9db668eb0184cdb3fc9d775	2026-11-11	LICENSE	Engine we build on: Session protocol, RunState/HITL, MCP, guardrails, tracing
+claude-quickstarts	https://github.com/anthropics/claude-quickstarts.git	4a4224bdf0e9cfb3332167b69c90457403813625	2026-11-06	LICENSE	Anthropic reference implementation: managed-agents/daily-brief + autonomous-coding harness
+anthropic-skills	https://github.com/anthropics/skills.git	1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064	2026-11-14	none-at-sparse-root	Agent Skills format (SKILL.md, progressive disclosure)
+claude-agent-sdk-python	https://github.com/anthropics/claude-agent-sdk-python.git	4720d367f7db9d5df8a166c74d7f36a538ac8c34	2026-11-13	LICENSE	Permission modes, hooks, can_use_tool deferral semantics
+nanobot	https://github.com/HKUDS/nanobot.git	12a86eaa86a4d8b925de90eaf19c4f9586f93bf4	2026-11-14	LICENSE	Compact Python always-on agent: memory, cron, MCP, SQLite sessions
+nanoclaw	https://github.com/qwibitai/nanoclaw.git	dad1aadf3e6854e863df0000f49baa6358bc5a4e	2026-11-14	LICENSE	Container-per-session isolation + credential gateway with placeholders
+hermes-agent	https://github.com/NousResearch/hermes-agent.git	fd8a6c41ace59b476193c61002ce6a86d667b18a	2026-11-15	LICENSE	Gateway, cron, memory tool, approval flow, sender pairing
+openclaw	https://github.com/openclaw/openclaw.git	55029d41d50657cdad6e5bfd76413f39e6368b08	2026-11-15	LICENSE	Gateway/channels/cron/skills/memory/pairing/exec-approvals
+zeroclaw	https://github.com/zeroclaw-labs/zeroclaw.git	3a3f2e35865579843e5c37d8eee2e612cd98cd26	2026-11-14	LICENSE-APACHE	Approval manager (always_ask precedence), supervised-by-default
