@@ -43,6 +43,7 @@ from personal_agent.harness.runctx import Origin, RunContext
 from personal_agent.memory.store import PreferencesUnavailable
 from personal_agent.security.audit import safe_args
 from personal_agent.tools.guard import ToolGuard, parse_args, summarize
+from personal_agent.tools.skills import shell_dir
 from personal_agent.tools.urls import find_urls
 from personal_agent.tools.web import hosted_tools, record_hosted_search
 
@@ -50,6 +51,9 @@ if TYPE_CHECKING:
     from personal_agent.app import App
 
 log = logging.getLogger(__name__)
+
+MAX_REQUESTED_SKILLS = 3
+"""Skills one message can pull in by name; more would drown the request."""
 
 RESUME_NOTE = (
     "[The previous attempt at this wake-up was interrupted. Continue from where the conversation "
@@ -257,8 +261,37 @@ class Harness:
         except PreferencesUnavailable as exc:
             raise PreferencesProblem(str(exc)) from exc
         return build_instructions(
-            agent=cfg.agent, profile=profile, prefs=prefs, index=app.memory.load_index()
+            agent=cfg.agent,
+            profile=profile,
+            prefs=prefs,
+            index=app.memory.load_index(),
+            skills=self._skills_block(profile),
         )
+
+    def _skills_block(self, profile: str) -> str:
+        """The list of installed skills, only for runs that can load one."""
+        tool = self.app.tools.get("skill")
+        if tool is None or not self.guard.offered(tool, profile):
+            return ""
+        return self.app.skills.catalog()
+
+    def _requested_skills(self, event: Event) -> str:
+        """Skills the owner asked for by name (`$name`) in a message: their instructions are put
+        into the same session item, as if the model had loaded them itself."""
+        if event.kind != Kind.MESSAGE or event.trust is not Trust.OWNER:
+            return ""
+        app = self.app
+        blocks: list[str] = []
+        for skill in app.skills.mentioned(event.text)[:MAX_REQUESTED_SKILLS]:
+            try:
+                text = app.skills.instructions(skill, shell_dir=shell_dir(app, skill))
+            except Exception:
+                log.warning("could not load skill %s", skill.name, exc_info=True)
+                continue
+            blocks.append(
+                f"[The owner asked you to use the skill ${skill.name}. Its instructions:]\n{text}"
+            )
+        return "\n\n".join(blocks)
 
     def _agent(self, ctx: RunContext, instructions: str, model) -> Agent:
         app, cfg = self.app, self.app.config
@@ -311,7 +344,11 @@ class Harness:
         fresh = [e for e in batch.events if not app.sessions.has_event(key, e.id)]
         if fresh:
             for position, event in enumerate(fresh):
-                item = event_to_item(event, context=context if position == 0 else None)
+                item = event_to_item(
+                    event,
+                    context=context if position == 0 else None,
+                    extra=self._requested_skills(event),
+                )
                 app.sessions.append(key, [item], event_id=event.id, run_id=run_id)
         else:
             app.sessions.append(

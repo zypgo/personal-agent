@@ -230,6 +230,7 @@ def capability_checks(paths: Paths) -> list[Check]:
             checks.append(Check("shell sandbox", "ok", sandbox.describe()))
 
     checks.extend(_web_checks(cfg))
+    checks.extend(_skills_checks(paths, cfg))
 
     for name, secret in cfg.secrets.items():
         hosts = ", ".join(secret.hosts)
@@ -247,6 +248,34 @@ def capability_checks(paths: Paths) -> list[Check]:
                 )
             )
     return checks
+
+
+def _skills_checks(paths: Paths, cfg) -> list[Check]:
+    from personal_agent.skills.store import SkillStore
+
+    if not cfg.skills.enabled:
+        return [Check("skills", "ok", "switched off in config.toml")]
+    scan = SkillStore(paths, cfg.skills).scan()
+    skipped = [p for p in scan.problems if p.fatal]
+    warned = [p for p in scan.problems if not p.fatal]
+    if not scan.skills and not skipped:
+        return [
+            Check(
+                "skills",
+                "ok",
+                "none installed",
+                "`pa init` adds the starter skills; `pa skills install <folder or https address>` adds more.",
+            )
+        ]
+    detail = f"{len(scan.skills)} installed"
+    if warned:
+        detail += f", {len(warned)} warning(s)"
+    if skipped:
+        shown = "; ".join(f"{p.folder}: {p.message}" for p in skipped[:3])
+        return [
+            Check("skills", "warn", f"{detail}, {len(skipped)} skipped ({shown})", "Run: pa skills")
+        ]
+    return [Check("skills", "ok", detail)]
 
 
 def _web_checks(cfg) -> list[Check]:

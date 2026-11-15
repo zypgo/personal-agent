@@ -22,6 +22,7 @@ from personal_agent import __version__
 from personal_agent.app import App, build_app
 from personal_agent.channels.cli import CliChannel
 from personal_agent.clock import format_local
+from personal_agent.commands import skills as skills_commands
 from personal_agent.config import DEFAULT_CONFIG_TOML, DEFAULT_ENV, ConfigError, load_env
 from personal_agent.core.dispatcher import Dispatcher
 from personal_agent.core.events import Kind, NewEvent
@@ -31,6 +32,7 @@ from personal_agent.doctor import capability_checks, live_checks, static_checks
 from personal_agent.logs import setup_logging
 from personal_agent.memory.store import INSTRUCTIONS_PATH, PROFILE_PATH, PROPOSALS_PATH, Actor
 from personal_agent.paths import Paths
+from personal_agent.skills.install import install_bundled
 
 app = typer.Typer(
     name="pa",
@@ -94,6 +96,9 @@ def _open() -> App:
     return opened
 
 
+app.add_typer(skills_commands.build(lambda: _open(), console), name="skills")
+
+
 def _ago(ts: float | None, now: float) -> str:
     if ts is None:
         return "-"
@@ -120,9 +125,12 @@ def init() -> None:
         created.append(str(paths.env_file))
     opened = _open()  # creates the database and the memory templates, and loads .env
     opened.close()
+    starter = install_bundled(paths)
     console.print(f"[green]Ready.[/green] Home: {paths.home}")
     for item in created:
         console.print(f"  created {item}")
+    if starter:
+        console.print(f"  added starter skills: {', '.join(starter)} (see `pa skills`)")
     if not os.environ.get("OPENAI_API_KEY"):
         console.print(
             f"\nNext: put your key in [bold]{paths.env_file}[/bold] (OPENAI_API_KEY=...), then run [bold]pa doctor[/bold]."

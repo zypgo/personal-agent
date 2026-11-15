@@ -211,6 +211,17 @@ class ToolsConfig(_Section):
     """Estimated cost of one hosted search, added to the run's spend (the API bills it separately)."""
 
 
+class SkillsConfig(_Section):
+    enabled: bool = True
+    """Offer the skills installed in PA_HOME/skills (see `pa skills`)."""
+    description_chars: int = Field(300, ge=60, le=1024)
+    """Each skill's description is shortened to this in the list the model always sees."""
+    catalog_chars: int = Field(8_000, ge=500)
+    """Size of that list. Skills beyond it are shown by name only; the model can still load them."""
+    max_body_chars: int = Field(40_000, ge=2_000)
+    """A skill whose instructions are longer is cut when it is loaded (the model is told)."""
+
+
 class Config(_Section):
     agent: AgentConfig = AgentConfig()
     model: ModelConfig = ModelConfig()
@@ -223,6 +234,7 @@ class Config(_Section):
     sandbox: SandboxConfig = SandboxConfig()
     net: NetConfig = NetConfig()
     tools: ToolsConfig = ToolsConfig()
+    skills: SkillsConfig = SkillsConfig()
     secrets: dict[str, SecretConfig] = {}
 
     @field_validator("secrets")
@@ -308,6 +320,11 @@ shell = true                     # needs a working sandbox
 web_fetch = true                 # read web pages; never reaches your own network (see [net])
 http_request = true              # call APIs; anything but GET/HEAD asks first
 web_search = "auto"              # OpenAI hosted search; auto | cached | off
+
+[skills]
+enabled = true                   # offer what `pa skills install` put in ~/.personal-agent/skills
+# description_chars = 300        # length of each skill's one-line description in the list
+# catalog_chars = 8000           # size of that list; the rest are shown by name only
 
 # [net]
 # allow_private = ["homeassistant.local", "192.168.1.0/24"]   # your own network is blocked unless listed

@@ -29,6 +29,7 @@ from personal_agent.security.policy import Policy
 from personal_agent.security.redact import register_secret_envs
 from personal_agent.security.sandbox import SandboxProvider
 from personal_agent.security.ssrf import NetPolicy
+from personal_agent.skills.store import SkillStore
 from personal_agent.tools.base import ToolRegistry
 from personal_agent.tools.builtin import register_builtin
 
@@ -56,6 +57,7 @@ class App:
     sandbox: SandboxProvider
     net: NetPolicy
     secrets: SecretBroker
+    skills: SkillStore
 
     def recover(self) -> dict[str, int]:
         """Clean up after a previous process that died: orphaned runs and half-sent messages.
@@ -145,4 +147,5 @@ def build_app(
         sandbox=sandbox or SandboxProvider(paths, cfg.sandbox),
         net=NetPolicy.from_config(cfg.net),
         secrets=SecretBroker(cfg.secrets, os.environ),
+        skills=SkillStore(paths, cfg.skills),
     )

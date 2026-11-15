@@ -46,7 +46,9 @@ def _clean(text: str) -> str:
     return text
 
 
-def build_instructions(*, agent: AgentConfig, profile: str, prefs: Preferences, index: str) -> str:
+def build_instructions(
+    *, agent: AgentConfig, profile: str, prefs: Preferences, index: str, skills: str = ""
+) -> str:
     base = (
         _prompt("system.md")
         .replace("{agent_name}", agent.name)
@@ -69,6 +71,8 @@ def build_instructions(*, agent: AgentConfig, profile: str, prefs: Preferences, 
             "# About the owner\nFrom /memories/preferences/profile.md.\n"
             f"<owner_profile>\n{profile_text}\n</owner_profile>"
         )
+    if skills:
+        parts.append(skills)  # changes rarely, so it sits before the memory index (cache prefix)
     cleaned_index = _clean(index)
     if cleaned_index:
         parts.append(
@@ -145,8 +149,10 @@ def _timer_details(payload: dict) -> str:
     return f" ({'; '.join(details)})" if details else ""
 
 
-def event_to_item(event: Event, *, context: str | None = None) -> dict[str, str]:
-    """The user-role session item that represents one inbox event."""
+def event_to_item(event: Event, *, context: str | None = None, extra: str = "") -> dict[str, str]:
+    """The user-role session item that represents one inbox event. `extra` is trusted text the
+    harness adds to the same item (a skill the owner asked for), so that the event and what goes
+    with it are stored together or not at all."""
     kind, payload = event.kind, event.payload
     if kind == Kind.MESSAGE:
         if event.trust is Trust.OWNER:
@@ -176,4 +182,6 @@ def event_to_item(event: Event, *, context: str | None = None) -> dict[str, str]
         )
     else:
         body = f"[{kind}]\n" + wrap_untrusted(_json(payload), event.source)
+    if extra:
+        body = f"{body}\n\n{extra}"
     return {"role": "user", "content": f"{context}\n\n{body}" if context else body}

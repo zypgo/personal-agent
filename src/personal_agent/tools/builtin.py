@@ -291,6 +291,7 @@ def register_builtin(registry: ToolRegistry, config: Config | None = None) -> No
     """The tools every agent has. `config.tools` switches the optional families on and off."""
     from personal_agent.tools.files import register_files
     from personal_agent.tools.shell import register_shell
+    from personal_agent.tools.skills import register_skills
     from personal_agent.tools.web import register_web
 
     switches = (config or Config()).tools
@@ -328,6 +329,7 @@ def register_builtin(registry: ToolRegistry, config: Config | None = None) -> No
             ),
         )
     )
+    register_skills(registry)  # offered only when skills are installed
     if switches.files:
         register_files(registry)
     if switches.shell:
