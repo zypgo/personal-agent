@@ -194,13 +194,27 @@ MIGRATIONS: list[str] = [
         reason      TEXT,
         args        TEXT,                    -- redacted and truncated
         detail      TEXT,
-        outcome     TEXT,                    -- ok | error | denied | rejected | timeout | pending
+        outcome     TEXT,                    -- ok | error | denied | rejected | expired | superseded | unavailable | timeout | pending
         duration_ms INTEGER,
         tainted     INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX audit_ts ON audit(ts);
     CREATE INDEX audit_run ON audit(run_id);
     CREATE UNIQUE INDEX audit_call ON audit(run_id, call_id) WHERE call_id IS NOT NULL;
+    """,
+    # ---- 3: iteration 3b, MCP tool pins -------------------------------------------------
+    """
+    -- What the owner reviewed of each MCP tool: a tool whose definition differs from its pin
+    -- (a changed description is how a server turns hostile after an update) is withheld.
+    CREATE TABLE mcp_pins (
+        server      TEXT NOT NULL,
+        tool        TEXT NOT NULL,
+        digest      TEXT NOT NULL,           -- sha256 of the canonical definition
+        definition  TEXT NOT NULL,           -- JSON, kept so a review can show what changed
+        pinned_at   REAL NOT NULL,
+        pinned_by   TEXT NOT NULL,           -- owner | auto
+        PRIMARY KEY (server, tool)
+    );
     """,
 ]
 

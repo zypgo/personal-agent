@@ -7,7 +7,7 @@ import tomllib
 
 from personal_agent.config import DEFAULT_CONFIG_TOML, Config
 
-EXAMPLE = re.compile(r"^# ?((?:\[[A-Za-z_.]+\])|(?:[a-z_]+ = .*))$")
+EXAMPLE = re.compile(r"^# ?((?:\[{1,2}[A-Za-z_.]+\]{1,2})|(?:[a-z_]+ = .*))$")
 
 
 def uncommented(toml: str) -> str:
@@ -26,3 +26,4 @@ def test_every_commented_example_is_valid_when_switched_on():
     assert live != DEFAULT_CONFIG_TOML  # the examples were really switched on
     config = Config.model_validate(tomllib.loads(live))
     assert config.policy.allow_when_tainted and config.net.allow_private and config.secrets
+    assert [s.name for s in config.mcp.servers] == ["filesystem", "docs"]

@@ -17,6 +17,8 @@ from typing import Any
 
 import yaml
 
+from personal_agent.security.sanitize import strip_invisible
+
 MAX_FILE_BYTES = 262_144
 """A SKILL.md larger than this is not read: the format asks for under 500 lines."""
 NAME_MAX = 64
@@ -111,8 +113,15 @@ def _text(value: Any) -> str | None:
 
 def parse_skill(text: str, *, folder_name: str | None = None) -> Parsed:
     """Parse the content of a SKILL.md. `folder_name` enables the "name matches folder" check."""
+    normalized = text.replace("\r\n", "\n")
+    text = strip_invisible(normalized)
     front, body = split_front_matter(text)
     data, warnings = _load_yaml(front)
+    if text != normalized:
+        warnings.append(
+            "the file had hidden characters (invisible text, text-direction overrides or control "
+            "codes); they were removed, so the agent reads only what you can see"
+        )
 
     name = _text(data.get("name"))
     if not name:

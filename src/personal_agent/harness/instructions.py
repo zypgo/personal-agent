@@ -18,6 +18,7 @@ from personal_agent.clock import format_local
 from personal_agent.config import AgentConfig
 from personal_agent.core.events import Event, Kind, Trust
 from personal_agent.memory.store import Preferences
+from personal_agent.security.sanitize import strip_invisible
 
 MAX_PAYLOAD_CHARS = 20_000
 
@@ -87,6 +88,7 @@ def build_instructions(
 def wrap_untrusted(text: str, source: str) -> str:
     """Fence outside content so it cannot pass itself off as part of the prompt."""
     safe_source = re.sub(r"[^\w:.@/-]", "_", source)[:80]
+    text = strip_invisible(text)  # no hidden instructions: what the model reads is what shows
     body = text if len(text) <= MAX_PAYLOAD_CHARS else text[:MAX_PAYLOAD_CHARS] + "\n[truncated]"
     body = re.sub(r"(?i)</\s*untrusted", "</ untrusted", body)
     return f'<untrusted source="{safe_source}">\n{body}\n</untrusted>'

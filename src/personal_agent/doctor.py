@@ -10,6 +10,7 @@ tool schemas, and replaying stored history (including encrypted reasoning) back 
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import sqlite3
 import stat
@@ -231,6 +232,8 @@ def capability_checks(paths: Paths) -> list[Check]:
 
     checks.extend(_web_checks(cfg))
     checks.extend(_skills_checks(paths, cfg))
+    checks.extend(_mcp_checks(paths, cfg))
+    checks.extend(_plugin_checks(cfg))
 
     for name, secret in cfg.secrets.items():
         hosts = ", ".join(secret.hosts)
@@ -276,6 +279,81 @@ def _skills_checks(paths: Paths, cfg) -> list[Check]:
             Check("skills", "warn", f"{detail}, {len(skipped)} skipped ({shown})", "Run: pa skills")
         ]
     return [Check("skills", "ok", detail)]
+
+
+def _reviewed_tool_counts(paths: Paths) -> dict[str, int]:
+    """How many MCP tools the owner has reviewed, per server (read-only; empty if unknowable)."""
+    if not paths.db_file.exists():
+        return {}
+    try:
+        conn = sqlite3.connect(f"file:{paths.db_file}?mode=ro", uri=True)
+        try:
+            rows = conn.execute("SELECT server, COUNT(*) FROM mcp_pins GROUP BY server").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return {}
+    return {str(server): int(count) for server, count in rows}
+
+
+def _mcp_checks(paths: Paths, cfg) -> list[Check]:
+    """MCP servers are programs or services the owner chose: say what would stop them working."""
+    if not cfg.mcp.servers:
+        return []  # nothing configured, nothing to report
+    if not cfg.mcp.enabled:
+        return [Check("mcp", "ok", "switched off in config.toml")]
+    reviewed = _reviewed_tool_counts(paths)
+    checks: list[Check] = []
+    for server in cfg.mcp.servers:
+        label = f"mcp {server.name}"
+        if not server.enabled:
+            checks.append(Check(label, "ok", "switched off"))
+            continue
+        problems: list[str] = []
+        hints: list[str] = []
+        if server.transport == "stdio" and not shutil.which(
+            os.path.expanduser(server.command or "")
+        ):
+            problems.append(f"the program {server.command!r} was not found")
+            hints.append("Install it, or fix `command` in config.toml.")
+        missing = [name for name in server.referenced_env() if not os.environ.get(name)]
+        if missing:
+            problems.append(f"{', '.join(missing)} is not set")
+            hints.append(f"Put {missing[0]}=... in {paths.env_file}")
+        count = reviewed.get(server.name, 0)
+        if count == 0 and server.pin == "ask":
+            problems.append("its tools have not been reviewed, so none are offered")
+            hints.append(f"Run: pa mcp trust {server.name}")
+        if problems:
+            checks.append(Check(label, "warn", "; ".join(problems), " ".join(hints)))
+        else:
+            reviewed_text = f"{count} tool(s) reviewed" if count else "tools accepted on first use"
+            checks.append(Check(label, "ok", f"{server.transport}; {reviewed_text}"))
+    return checks
+
+
+def _plugin_checks(cfg) -> list[Check]:
+    """Plugins are code the owner switched on: say if one that is enabled is not even installed.
+    (Loading them is `pa plugins`' job; doctor does not run plugin code.)"""
+    if not cfg.plugins.enabled:
+        return []
+    from personal_agent.plugins.registry import installed
+
+    present = installed()
+    checks = []
+    for name in dict.fromkeys(cfg.plugins.enabled):
+        if name in present:
+            checks.append(Check(f"plugin {name}", "ok", f"installed ({present[name].value})"))
+        else:
+            checks.append(
+                Check(
+                    f"plugin {name}",
+                    "warn",
+                    "switched on in config.toml, but no installed package provides it",
+                    f"Install the package, or remove {name!r} from [plugins] enabled.",
+                )
+            )
+    return checks
 
 
 def _web_checks(cfg) -> list[Check]:

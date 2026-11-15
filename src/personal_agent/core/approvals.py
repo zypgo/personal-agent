@@ -40,6 +40,10 @@ EXPIRED_MESSAGE = (
 SUPERSEDED_MESSAGE = (
     "Not executed: the owner sent a new message before answering the approval request."
 )
+UNAVAILABLE_MESSAGE = (
+    "Not executed: the owner approved this action, but the tool is not available right now "
+    "(for example its server is down). Nothing was done. Tell the owner, and offer to try again later."
+)
 
 
 @dataclass(frozen=True)

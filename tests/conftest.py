@@ -41,6 +41,8 @@ def make_app(tmp_path, clock, monkeypatch):
         *,
         config: Config | None = None,
         sandbox: SandboxProvider | None = None,
+        mcp_factory=None,
+        plugin_entry_points=None,
     ) -> App:
         scripted = model if model is not None else ScriptedModel([])
         app = build_app(
@@ -51,6 +53,8 @@ def make_app(tmp_path, clock, monkeypatch):
             # Hermetic by default: no probing of the machine, so no shell unless a test wants one.
             sandbox=sandbox or SandboxProvider.fixed(None, "tests run without a sandbox"),
             read_env=False,
+            mcp_factory=mcp_factory,
+            plugin_entry_points=plugin_entry_points,
         )
         created.append(app)
         return app

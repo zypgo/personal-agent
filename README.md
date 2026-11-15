@@ -18,7 +18,7 @@
 | 1 | 内核：SQLite 收件箱 / 会话日志 / 发件箱 / 记忆 + Harness + CLI 对话 | ✅ |
 | 2 | 常驻循环：worker / scheduler / dispatcher、策略引擎、延迟审批、审计、预算、`pa serve` | ✅ |
 | 3a | 双手与出站：沙箱 shell（seatbelt）、硬性底线、文件工具、SSRF 安全的 `web_fetch` / `http_request`、托管 `web_search`、密钥代理、"地址会带走数据"的出站控制 | ✅ |
-| 3b | 可插拔：MCP、Agent Skills、插件注册表 | 🚧 |
+| 3b | 可插拔：MCP（定义先审阅再启用）、Agent Skills（渐进披露）、Python 插件注册表、外部文字清洗 | ✅ |
 | 4 | 渠道与多模态：Web PWA（手机可用）、Telegram、Webhook、语音/图像 | 🚧 |
 | 5 | 记忆智能：做梦、检索、压缩、子代理 | 🚧 |
 | 6 | 评测、launchd 常驻服务、加固 | 🚧 |
@@ -47,6 +47,16 @@ uv run pa budget              # 今日花费与上限；pa budget extend 2 当�
 ```
 
 默认模式 `supervised`：读取、记忆、通知放行，任何会改变世界的动作都先问你；想放开某类动作，在 `config.toml` 里写规则，例如 `[policy] allow = ["schedule"]`（让它不用问就能建定时任务）；`deny` 规则任何模式下都不可绕过。
+
+给它更多能力（都是**先看后用**）：
+
+```bash
+uv run pa skills                       # 已安装的技能；pa skills install <文件夹 | https 地址> 先审阅再安装
+uv run pa mcp add files -- npx -y @modelcontextprotocol/server-filesystem ~/Documents
+uv run pa mcp tools files              # 连上去看它有哪些工具、各会被怎样处理
+uv run pa mcp trust files              # 读过工具的描述并接受；新增/改动的工具以后会再问你
+uv run pa plugins                      # Python 插件（装了也要在 config.toml 的 [plugins] enabled 里列出才生效）
+```
 
 想先试用而不动你的主目录：`PA_HOME=./.pa-home uv run pa init`（`.pa-home/` 已被 git 忽略）。
 

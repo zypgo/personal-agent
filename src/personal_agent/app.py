@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from datetime import tzinfo
 from pathlib import Path
+from typing import Any
 
 from personal_agent.clock import Clock, SystemClock, get_tz
 from personal_agent.config import Config, load_config, load_env
@@ -22,6 +25,8 @@ from personal_agent.harness.models import ModelFactory, OpenAIModels
 from personal_agent.memory.store import MemoryStore
 from personal_agent.memory.templates import bootstrap
 from personal_agent.paths import Paths
+from personal_agent.plugins.mcp import McpHub, ServerFactory
+from personal_agent.plugins.registry import PluginInfo, load_plugins
 from personal_agent.security.audit import Audit
 from personal_agent.security.broker import SecretBroker
 from personal_agent.security.guardian import Guardian, LLMGuardian
@@ -32,6 +37,8 @@ from personal_agent.security.ssrf import NetPolicy
 from personal_agent.skills.store import SkillStore
 from personal_agent.tools.base import ToolRegistry
 from personal_agent.tools.builtin import register_builtin
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -58,6 +65,8 @@ class App:
     net: NetPolicy
     secrets: SecretBroker
     skills: SkillStore
+    mcp: McpHub
+    plugins: list[PluginInfo] = field(default_factory=list)
 
     def recover(self) -> dict[str, int]:
         """Clean up after a previous process that died: orphaned runs and half-sent messages.
@@ -77,6 +86,14 @@ class App:
         whether a sandbox works means starting a process or asking Docker)."""
         if self.config.tools.shell:
             await asyncio.to_thread(self.sandbox.resolve)
+
+    async def stop_services(self) -> None:
+        """Close what was opened for the running event loop (MCP connections and the programs
+        behind them). Every place that runs a loop to its end calls this first."""
+        try:
+            await self.mcp.stop()
+        except Exception:
+            log.warning("could not stop the MCP servers cleanly", exc_info=True)
 
     def extend_budget(self, amount: float) -> tuple[float, int]:
         """Raise today's spending cap and let work that was paused for the budget continue.
@@ -99,6 +116,8 @@ def build_app(
     sandbox: SandboxProvider | None = None,
     read_env: bool = True,
     create_templates: bool = True,
+    mcp_factory: ServerFactory | None = None,
+    plugin_entry_points: Iterable[Any] | None = None,
 ) -> App:
     paths = Paths.resolve(home)
     paths.ensure()
@@ -112,6 +131,9 @@ def build_app(
         bootstrap(memory)
     tools = ToolRegistry()
     register_builtin(tools, cfg)
+    plugins = load_plugins(
+        cfg.plugins, registry=tools, paths=paths, entry_points=plugin_entry_points
+    )
     register_secret_envs(secret.env for secret in cfg.secrets.values())
     tz = get_tz(cfg.agent.timezone)
     inbox = Inbox(database, clock)
@@ -148,4 +170,14 @@ def build_app(
         net=NetPolicy.from_config(cfg.net),
         secrets=SecretBroker(cfg.secrets, os.environ),
         skills=SkillStore(paths, cfg.skills),
+        mcp=McpHub(
+            cfg.mcp,
+            paths=paths,
+            db=database,
+            clock=clock,
+            registry=tools,
+            runtime=cfg.runtime,
+            factory=mcp_factory,
+        ),
+        plugins=plugins,
     )

@@ -22,6 +22,8 @@ from personal_agent import __version__
 from personal_agent.app import App, build_app
 from personal_agent.channels.cli import CliChannel
 from personal_agent.clock import format_local
+from personal_agent.commands import mcp as mcp_commands
+from personal_agent.commands import plugins as plugins_commands
 from personal_agent.commands import skills as skills_commands
 from personal_agent.config import DEFAULT_CONFIG_TOML, DEFAULT_ENV, ConfigError, load_env
 from personal_agent.core.dispatcher import Dispatcher
@@ -97,6 +99,8 @@ def _open() -> App:
 
 
 app.add_typer(skills_commands.build(lambda: _open(), console), name="skills")
+app.add_typer(mcp_commands.build(lambda: _open(), console), name="mcp")
+app.add_typer(plugins_commands.build(lambda: _open(), console), name="plugins")
 
 
 def _ago(ts: float | None, now: float) -> str:
@@ -274,6 +278,7 @@ def chat_loop(opened: App, session_key: str, read_line: Callable[[str], str] = i
     """The interactive loop. One event loop for the whole conversation, so the HTTP connection
     pool is reused, and Ctrl-C cancels only the running turn."""
     engine = Engine.acquire(opened)
+    engine.keep_services = True  # MCP servers stay up between messages; _chat closes them
     try:
         _chat(engine, session_key, read_line)
     finally:
@@ -291,26 +296,29 @@ def _chat(engine: Engine, session_key: str, read_line: Callable[[str], str]) -> 
         )
     )
     with asyncio.Runner() as runner:
-        # Anything the agent wanted to say while you were away.
-        runner.run(Dispatcher(opened, {"cli": CliChannel(console)}).deliver_once())
-        _remind_of_approvals(opened)
-        while True:
-            try:
-                line = read_line("you> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                console.print()
-                break
-            if not line:
-                continue
-            try:
-                if line.startswith("/"):
-                    if not _slash(engine, line, session_key, runner.run):
-                        break
+        try:
+            # Anything the agent wanted to say while you were away.
+            runner.run(Dispatcher(opened, {"cli": CliChannel(console)}).deliver_once())
+            _remind_of_approvals(opened)
+            while True:
+                try:
+                    line = read_line("you> ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    console.print()
+                    break
+                if not line:
                     continue
-                event_id = _submit(opened, line, session_key)
-                runner.run(_turn(engine, session_key, event_id))
-            except KeyboardInterrupt:
-                _interrupted(engine, session_key)
+                try:
+                    if line.startswith("/"):
+                        if not _slash(engine, line, session_key, runner.run):
+                            break
+                        continue
+                    event_id = _submit(opened, line, session_key)
+                    runner.run(_turn(engine, session_key, event_id))
+                except KeyboardInterrupt:
+                    _interrupted(engine, session_key)
+        finally:
+            runner.run(opened.stop_services())
 
 
 def _interrupted(engine: Engine, session_key: str) -> None:

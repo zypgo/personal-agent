@@ -24,6 +24,7 @@ from personal_agent.core.approvals import (
     DENIED,
     EXPIRED,
     SUPERSEDED_MESSAGE,
+    UNAVAILABLE_MESSAGE,
     PendingCall,
     request_text,
 )
@@ -268,6 +269,13 @@ class Harness:
             skills=self._skills_block(profile),
         )
 
+    async def _prepare_plugins(self) -> None:
+        """Bring the MCP tools up to date. A server that is down costs its own tools, not the run."""
+        try:
+            await self.app.mcp.prepare()
+        except Exception:
+            log.warning("could not prepare the MCP servers", exc_info=True)
+
     def _skills_block(self, profile: str) -> str:
         """The list of installed skills, only for runs that can load one."""
         tool = self.app.tools.get("skill")
@@ -315,6 +323,7 @@ class Harness:
         app = self.app
         key, run_id = batch.session_key, ctx.run_id
 
+        await self._prepare_plugins()
         instructions = self._instructions(ctx.profile)
         # Build the model before touching any state: with no API key this raises, and a later
         # retry must find the session exactly as it was.
@@ -339,7 +348,7 @@ class Harness:
             tz=app.tz,
             trigger=describe_trigger(batch.events),
             session_key=key,
-            notes=self._outbox_notes(),
+            notes=[*self._outbox_notes(), *app.mcp.notes()],
         )
         fresh = [e for e in batch.events if not app.sessions.has_event(key, e.id)]
         if fresh:
@@ -447,16 +456,24 @@ class Harness:
 
     async def _continue(self, ctx: RunContext, state_text: str, model_name: str) -> RunOutcome:
         app = self.app
+        await self._prepare_plugins()
         instructions = self._instructions(ctx.profile)
         model = app.model_factory(model_name)
         agent = self._agent(ctx, instructions, model)
         state = await RunState.from_string(agent, state_text, context_override=ctx)
 
         by_call = {a.call_id: a for a in app.approvals.for_run(ctx.run_id)}
+        offered = {getattr(t, "name", None) for t in agent.tools}
         for item in state.get_interruptions():
-            _, call_id, _ = _call_info(item)
+            name, call_id, _ = _call_info(item)
             approval = by_call.get(call_id)
             if approval is not None and approval.status == "approved":
+                if name not in offered:
+                    # Approved, but the tool is gone (its server is down, a plugin was removed).
+                    # Say so, instead of letting the SDK report a missing tool.
+                    state.reject(item, rejection_message=UNAVAILABLE_MESSAGE)
+                    app.audit.set_outcome(ctx.run_id, call_id, "unavailable")
+                    continue
                 state.approve(item)
                 continue
             status = approval.status if approval else DENIED

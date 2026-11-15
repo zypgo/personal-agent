@@ -206,6 +206,8 @@ class Daemon:
                 asyncio.create_task(self._supervise(s), name=f"service-{s.name}")
                 for s in self.services
             ]
+            if self.app.mcp.active:
+                tasks.append(asyncio.create_task(self._start_mcp(), name="mcp-start"))
             self._ready.set()
             log.info("daemon started (pid %s)", os.getpid())
             with self._wake.listener() as event:
@@ -214,9 +216,17 @@ class Daemon:
                     await self._nap(event, 3600)
             await self._shutdown(tasks)
         finally:
+            await self.app.stop_services()  # also on a failed start: never leave programs running
             self.lock.release()
             self._ready.clear()
             log.info("daemon stopped")
+
+    async def _start_mcp(self) -> None:
+        """Connect the MCP servers in the background, so the first run does not wait for them."""
+        try:
+            await self.app.mcp.prepare()
+        except Exception:
+            log.warning("could not start the MCP servers", exc_info=True)
 
     async def _shutdown(self, tasks: list[asyncio.Task]) -> None:
         workers = [t for t in tasks if (t.get_name() or "").startswith("worker-")]
@@ -359,6 +369,8 @@ class Engine:
         self.app = app
         self.lock = lock
         self.holder_pid = holder_pid
+        self.keep_services = False
+        """A long conversation keeps MCP servers running between messages; one-off commands do not."""
 
     @property
     def inline(self) -> bool:
@@ -390,14 +402,18 @@ class Engine:
         messages) as time passes. Events waiting to retry later are not waited for.
         """
         if self.inline:
-            await self.app.warm_up()
-            worker = Worker(self.app)
-            results: list[WorkResult] = []
-            while (
-                result := await worker.run_once(session_key=session_key, on_failure=on_failure)  # type: ignore[arg-type]
-            ) is not None:
-                results.append(result)
-            return results
+            try:
+                await self.app.warm_up()
+                worker = Worker(self.app)
+                results: list[WorkResult] = []
+                while (
+                    result := await worker.run_once(session_key=session_key, on_failure=on_failure)  # type: ignore[arg-type]
+                ) is not None:
+                    results.append(result)
+                return results
+            finally:
+                if not self.keep_services:
+                    await self.app.stop_services()
         while self.app.inbox.active_for(session_key) > 0:
             if tick is not None:
                 await tick()

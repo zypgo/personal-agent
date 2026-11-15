@@ -10,7 +10,7 @@ import ipaddress
 import os
 import re
 import tomllib
-from typing import Literal
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -222,6 +222,204 @@ class SkillsConfig(_Section):
     """A skill whose instructions are longer is cut when it is loaded (the model is told)."""
 
 
+ENV_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+"""`${NAME}` in an MCP server's `env` or `headers`: filled in from the agent's environment (`.env`)
+when the server starts, so a credential never has to be written into config.toml."""
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+def env_references(text: str) -> list[str]:
+    return ENV_REFERENCE.findall(text)
+
+
+class McpServerConfig(_Section):
+    """One Model Context Protocol server: a program or web service that offers tools."""
+
+    name: str
+    """Short name, used in tool names (`mcp__<name>__<tool>`) and in `pa mcp`."""
+    enabled: bool = True
+    transport: Literal["stdio", "http", "sse"] = "stdio"
+    """`stdio`: a program the agent starts. `http`: a Streamable HTTP endpoint. `sse`: the older
+    server-sent-events endpoint."""
+
+    # stdio
+    command: str | None = None
+    args: list[str] = []
+    """Arguments of the program. `${NAME}` is replaced by a value from `.env`."""
+    env: dict[str, str] = {}
+    """Extra environment for the program. It gets nothing else from the agent's environment except
+    HOME, PATH, USER, LOGNAME, SHELL and TERM. Use `${NAME}` to pass a value from `.env`."""
+    cwd: str | None = None
+
+    # http / sse
+    url: str | None = None
+    """The endpoint. `${NAME}` is replaced by a value from `.env` (for keys that go in the query)."""
+    headers: dict[str, str] = {}
+    """Request headers. Use `${NAME}` for credentials (`Authorization = "Bearer ${TOKEN}"`)."""
+
+    # what the agent may do with the tools
+    read_only: list[str] = []
+    """Tool-name patterns (`get_*`, `list_*`) you know only look at things. They count as reads;
+    every other tool of this server asks for your approval like any action that changes things."""
+    trust_annotations: bool = False
+    """Believe the server's own `readOnlyHint` (a tool marked read-only counts as a read). Off by
+    default: a server describes itself, and a bad one can lie."""
+    allow_tools: list[str] = []
+    """If set, only tools matching one of these patterns are offered."""
+    deny_tools: list[str] = []
+    profiles: list[Literal["full", "scheduled", "untrusted"]] = ["full", "scheduled"]
+    """Which kinds of runs get these tools. `untrusted` (runs woken by a webhook or outside mail)
+    is allowed only if you list it."""
+    taints: bool = True
+    """Results are outside content: fenced as data, and a run that read one asks before acting.
+    Turn off only for a server that returns nothing but your own data."""
+    pin: Literal["ask", "auto"] = "ask"
+    """`ask`: no tool is offered until you have read its definition (`pa mcp trust NAME`).
+    `auto`: the first definitions are accepted as they are. In both modes a tool that is new or
+    whose description changed later is withheld until you review it."""
+    connect_timeout_s: float = Field(30.0, gt=0, le=300)
+    call_timeout_s: float = Field(60.0, gt=0, le=1800)
+
+    @field_validator("name")
+    @classmethod
+    def _name_is_short_and_plain(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,23}", value):
+            raise ValueError(
+                f"server name {value!r} must be letters, digits and hyphens (at most 24), "
+                "starting with a letter"
+            )
+        return value
+
+    @field_validator("env")
+    @classmethod
+    def _env_names_are_valid(cls, value: dict[str, str]) -> dict[str, str]:
+        for key in value:
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise ValueError(f"{key!r} is not an environment variable name")
+        return value
+
+    @field_validator("headers")
+    @classmethod
+    def _header_names_are_valid(cls, value: dict[str, str]) -> dict[str, str]:
+        for key in value:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", key):
+                raise ValueError(f"{key!r} is not an HTTP header name")
+        return value
+
+    @field_validator("read_only", "allow_tools", "deny_tools")
+    @classmethod
+    def _patterns_are_not_empty(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value):
+            raise ValueError("a tool-name pattern cannot be empty")
+        return value
+
+    @field_validator("profiles")
+    @classmethod
+    def _at_least_one_profile(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("list at least one kind of run, or set enabled = false")
+        return value
+
+    @model_validator(mode="after")
+    def _fits_its_transport(self) -> McpServerConfig:
+        from personal_agent.security.redact import find_secrets
+
+        if self.transport == "stdio":
+            if not (self.command or "").strip():
+                raise ValueError(f"server {self.name!r}: a stdio server needs a `command`")
+            if self.url or self.headers:
+                raise ValueError(f"server {self.name!r}: `url` and `headers` are for http servers")
+        else:
+            if not (self.url or "").strip():
+                raise ValueError(f"server {self.name!r}: an http server needs a `url`")
+            if self.command or self.args or self.env or self.cwd:
+                raise ValueError(
+                    f"server {self.name!r}: `command`, `args`, `env` and `cwd` are for stdio servers"
+                )
+            self._check_url(ENV_REFERENCE.sub("x", self.url or ""))
+
+        def literal_secret(text: str) -> bool:
+            return bool(find_secrets(ENV_REFERENCE.sub("", text)))
+
+        for where, values in (("env", self.env), ("headers", self.headers)):
+            for key, value in values.items():
+                if literal_secret(value) or find_secrets(f"{key}={value}"):
+                    raise ValueError(
+                        f"server {self.name!r}: {where}.{key} looks like a real credential. "
+                        "Put it in .env and write ${NAME} here instead."
+                    )
+        places = [(f"args[{i}]", arg) for i, arg in enumerate(self.args)] + [
+            ("url", self.url or "")
+        ]
+        for where, text in places:
+            if literal_secret(text):
+                raise ValueError(
+                    f"server {self.name!r}: {where} looks like a real credential (it would be "
+                    "stored in config.toml and shown in process lists). "
+                    "Put it in .env and write ${NAME} here instead."
+                )
+        return self
+
+    def _check_url(self, url: str) -> None:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if parts.scheme not in ("http", "https") or not host:
+            raise ValueError(f"server {self.name!r}: the url must be http:// or https://")
+        if parts.username or parts.password:
+            raise ValueError(
+                f"server {self.name!r}: do not put credentials in the url; use `headers` with ${{NAME}}"
+            )
+        if parts.scheme == "http" and host not in _LOOPBACK_HOSTS:
+            raise ValueError(
+                f"server {self.name!r}: plain http is only allowed for this machine "
+                "(localhost); use https for anything else"
+            )
+
+    def referenced_env(self) -> list[str]:
+        """Names of the environment variables this server's settings refer to."""
+        found: list[str] = []
+        for value in (*self.env.values(), *self.headers.values(), *self.args, self.url or ""):
+            for name in env_references(value):
+                if name not in found:
+                    found.append(name)
+        return found
+
+
+class McpConfig(_Section):
+    enabled: bool = True
+    """Master switch: false ignores every [[mcp.servers]] entry."""
+    servers: list[McpServerConfig] = []
+    refresh_s: float = Field(300.0, ge=5)
+    """How long a server's tool list is trusted before it is asked again."""
+    retry_s: float = Field(30.0, ge=1)
+    """After a server fails, wait this long before trying again (doubling, up to ten minutes)."""
+    max_tools: int = Field(80, ge=1, le=120)
+    """Most MCP tools offered to the model at once, in all servers together; the model gets
+    worse at choosing as the list grows."""
+
+    @field_validator("servers")
+    @classmethod
+    def _names_are_unique(cls, value: list[McpServerConfig]) -> list[McpServerConfig]:
+        seen: set[str] = set()
+        for server in value:
+            key = server.name.lower()
+            if key in seen:
+                raise ValueError(f"two MCP servers are called {server.name!r}")
+            seen.add(key)
+        return value
+
+
+class PluginsConfig(_Section):
+    enabled: list[str] = []
+    """Installed Python packages that may add tools (entry point group `personal_agent.plugins`).
+    A plugin runs inside the agent with full access to this machine: list only code you trust."""
+    settings: dict[str, dict[str, Any]] = {}
+    """Settings a plugin reads for itself: `[plugins.settings.NAME]`. No secrets here."""
+
+
 class Config(_Section):
     agent: AgentConfig = AgentConfig()
     model: ModelConfig = ModelConfig()
@@ -235,6 +433,8 @@ class Config(_Section):
     net: NetConfig = NetConfig()
     tools: ToolsConfig = ToolsConfig()
     skills: SkillsConfig = SkillsConfig()
+    mcp: McpConfig = McpConfig()
+    plugins: PluginsConfig = PluginsConfig()
     secrets: dict[str, SecretConfig] = {}
 
     @field_validator("secrets")
@@ -325,6 +525,24 @@ web_search = "auto"              # OpenAI hosted search; auto | cached | off
 enabled = true                   # offer what `pa skills install` put in ~/.personal-agent/skills
 # description_chars = 300        # length of each skill's one-line description in the list
 # catalog_chars = 8000           # size of that list; the rest are shown by name only
+
+# MCP servers add tools (files, GitHub, a database, ...). They run with your privileges, outside the
+# shell sandbox, so add only servers you trust. Nothing is offered until `pa mcp trust NAME` has
+# shown you what the server's tools say about themselves. Credentials go in .env as ${NAME}.
+# [[mcp.servers]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/Documents"]
+# read_only = ["read_*", "list_*", "search_*", "get_*"]   # these count as reads; the rest ask first
+#
+# [[mcp.servers]]
+# name = "docs"
+# transport = "http"
+# url = "https://example.com/mcp"
+# headers = { Authorization = "Bearer ${DOCS_TOKEN}" }
+
+# [plugins]
+# enabled = []                   # Python packages (entry point group personal_agent.plugins) allowed to add tools
 
 # [net]
 # allow_private = ["homeassistant.local", "192.168.1.0/24"]   # your own network is blocked unless listed

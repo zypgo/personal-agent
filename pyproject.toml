@@ -23,6 +23,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "pyyaml>=6",
     "qrcode>=8",
+    "mcp>=2.3,<3",
+    "tomlkit>=0.13",
 ]
 
 [project.optional-dependencies]
