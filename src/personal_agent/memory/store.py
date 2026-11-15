@@ -14,6 +14,7 @@ resolves symlinks, and a version record for every change.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import shutil
 import threading
@@ -27,6 +28,7 @@ from personal_agent.config import MemoryConfig
 from personal_agent.db import Database
 from personal_agent.paths import Paths
 from personal_agent.security.redact import find_secrets, injection_hints
+from personal_agent.security.sanitize import strip_invisible
 
 ROOT = "/memories"
 PREFERENCES = "preferences"
@@ -34,6 +36,21 @@ STATE = "state"
 _WRITABLE_BY_AGENT = {PREFERENCES: False, STATE: True}
 MAX_LINES = 999_999
 
+TASKS_DIR = f"{ROOT}/{STATE}/tasks"
+FINISHED = (
+    "done",
+    "finished",
+    "complete",
+    "completed",
+    "closed",
+    "cancelled",
+    "canceled",
+    "abandoned",
+)
+"""A task whose `status:` line starts with one of these words is over; it is not listed any more."""
+_FINISHED_RE = re.compile(r"(?i)(?:" + "|".join(FINISHED) + r")\b")
+_STATUS_LINE = re.compile(r"(?im)^\s*(?:[-*>]\s*)?\**status\**\s*:\s*\**\s*(.+?)\s*$")
+_TITLE_LINE = re.compile(r"(?m)^\s*#+\s*(.+?)\s*$")
 PROPOSALS_PATH = f"{ROOT}/{STATE}/proposals.md"
 INDEX_PATH = f"{ROOT}/{STATE}/MEMORY.md"
 INSTRUCTIONS_PATH = f"{ROOT}/{PREFERENCES}/instructions.md"
@@ -649,12 +666,96 @@ class MemoryStore:
             )
         return "\n".join(kept)
 
+    def load_task_index(self) -> str:
+        """One line for each unfinished task file in state/tasks/, newest first.
+
+        Work that takes several wake-ups keeps a progress file (what is done, what is next, where
+        things are). Only this list is put in front of the model; it opens a file when it takes the
+        task up again. The list is built here, not by the model, so it is always as current as the
+        files and costs the same few lines however many tasks have ever been finished."""
+        limit = self.cfg.task_index_lines
+        directory = self._mount_dir(STATE) / "tasks"
+        if limit <= 0 or directory.is_symlink() or not directory.is_dir():
+            return ""
+        found: list[tuple[float, str]] = []
+        finished = 0
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            return ""
+        for entry in entries:
+            if (
+                entry.name.startswith(".")
+                or not entry.name.endswith(".md")
+                or entry.is_symlink()
+                or not entry.is_file()
+            ):
+                continue
+            try:
+                with open(entry.path, encoding="utf-8", errors="replace") as handle:
+                    head = handle.read(4096)
+                stamp = entry.stat().st_mtime
+            except OSError:
+                continue
+            status = _label(_STATUS_LINE.search(head), 100)
+            if _FINISHED_RE.match(status):
+                finished += 1
+                continue
+            title = _label(_TITLE_LINE.search(head), 80) or entry.name.removesuffix(".md")
+            line = f"- tasks/{entry.name}: {title}" + (f" [status: {status}]" if status else "")
+            found.append((stamp, line))
+        if not found:
+            return ""
+        found.sort(key=lambda item: (-item[0], item[1]))
+        lines = [line for _, line in found[:limit]]
+        if len(found) > limit:
+            lines.append(f"[{len(found) - limit} more unfinished tasks are in {TASKS_DIR}/]")
+        if finished:
+            lines.append(f"[{finished} finished tasks are in {TASKS_DIR}/ and not listed]")
+        return "\n".join(lines)
+
     def history(self, virtual_path: str, limit: int = 20) -> list[dict[str, Any]]:
         rows = self.db.query(
             "SELECT * FROM memory_versions WHERE path = ? ORDER BY id DESC LIMIT ?",
             (virtual_path, limit),
         )
         return [dict(r) for r in rows]
+
+    def file_count(self) -> int:
+        """How many notes the agent's own memory (state/) holds."""
+        return sum(1 for _ in self._files(self._mount_dir(STATE)))
+
+    def changes_by_run(self, run_id: str) -> list[dict[str, Any]]:
+        """Every change one run made to memory, oldest first."""
+        rows = self.db.query(
+            "SELECT * FROM memory_versions WHERE run_id = ? ORDER BY id", (run_id,)
+        )
+        return [dict(r) for r in rows]
+
+    def revert_run(self, run_id: str) -> list[str]:
+        """Undo everything one run did to memory, newest change first. Returns the paths put back.
+
+        Best effort, one change at a time: a change that cannot be undone (its old text is no
+        longer allowed, say) is skipped and left for `pa memory restore`. The undoing is itself
+        recorded, as the system."""
+        undone: list[str] = []
+        for row in reversed(self.changes_by_run(run_id)):
+            path, action, old = row["path"], row["action"], row["old_content"]
+            try:
+                if action == "create":
+                    result = self.delete(path, actor=Actor.SYSTEM)
+                elif action in ("update", "delete") and old is not None:
+                    self.write_text(path, old, actor=Actor.SYSTEM)
+                    result = ""
+                elif action == "rename" and old:
+                    result = self.rename(path, old, actor=Actor.SYSTEM)
+                else:
+                    continue
+            except (PathError, OSError):
+                continue
+            if not result.startswith("Error"):
+                undone.append(path)
+        return undone
 
     def restore(self, version_id: int, *, actor: Actor = Actor.USER) -> str:
         """Put a file back to the content it had *before* the given change."""
@@ -674,3 +775,11 @@ def _need(command: dict[str, Any], key: str) -> str:
     if value is None:
         raise PathError(f"Error: `{key}` is required for {command.get('command')}")
     return value
+
+
+def _label(match: re.Match[str] | None, limit: int) -> str:
+    """One short line of plain text out of a file the model wrote (and so is only data)."""
+    if match is None:
+        return ""
+    text = " ".join(strip_invisible(match.group(1)).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"

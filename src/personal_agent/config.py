@@ -96,6 +96,62 @@ class MemoryConfig(_Section):
     index_max_lines: int = Field(200, ge=10)
     """Only the first N lines of state/MEMORY.md are injected into every run."""
     index_max_bytes: int = Field(25_000, ge=1_000)
+    recent_messages: int = Field(5, ge=0, le=20)
+    """How many of the messages you last sent the owner a background run is shown when it starts
+    a new conversation, so that it does not tell them the same thing twice. 0 shows none."""
+    recent_message_chars: int = Field(400, ge=60, le=2_000)
+    """Each of those messages is cut to this many characters."""
+    task_index_lines: int = Field(20, ge=0, le=100)
+    """How many unfinished task files (state/tasks/) are listed at the start of every run. 0 lists
+    none; the files stay where they are and the agent can still open them."""
+
+
+class ContextConfig(_Section):
+    """Keeping a long conversation inside the model's reach (see harness/compaction.py)."""
+
+    compact: bool = True
+    """Summarise the old part of a long conversation instead of letting it slide out of view. The
+    log keeps every word either way; this only changes what the model is shown."""
+    compact_at_tokens: int = Field(40_000, ge=2_000)
+    """The conversation is summarised once what the model would be shown is estimated above this."""
+    keep_recent_tokens: int = Field(10_000, ge=500)
+    """About this much of the newest part is kept word for word (it starts at a message of yours)."""
+    model: str | None = None
+    """Writes the summary. `None` uses `model.fast`."""
+    summary_max_tokens: int = Field(3_000, ge=300, le=16_000)
+    """What the summary may use, including the model's own thinking."""
+    input_max_chars: int = Field(120_000, ge=10_000)
+    """The most of the old conversation shown to the model that writes the summary."""
+    result_chars: int = Field(600, ge=100, le=5_000)
+    """Each tool result is cut to this many characters for the summary writer (the log keeps all)."""
+    timeout_s: float = Field(120.0, gt=0)
+    retry_after_s: float = Field(3_600.0, ge=0)
+    """After a failed attempt on a conversation, wait this long before trying it again."""
+
+
+class DreamingConfig(_Section):
+    """The nightly pass over what happened (see harness/dreaming.py)."""
+
+    enabled: bool = True
+    at: str = "03:30"
+    """Local time of day (HH:MM) after which the pass runs, once a day. A computer that was asleep
+    runs it when it wakes."""
+    min_new_items: int = Field(20, ge=1)
+    """A night with less new conversation than this (items in the session logs) is skipped."""
+    max_digest_chars: int = Field(60_000, ge=5_000, le=400_000)
+    """How much of the new conversation one pass reads; what does not fit waits for the next."""
+    max_cost_usd: float = Field(0.30, gt=0)
+    """One pass above this is stopped (never more than `budget.per_run_usd`)."""
+    max_deleted_files: int = Field(10, ge=1)
+    max_deleted_share: float = Field(0.5, gt=0, le=1)
+    """A pass that deletes more notes than this, or this share of all of them, is undone entirely."""
+
+    @field_validator("at")
+    @classmethod
+    def _time_of_day(cls, value: str) -> str:
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value):
+            raise ValueError("a time of day written HH:MM, such as 03:30")
+        return value
 
 
 class RuntimeConfig(_Section):
@@ -651,6 +707,8 @@ class Config(_Section):
     agent: AgentConfig = AgentConfig()
     model: ModelConfig = ModelConfig()
     memory: MemoryConfig = MemoryConfig()
+    context: ContextConfig = ContextConfig()
+    dreaming: DreamingConfig = DreamingConfig()
     runtime: RuntimeConfig = RuntimeConfig()
     policy: PolicyConfig = PolicyConfig()
     budget: BudgetConfig = BudgetConfig()
@@ -711,6 +769,21 @@ max_files = 500
 view_max_chars = 16000
 index_max_lines = 200            # lines of memory/state/MEMORY.md injected into every run
 index_max_bytes = 25000
+recent_messages = 5              # your last messages to the owner, shown to a background run so it does not repeat itself
+recent_message_chars = 400
+task_index_lines = 20            # unfinished task files (memory/state/tasks/) listed at the start of every run
+
+[context]
+compact = true                   # summarise the old part of a long conversation instead of dropping it
+compact_at_tokens = 40000        # ... once what the model sees is estimated above this
+keep_recent_tokens = 10000       # ... keeping about this much of the newest part word for word
+# model = "gpt-6-luna"           # writes the summary; default: model.fast
+
+[dreaming]
+enabled = true                    # a nightly pass that tidies memory from what happened that day
+at = "03:30"                     # local time, once a day (a sleeping computer does it on waking)
+min_new_items = 20               # quiet days are skipped
+max_cost_usd = 0.30              # one pass is stopped above this
 
 [runtime]
 concurrency = 2                  # conversations worked on at once

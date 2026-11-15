@@ -4,7 +4,7 @@ The agent sleeps most of the time. This process does four cheap things in a loop
 
 - workers claim ready events from the inbox and run the harness (a few sessions at once, one run
   per session at a time);
-- the scheduler turns due timers into events;
+- the scheduler turns due timers into events (and, once a night, queues the memory tidy-up);
 - the dispatcher delivers outbox messages (quiet hours and rate limits are applied there);
 - housekeeping closes approvals nobody answered and writes a heartbeat.
 
@@ -29,6 +29,7 @@ from personal_agent.channels.base import Channel
 from personal_agent.core.dispatcher import Dispatcher
 from personal_agent.core.events import AddResult, NewEvent
 from personal_agent.core.worker import Worker, WorkResult
+from personal_agent.harness.dreaming import Dreamer
 
 if TYPE_CHECKING:
     from personal_agent.app import App
@@ -284,6 +285,12 @@ class Daemon:
                     if fired:
                         self.stats.timers_fired += len(fired)
                         self.wake()
+                try:
+                    if Dreamer(self.app).tick() is not None:
+                        self.wake()
+                except Exception:
+                    self.stats.errors += 1
+                    log.exception("the nightly memory pass could not be queued")
                 await self._nap(event, self.poll_s)
 
     async def _dispatch_loop(self) -> None:

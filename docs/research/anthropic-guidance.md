@@ -36,11 +36,11 @@
 
 | 原语 | Anthropic 的要点 | 本项目的落地 | 状态 |
 |------|------------------|--------------|------|
-| **事件收件箱** | 所有来源写入持久收件箱而非直接调用 agent；handler 快速确认；收件箱是事实来源；单 worker；按 ID 去重；批处理连续消息；崩溃后可重试 | `core/inbox.py`：SQLite `events` 表 + `(source, external_id)` 唯一去重 + 租约（lease）崩溃恢复 + 按会话批处理 + 毒丸事件进入 `dead` | 🚧 it1 |
-| **计时器** | 与收件箱分库；两类：follow-up（agent 自设的截止）与 schedule（周期性）；scheduler 轮询到期项→写入收件箱 | `core/timers.py`：独立 `timers` 表；croniter + 时区；错过窗口策略；到期事件用幂等键写入收件箱 | 🚧 it2 |
-| **记忆** | 目录式文件；用户指令 / 用户笔记 / 过往消息 / 任务进度四类；只加载索引；记忆只存"查不到的" | `memory/`：`preferences/`（只读）+ `state/`（读写）；`MEMORY.md` 索引按 200 行/25KB 封顶注入；任务进度文件；发件箱镜像为"过往消息" | 🚧 it1 |
-| **权限** | 凭据代理在 agent 环境之外；auto mode 分类器；延迟工具调用（run 结束 → 会话存档 → 答复作为事件 → 新 run 恢复） | `security/policy.py` 分层策略；`security/broker.py` 凭据占位符；基于 SDK `RunState` 的延迟审批 | 🚧 it2/it3 |
-| **发件箱** | run 有三种结局：发送 / 决定不发 / 延迟调用；需要时才建正式发件箱以便节奏控制与错误恢复；**默认安静，逐步赢得注意力** | `core/outbox.py` + dispatcher：送达确认、`maybe_sent` 状态、静默时段、限流；后台 run 默认不发话 | 🚧 it2 |
+| **事件收件箱** | 所有来源写入持久收件箱而非直接调用 agent；handler 快速确认；收件箱是事实来源；单 worker；按 ID 去重；批处理连续消息；崩溃后可重试 | `core/inbox.py`：SQLite `events` 表 + `(source, external_id)` 唯一去重 + 租约（lease）崩溃恢复 + 按会话批处理 + 毒丸事件进入 `dead` | ✅ |
+| **计时器** | 与收件箱分库；两类：follow-up（agent 自设的截止）与 schedule（周期性）；scheduler 轮询到期项→写入收件箱 | `core/timers.py`：独立 `timers` 表；croniter + 时区；错过窗口策略；到期事件用幂等键写入收件箱 | ✅ |
+| **记忆** | 目录式文件；用户指令 / 用户笔记 / 过往消息 / 任务进度四类；只加载索引；记忆只存"查不到的" | `memory/`：`preferences/`（agent 只读，每次 run 重新读取）+ `state/`（读写）；`MEMORY.md` 索引按行数/字节封顶注入；**任务进度**：`state/tasks/<名>.md`，上下文里只有代码生成的"一行一条"未完成任务索引（`load_task_index`）；**过往消息**：最近 N 条已确认送达的消息（`<recently_sent>`），只给没有对话可回看的后台 run；**新对话**：每次定时器/webhook/系统事件新开一个会话（`starts_new_session`） | ✅ |
+| **权限** | 凭据代理在 agent 环境之外；auto mode 分类器；延迟工具调用（run 结束 → 会话存档 → 答复作为事件 → 新 run 恢复） | `security/policy.py` 分层策略；`security/broker.py` 凭据占位符；基于 SDK `RunState` 的延迟审批 | ✅ |
+| **发件箱** | run 有三种结局：发送 / 决定不发 / 延迟调用；需要时才建正式发件箱以便节奏控制与错误恢复；**默认安静，逐步赢得注意力** | `core/outbox.py` + dispatcher：送达确认、`maybe_sent` 状态、静默时段、限流；后台 run 默认不发话 | ✅ |
 
 ### 3.2 无人值守运行的六条规则（来源 B）
 
@@ -59,15 +59,26 @@
 
 | 结论 | 落地 |
 |------|------|
-| 顶层注入层必须小（Claude Code 只加载 `MEMORY.md` 前 200 行 / 25KB） | 注入前强制截断；超限时提示"做梦"整理 |
-| 做梦 = 离线回看日志纠错、建 wiki/索引、晋升或降级笔记 | `memory/dreaming.py`：夜间 system timer；以会话转录为"地面真相"校验笔记 |
-| 做梦的修改要可审计 | `memory_versions` 表记录每次写入（actor=agent/user/dream），支持回滚 |
-| wiki 与搜索结合优于单独使用；也可以只用转录检索 | `search_history`：FTS5 检索会话与记忆；向量检索为可选项 |
+| 顶层注入层必须小（Claude Code 只加载 `MEMORY.md` 前 200 行 / 25KB） | 注入前强制截断（`load_index`；任务索引同理，已完成的只计数不列出）；超限时提示整理 |
+| 做梦 = 离线回看日志纠错、建 wiki/索引、晋升或降级笔记 | `harness/dreaming.py`：调度循环每天（默认 03:30，睡过了就补）排一个 system 事件；**代码**从原始日志（不受压缩与 `/new` 影响）确定性地生成摘要并维护游标；画像只有 `memory` 与 `search_history`；花费封顶、偏好只读；删得太多整次撤销、连续三晚失败暂停。注意：这是模型对记录的判断，护栏是"权限收窄 + 可撤销"，不是对笔记正确性的证明 |
+| 做梦的修改要可审计 | `memory_versions` 表记录每次写入（actor=agent/user/dream/system，带 run 编号）；`pa dream log` 按 run 列出改动，`pa memory restore` 撤销单次改动，复核失败时 `revert_run` 整次撤销 |
+| wiki 与搜索结合优于单独使用；也可以只用转录检索 | `search_history`：对完整对话记录（只含消息，不含工具结果）做 FTS5 trigram 检索，`around` 可看前后文；记忆文件用 `memory` 工具读写。向量检索没有做 |
 | 偏好变更由 agent **提议**，用户确认 | `proposals.md` + `pa prefs proposals accept` |
+
+### 3.3b 长对话：压缩与新对话（来源 A、G）
+
+文章的立场：压缩和开新对话都会丢细节，所以**重要的事要在记忆里**，上下文保持精简；接着前面的事做的事件恢复原会话，其余一律新开。
+
+| 要点 | 落地 |
+|------|------|
+| 续做的事件恢复会话，其余新开一个 | `Harness.starts_new_session`：主人的消息/审批答复继续；`timer:`/`webhook:`/`system:` 自己的会话新开（追加 `clear` 标记，不删日志）；重试、挂起审批中的会话不清 |
+| 新对话仍要知道"主人已经听过什么" | `<recently_sent>`：最近已送达的消息（每条截短、去隐藏字符、不能闭合围栏） |
+| 长对话压缩 | `harness/compaction.py`：追加标记 + 摘要（第一人称笔记，围进 `<conversation_summary>`）；切点在用户消息处；坏摘要不进去；失败不让 run 失败；花费记在当前 run |
+| 压缩前先存记忆 | **没有做"压缩前强制存一次"**：做梦每晚读原始日志，原文不删；所以不依赖这一步 |
 
 ### 3.4 Harness 解耦（来源 D）
 
-- **Session（追加式日志）**：`session_events` 表只追加；压缩是投影而非删除（做梦需要原始转录）。✅ 设计 / 🚧 it1
+- **Session（追加式日志）**：`session_events` 表只追加；压缩与 `/new` 都只是追加一条标记（模型看到的是投影），原文留在日志里——做梦与 `search_history` 读的正是原文。✅
 - **Harness（大脑，无状态）**：`harness/` 每次 run 从日志重建上下文；崩溃后由 worker 租约过期重试，对应 `wake(sessionId)`。
 - **Sandbox（双手，可抛弃）**：`security/sandbox.py` 暴露 `execute(command) -> ExecResult`；seatbelt / docker 两种后端，失败只是工具错误，由模型决定是否重试。
 

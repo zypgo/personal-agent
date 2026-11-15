@@ -10,15 +10,53 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+
+def _transcript_search_index(conn: sqlite3.Connection) -> None:
+    """A full-text index over what the owner and the agent said (`Transcript.search`).
+
+    Trigram tokenizer: any word of three or more characters is found as a part of a longer one,
+    and Chinese, Japanese and Korean text, which has no spaces to split on, works the same way.
+    Words shorter than that are looked up by scanning instead.
+
+    Skipped, not failed, when this SQLite was built without FTS5 or without that tokenizer: the
+    search scans the table then, which is slower and unranked but finds the same messages. The
+    triggers keep the index in step with the table, and an index added later is filled from it."""
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE transcript_fts USING fts5("
+            "text, content='transcript', content_rowid='id', tokenize='trigram')"
+        )
+    except sqlite3.OperationalError:
+        return
+    conn.execute(
+        """CREATE TRIGGER transcript_fts_insert AFTER INSERT ON transcript BEGIN
+             INSERT INTO transcript_fts(rowid, text) VALUES (new.id, new.text);
+           END"""
+    )
+    conn.execute(
+        """CREATE TRIGGER transcript_fts_delete AFTER DELETE ON transcript BEGIN
+             INSERT INTO transcript_fts(transcript_fts, rowid, text) VALUES ('delete', old.id, old.text);
+           END"""
+    )
+    conn.execute(
+        """CREATE TRIGGER transcript_fts_update AFTER UPDATE OF text ON transcript BEGIN
+             INSERT INTO transcript_fts(transcript_fts, rowid, text) VALUES ('delete', old.id, old.text);
+             INSERT INTO transcript_fts(rowid, text) VALUES (new.id, new.text);
+           END"""
+    )
+    conn.execute("INSERT INTO transcript_fts(transcript_fts) VALUES ('rebuild')")
+
+
 # --------------------------------------------------------------------------------------
-# Migrations. Append only; never edit a released migration.
+# Migrations. Append only; never edit a released migration. A step is a SQL script, or a function
+# for the rare change that has to look at what this SQLite can do before it acts.
 # --------------------------------------------------------------------------------------
-MIGRATIONS: list[str] = [
+MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     # ---- 1: iteration 1 kernel ----------------------------------------------------------
     """
     -- Event inbox: everything that can wake the agent lands here first.
@@ -289,6 +327,8 @@ MIGRATIONS: list[str] = [
         revoked_at    REAL
     );
     """,
+    # ---- 6: iteration 5, searching what was said --------------------------------------------
+    _transcript_search_index,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -412,9 +452,15 @@ class Database:
                 # executescript() runs in autocommit mode here; wrap it in one transaction so a
                 # failed migration leaves the database untouched.
                 try:
-                    self._conn.executescript(
-                        f"BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version = {number};\nCOMMIT;"
-                    )
+                    if callable(script):
+                        self._conn.execute("BEGIN IMMEDIATE")
+                        script(self._conn)
+                        self._conn.execute(f"PRAGMA user_version = {number}")
+                        self._conn.execute("COMMIT")
+                    else:
+                        self._conn.executescript(
+                            f"BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version = {number};\nCOMMIT;"
+                        )
                 except BaseException:
                     if self._conn.in_transaction:
                         self._conn.execute("ROLLBACK")

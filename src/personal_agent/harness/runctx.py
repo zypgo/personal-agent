@@ -55,6 +55,8 @@ class RunContext:
     queued_messages: list[int] = field(default_factory=list)
     owner_request: str = ""
     """What the owner last asked (trusted text), shown to the reviewer in `auto` mode."""
+    cost_cap_usd: float | None = None
+    """A lower spending limit than `budget.per_run_usd` for work that should stay cheap."""
     decisions: dict[str, Decision] = field(default_factory=dict)
     """Policy decisions by tool call id, so a call is judged once."""
     known_urls: dict[str, None] = field(default_factory=dict)

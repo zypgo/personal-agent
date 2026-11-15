@@ -1,4 +1,4 @@
-"""Built-in tools: `memory`, `send_message`, `schedule`, the file tools, `shell` and the web tools."""
+"""Built-in tools: `memory`, `send_message`, `schedule`, `search_history`, the file tools, `shell` and the web tools."""
 
 from __future__ import annotations
 
@@ -29,7 +29,9 @@ from personal_agent.tools.base import (
 MEMORY_DESCRIPTION = """\
 Your persistent memory: a small file system under /memories that survives between conversations \
 and restarts.
-- /memories/state/ is yours. Read and write notes, task lists, ledgers and the index file MEMORY.md.
+- /memories/state/ is yours. Read and write notes, ledgers and the index file MEMORY.md. Work that \
+takes several wake-ups gets a progress file, /memories/state/tasks/<name>.md, whose first lines are \
+"# Title" and "status: in progress" (or waiting / blocked / done).
 - /memories/preferences/ belongs to the owner and is read-only. To suggest a change to it, append \
 the suggestion to /memories/state/proposals.md.
 Commands:
@@ -291,6 +293,7 @@ def _schedule_category(_rc: RunContext, args: dict[str, Any]) -> Category:
 def register_builtin(registry: ToolRegistry, config: Config | None = None) -> None:
     """The tools every agent has. `config.tools` switches the optional families on and off."""
     from personal_agent.tools.files import register_files
+    from personal_agent.tools.history import register_history
     from personal_agent.tools.shell import register_shell
     from personal_agent.tools.skills import register_skills
     from personal_agent.tools.web import register_web
@@ -330,6 +333,7 @@ def register_builtin(registry: ToolRegistry, config: Config | None = None) -> No
             ),
         )
     )
+    register_history(registry)
     register_skills(registry)  # offered only when skills are installed
     if switches.files:
         register_files(registry)

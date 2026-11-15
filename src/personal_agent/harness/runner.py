@@ -31,12 +31,15 @@ from personal_agent.core.approvals import (
 from personal_agent.core.budget import BudgetExceeded
 from personal_agent.core.events import Batch, Event, Kind, Trust
 from personal_agent.core.sessions import SdkSession
+from personal_agent.harness.compaction import Compactor
+from personal_agent.harness.dreaming import Dreamer
 from personal_agent.harness.errors import PreferencesProblem, RunTimedOut, classify
 from personal_agent.harness.instructions import (
     build_instructions,
     context_block,
     describe_trigger,
     event_to_item,
+    recent_messages_block,
 )
 from personal_agent.harness.models import cache_key_for, model_settings, shares_prompt_cache
 from personal_agent.harness.pricing import cost_usd
@@ -85,7 +88,8 @@ class RunAccounting(RunHooks[RunContext]):
     async def on_llm_start(
         self, context: RunContextWrapper[RunContext], agent, system_prompt, input_items
     ) -> None:
-        self.app.budget.check_run(context.context.run_id)  # raises BudgetExceeded
+        ctx = context.context
+        self.app.budget.check_run(ctx.run_id, ctx.cost_cap_usd)  # raises BudgetExceeded
 
     async def on_llm_end(self, context: RunContextWrapper[RunContext], agent, response) -> None:
         usage = response.usage
@@ -148,6 +152,24 @@ class Harness:
                 return "dream"
             return "scheduled"
         return "full"
+
+    OWN_SESSION_PREFIXES = ("timer:", "webhook:", "system:")
+    """Session keys that belong to one source of wake-ups (`timer:NAME`, `webhook:ROUTE`,
+    `system:NAME`), as opposed to a conversation's own key such as `main`."""
+
+    @classmethod
+    def starts_new_session(cls, batch: Batch) -> bool:
+        """Whether this wake-up begins a conversation of its own.
+
+        Events that continue earlier work resume the session they belong to: the owner writing, an
+        answer to a request for approval, a timer the agent set for "here". Everything else starts
+        a new one: yesterday's brief is not context for today's, and a schedule that fires every
+        morning must not pile a year of mornings into one conversation. What a wake-up needs from
+        before comes from memory (and from what the owner was last told), never from the leftovers
+        of a conversation nobody is part of."""
+        if any(e.kind in (Kind.MESSAGE, Kind.APPROVAL_RESPONSE) for e in batch.events):
+            return False
+        return batch.session_key.startswith(cls.OWN_SESSION_PREFIXES)
 
     def origin_for(self, batch: Batch) -> Origin:
         for event in reversed(batch.events):
@@ -230,7 +252,12 @@ class Harness:
             owner_request=self.owner_request_for(batch),
         )
         ctx.know_urls(self.owner_urls_for(batch))
-        return await self._settle(ctx, self._execute(batch, ctx, model_name))
+        if profile == "dream":
+            ctx.cost_cap_usd = app.config.dreaming.max_cost_usd
+        outcome = await self._settle(ctx, self._execute(batch, ctx, model_name))
+        if profile == "dream":
+            Dreamer(app).finished(batch, outcome)
+        return outcome
 
     async def _settle(self, ctx: RunContext, work, *, resuming: bool = False) -> RunOutcome:
         """Await `work` and make sure the run record ends up truthful whatever happens."""
@@ -268,6 +295,7 @@ class Harness:
             prefs=prefs,
             index=app.memory.load_index(),
             skills=self._skills_block(profile),
+            tasks=app.memory.load_task_index(),
         )
 
     async def _prepare_plugins(self) -> None:
@@ -345,6 +373,22 @@ class Harness:
             key, run_id=run_id, skip=app.approvals.suspended_call_ids(key)
         )
 
+        # A wake-up that stands on its own starts a new conversation. Only on the first attempt:
+        # a retry after a crash finds some of its events already in the log and must resume that
+        # work, not hide it. A conversation waiting for the owner's approval is left alone too.
+        fresh = [e for e in batch.events if not app.sessions.has_event(key, e.id)]
+        if (
+            len(fresh) == len(batch.events)
+            and self.starts_new_session(batch)
+            and not app.approvals.suspended_call_ids(key)
+            and not app.sessions.is_blank(key)
+        ):
+            app.sessions.clear(key)
+        elif len(fresh) == len(batch.events):
+            # A conversation that carries on and has grown long is summarised before the new
+            # words are added, so that the summary never covers them.
+            await Compactor(app).compact(key, run_id)
+
         # Persist the triggering events first (idempotently), then run on the log alone. A retry
         # after a crash therefore resumes instead of duplicating the owner's message.
         context = context_block(
@@ -353,8 +397,8 @@ class Harness:
             trigger=describe_trigger(batch.events),
             session_key=key,
             notes=[*self._outbox_notes(), *app.mcp.notes()],
+            recent=self._recently_sent(batch),
         )
-        fresh = [e for e in batch.events if not app.sessions.has_event(key, e.id)]
         if fresh:
             for position, event in enumerate(fresh):
                 item = event_to_item(
@@ -538,18 +582,24 @@ class Harness:
         return RunOutcome(ctx.run_id, status, final_text, queued)
 
     def _stop(self, ctx: RunContext, *, text: str, key: str, error: str) -> RunOutcome:
-        """End a run that was stopped on purpose: tell the owner, record why."""
+        """End a run that was stopped on purpose: tell the owner, record why. The nightly memory
+        pass is the exception: it is not the owner's task, `Dreamer` counts its failures and says
+        so once if they keep coming."""
         app = self.app
         app.approvals.drop_run(ctx.run_id)
-        message_id = app.outbox.enqueue(
-            session_key=ctx.session_key,
-            channel=ctx.origin.channel,
-            recipient=ctx.origin.recipient,
-            text=text,
-            kind="notice",
-            run_id=ctx.run_id,
-            dedupe_key=f"run:{ctx.run_id}:{key}",
-            extra={"interactive": ctx.origin.interactive},
+        message_id = (
+            None
+            if ctx.profile == "dream"
+            else app.outbox.enqueue(
+                session_key=ctx.session_key,
+                channel=ctx.origin.channel,
+                recipient=ctx.origin.recipient,
+                text=text,
+                kind="notice",
+                run_id=ctx.run_id,
+                dedupe_key=f"run:{ctx.run_id}:{key}",
+                extra={"interactive": ctx.origin.interactive},
+            )
         )
         app.runs.finish(ctx.run_id, "failed", error=error)
         return RunOutcome(
@@ -582,6 +632,23 @@ class Harness:
             ),
             key="run-budget",
             error=f"run budget reached (${exc.spent:.2f} of ${exc.limit:.2f})",
+        )
+
+    def _recently_sent(self, batch: Batch) -> list[str]:
+        """What the owner was last told, for a background run that has no conversation behind it.
+
+        A conversation with the owner already has its own history, and they would not expect it to
+        be recited. A background run that starts from nothing could otherwise report the same news
+        every time it wakes up."""
+        cfg = self.app.config.memory
+        if any(e.kind == Kind.MESSAGE for e in batch.events):
+            return []
+        if not self.app.sessions.is_blank(batch.session_key):
+            return []
+        return recent_messages_block(
+            self.app.transcript.recent_messages(cfg.recent_messages),
+            self.app.tz,
+            cfg.recent_message_chars,
         )
 
     def _outbox_notes(self) -> list[str]:

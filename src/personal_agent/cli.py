@@ -24,6 +24,7 @@ from personal_agent.channels.cli import CliChannel
 from personal_agent.channels.registry import build_channels
 from personal_agent.clock import format_local
 from personal_agent.commands import channels as channels_commands
+from personal_agent.commands import dream as dream_commands
 from personal_agent.commands import mcp as mcp_commands
 from personal_agent.commands import plugins as plugins_commands
 from personal_agent.commands import skills as skills_commands
@@ -107,6 +108,7 @@ app.add_typer(mcp_commands.build(lambda: _open(), console), name="mcp")
 app.add_typer(plugins_commands.build(lambda: _open(), console), name="plugins")
 app.add_typer(channels_commands.build(lambda: _open(), console), name="channels")
 app.add_typer(web_commands.build(lambda: _open(), console), name="web")
+app.add_typer(dream_commands.build(lambda: _open(), console), name="dream")
 app.add_typer(webhooks_commands.build(lambda: _open(), console), name="webhooks")
 
 

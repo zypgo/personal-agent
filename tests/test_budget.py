@@ -70,6 +70,24 @@ def test_a_run_over_its_cap_raises_with_the_run_scope(guard):
     assert caught.value.scope == "run" and caught.value.limit == 1.0
 
 
+def test_a_tighter_cap_for_one_run_applies_before_the_general_one(guard):
+    runs, budget = guard
+    run_id = spend(runs, "main", 0.4)
+    budget.check_run(run_id)  # under the general $1.00
+    budget.check_run(run_id, 0.5)
+    with pytest.raises(BudgetExceeded) as caught:
+        budget.check_run(run_id, 0.3)
+    assert caught.value.scope == "run" and caught.value.limit == 0.3
+
+
+def test_a_cap_for_one_run_cannot_lift_the_general_one(guard):
+    runs, budget = guard
+    run_id = spend(runs, "main", 1.0)
+    with pytest.raises(BudgetExceeded) as caught:
+        budget.check_run(run_id, 50.0)
+    assert caught.value.limit == 1.0
+
+
 def test_the_day_cap_counts_every_session_and_says_when_it_resets(guard):
     runs, budget = guard
     spend(runs, "a", 2.5)

@@ -45,3 +45,13 @@ def strip_invisible(text: str, *, formatting: bool = False) -> str:
 def hides_text(text: str) -> bool:
     """Whether `text` contains anything `strip_invisible(text, formatting=True)` would remove."""
     return strip_invisible(text, formatting=True) != text.replace("\r\n", "\n")
+
+
+def fenced(tag: str, text: str) -> str:
+    """`text` between <tag> lines, with nothing inside able to close the fence early.
+
+    Used for notes the agent wrote itself (memory index, task files, a summary of its own
+    conversation): they are data, and some of them were written after reading a web page, so they
+    must not be able to step out of the block and speak as the prompt."""
+    safe = re.sub(rf"(?i)</\s*{tag}", f"</ {tag}", text)
+    return f"<{tag}>\n{safe}\n</{tag}>"

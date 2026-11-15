@@ -212,6 +212,7 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
         "memory",
         "read_file",
         "schedule",
+        "search_history",
         "send_message",
         "web_fetch",
         "web_search",

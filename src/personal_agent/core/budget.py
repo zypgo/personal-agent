@@ -106,8 +106,11 @@ class BudgetGuard:
         if spent >= limit:
             raise BudgetExceeded("daily", spent, limit, self.resets_in())
 
-    def check_run(self, run_id: str) -> None:
+    def check_run(self, run_id: str, limit: float | None = None) -> None:
+        """Raise if this run has used up its allowance: `limit` (a smaller one for work that
+        should stay cheap) or the configured per-run cap, whichever is lower."""
+        cap = self.cfg.per_run_usd if limit is None else min(limit, self.cfg.per_run_usd)
         run = self.runs.get(run_id)
-        if run is not None and run.cost_usd >= self.cfg.per_run_usd:
-            raise BudgetExceeded("run", run.cost_usd, self.cfg.per_run_usd)
+        if run is not None and run.cost_usd >= cap:
+            raise BudgetExceeded("run", run.cost_usd, cap)
         self.check_day()

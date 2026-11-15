@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from personal_agent.core.events import Batch, Event, Kind, Trust
+from personal_agent.harness.dreaming import Dreamer, is_dream
 from personal_agent.harness.errors import Failure, classify
 from personal_agent.harness.runner import Harness, RunOutcome
 
@@ -166,6 +167,8 @@ class Worker:
                     dedupe=f"dead:{event.id}",
                     interactive=True,
                 )
+            elif is_dream(event):
+                Dreamer(app).gave_up()  # tidying memory is not worth a message until it goes on
             else:
                 self._notice(
                     channel=app.notify_channel(),

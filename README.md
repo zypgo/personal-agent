@@ -21,7 +21,7 @@
 | 3b | 可插拔：MCP（定义先审阅再启用）、Agent Skills（渐进披露）、Python 插件注册表、外部文字清洗 | ✅ |
 | 4a | 渠道基础与 Telegram：配对（只能在本机批准）、对话历史、聊天内命令与审批按钮、语音转文字、图片、实时事件 | ✅ |
 | 4b | Web 页面（PWA，手机可用）、Webhook（签名校验）、插件提供的渠道、真实模型验证套件 | ✅ |
-| 5 | 记忆智能：做梦、检索、压缩、子代理 | 🚧 |
+| 5 | 对着 Anthropic 的 always-on 文章补齐记忆：每次唤醒一段新对话（带着任务进度索引与"已经告诉过你什么"）、压缩、`search_history`、每夜"做梦"整理记忆（可撤销、有花费上限） | ✅ |
 | 6 | 评测、launchd 常驻服务、加固 | 🚧 |
 
 ## 快速开始
@@ -112,6 +112,17 @@ BODY='{"event":"deploy","status":"failed"}'; TS=$(date +%s)
 SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
 curl -X POST http://127.0.0.1:8766/hook/ROUTE -H "X-Webhook-Timestamp: $TS" \
      -H "X-Webhook-Signature: sha256=$SIG" -d "$BODY"
+```
+
+它怎么"记事"（按 Anthropic 的 always-on 文章）：agent 大部分时间在睡觉，每次醒来是一段**新的对话**——定时任务和 webhook 不会把一年的早晨堆进同一个上下文。它带着的东西来自文件：你的偏好、记忆索引、每个跨好几次唤醒的任务一份**进度文件**（只把"未完成任务"的一行索引放进上下文）、以及最近**已经发给你的消息**（免得每天早上把同一件事再说一遍）。对话太长时先压缩成摘要；更早说过的话用 `search_history` 查（原文永远在日志里）。每天夜里（默认 03:30，电脑睡着就醒来补）有一次"做梦"：回看新的对话记录，整理记忆、改正过时的笔记，只在有至少 20 条新记录时才跑，花费封顶 $0.30，不给它发消息、联网、动文件的权力，也不让它改你的偏好；删得太多会被整次撤销。
+
+```bash
+uv run pa dream                        # 开没开、几点、等着多少条新记录、上次做了什么
+uv run pa dream log                    # 最近几次：它说了什么、改了哪些笔记
+uv run pa dream run --dry-run          # 只打印它会读到的内容，不调用模型
+uv run pa dream run                    # 现在就做一次
+uv run pa memory history /memories/state/MEMORY.md   # 谁、何时改了这个文件
+uv run pa memory restore 42            # 把某次改动撤销（版本号来自 history 或 dream log）
 ```
 
 想先试用而不动你的主目录：`PA_HOME=./.pa-home uv run pa init`（`.pa-home/` 已被 git 忽略）。

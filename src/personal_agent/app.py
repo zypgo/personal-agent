@@ -28,6 +28,7 @@ from personal_agent.core.sessions import SessionStore
 from personal_agent.core.timers import Timers
 from personal_agent.core.transcript import Transcript
 from personal_agent.db import Database, open_database
+from personal_agent.harness.compaction import LLMSummarizer, Summarizer
 from personal_agent.harness.models import ModelFactory, OpenAIModels
 from personal_agent.memory.store import MemoryStore
 from personal_agent.memory.templates import bootstrap
@@ -68,6 +69,7 @@ class App:
     policy: Policy
     budget: BudgetGuard
     guardian: Guardian
+    summarizer: Summarizer
     sandbox: SandboxProvider
     net: NetPolicy
     secrets: SecretBroker
@@ -210,6 +212,7 @@ def build_app(
         policy=Policy(cfg.policy),
         budget=BudgetGuard(runs, database, cfg.budget, clock=clock, tz=tz),
         guardian=LLMGuardian(factory, cfg.model),
+        summarizer=LLMSummarizer(factory, cfg.model, cfg.context),
         sandbox=sandbox or SandboxProvider(paths, cfg.sandbox),
         net=NetPolicy.from_config(cfg.net),
         secrets=SecretBroker(cfg.secrets, os.environ),

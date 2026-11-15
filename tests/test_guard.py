@@ -78,7 +78,9 @@ async def test_a_tool_denied_on_every_call_is_not_even_offered(make_app):
     install(app, Spy())
     await ask(app)
     assert tool_names(model) == (
-        {"memory", "send_message", "schedule", "fetch", "leaky"} | FILE_TOOLS | WEB_TOOLS
+        {"memory", "send_message", "schedule", "search_history", "fetch", "leaky"}
+        | FILE_TOOLS
+        | WEB_TOOLS
     )
 
 
@@ -90,8 +92,8 @@ async def test_read_only_mode_hides_everything_that_changes_the_world(make_app):
     # `schedule` and the web tools stay: a one-off reminder and a plain GET are harmless, the
     # variants that change something are refused per call.
     assert tool_names(model) == {
-        "memory", "send_message", "schedule", "fetch", "leaky", "list_files", "read_file",
-        "web_fetch", "http_request", "web_search",
+        "memory", "send_message", "schedule", "search_history", "fetch", "leaky", "list_files",
+        "read_file", "web_fetch", "http_request", "web_search",
     }  # fmt: skip
 
 
