@@ -940,6 +940,7 @@ name = "personal-agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "croniter" },
     { name = "httpx" },
     { name = "openai" },
@@ -970,6 +971,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.1" },
     { name = "croniter", specifier = ">=6" },
     { name = "docker", marker = "extra == 'docker'", specifier = ">=6.1" },
     { name = "httpx", specifier = ">=0.28" },

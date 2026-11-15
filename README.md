@@ -15,18 +15,34 @@
 | 迭代 | 内容 | 状态 |
 |------|------|------|
 | 0 | 调研（Anthropic 指南 + 9 个同类开源项目）、架构设计、脚手架、origin 仓库 | ✅ |
-| 1 | 内核：SQLite 收件箱 / 会话日志 / 发件箱 / 记忆 + Harness + CLI 对话 | 🚧 |
+| 1 | 内核：SQLite 收件箱 / 会话日志 / 发件箱 / 记忆 + Harness + CLI 对话 | ✅ |
 | 2 | 常驻循环：worker / scheduler / dispatcher、策略引擎、延迟审批、预算 | 🚧 |
 | 3 | 可插拔：MCP、Skills、沙箱、密钥代理、内置工具 | 🚧 |
 | 4 | 渠道与多模态：Web PWA（手机可用）、Telegram、Webhook、语音/图像 | 🚧 |
 | 5 | 记忆智能：做梦、检索、压缩、子代理 | 🚧 |
 | 6 | 评测、launchd 常驻服务、加固 | 🚧 |
 
+## 快速开始
+
+```bash
+uv sync --all-extras
+uv run pa init                # 创建 ~/.personal-agent（配置、数据库、记忆模板、空的 .env）
+# 用编辑器把 OPENAI_API_KEY=sk-... 填进 ~/.personal-agent/.env（不要贴进聊天）
+uv run pa doctor              # 检查环境；加 --live 会做两次真实调用（几美分）
+uv run pa chat                # 对话；/help 查看命令，Ctrl-D 退出
+uv run pa ask "你好"           # 单次提问
+uv run pa prefs edit          # 写下你的长期规则；agent 每次运行都会重新读取，且无权修改
+uv run pa status              # 队列、运行记录、花费
+```
+
+想先试用而不动你的主目录：`PA_HOME=./.pa-home uv run pa init`（`.pa-home/` 已被 git 忽略）。
+
 ## 开发环境
 
 ```bash
 uv sync --all-extras          # Python 3.13 + 全部依赖
-uv run pytest                 # 测试（不需要 API key）
+uv run pytest                 # 测试（不需要 API key，模型由脚本化的 ScriptedModel 代替）
+uv run ruff check src tests && uv run ruff format --check src tests
 uv run pa --version
 scripts/fetch_references.sh   # 重新拉取只读参考项目到 references/
 ```

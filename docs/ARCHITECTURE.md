@@ -74,42 +74,56 @@ flowchart LR
 
 ## 模块布局
 
+下面是目标布局；已经落地的见文末「实现状态」，迭代 1 已实现的文件在行尾标 ✅。
+
 ```
 src/personal_agent/
-  config.py        TOML 配置 + 环境变量；密钥只来自环境/.env/钥匙串
-  paths.py         PA_HOME 目录布局与权限（0700）
-  db.py            SQLite（WAL、busy_timeout、迁移）
+  app.py           ✅ 容器：把所有长寿命组件装配在一起（build_app）
+  config.py        ✅ TOML 配置 + 环境变量；密钥只来自环境/.env
+  paths.py         ✅ PA_HOME 目录布局与权限（0700）
+  clock.py         ✅ 时钟抽象（测试可手动拨时间）与时区
+  db.py            ✅ SQLite（WAL、事务、迁移）
+  logs.py          ✅ 私有滚动日志，输出前脱敏
+  doctor.py        ✅ `pa doctor`：静态检查 + `--live` 真实调用
   core/
-    events.py      事件模型与信任等级（owner / untrusted）
-    inbox.py       收件箱：去重、租约、批处理、毒丸
-    sessions.py    追加式会话日志；SDK Session 适配
+    events.py      ✅ 事件模型与信任等级（owner / untrusted）
+    inbox.py       ✅ 收件箱：去重、租约、批处理、毒丸
+    sessions.py    ✅ 追加式会话日志；SDK Session 适配
     timers.py      follow-up 与 schedule；错过策略
-    outbox.py      发件箱；on_sent 提交；maybe_sent
-    runs.py        run 记录、用量、状态机
-    worker.py      领取批次并驱动 harness
-    dispatcher.py  投递、静默时段、限流、重试
+    outbox.py      ✅ 发件箱；on_sent 提交；maybe_sent
+    runs.py        ✅ run 记录、用量、状态机
+    worker.py      ✅ 领取批次、续租、失败归因（迭代 2 加并发循环）
+    dispatcher.py  ✅ 投递与重试（迭代 2 加静默时段、限流）
   harness/
-    runner.py      Agents SDK 封装：装配、流式、挂起/恢复、预算、超时
-    context.py     系统提示 + 动态上下文块；上下文裁剪（tool-result clearing）
-    prompts/       运行协议与角色提示
+    runner.py      ✅ Agents SDK 封装：偏好 fresh 读取、幂等落盘事件、实时记账、静默/投递规则
+                      （迭代 2 加挂起/恢复、预算）
+    instructions.py ✅ 系统指令 + 每次唤醒的上下文块；事件 → 会话条目（不可信内容围栏）
+    prompts/       ✅ 运行协议与角色提示（system.md、profile_*.md）
+    models.py      ✅ 模型端点工厂、重试策略、隐私默认（store=false + 加密推理回放）
+    pricing.py     ✅ 价格表与成本（含长上下文加价）
+    errors.py      ✅ 失败归因：环境问题不消耗事件的重试次数
+    runctx.py      ✅ 每次 run 传给工具的上下文
     compaction.py  会话压缩（投影，不删日志）
   memory/
-    store.py       VirtualFS：/memories 挂载、路径防护、大小上限、版本
-    tool.py        `memory` 工具（view/create/str_replace/insert/delete/rename）
+    store.py       ✅ VirtualFS：/memories 挂载、路径防护、大小上限、版本
+    templates.py   ✅ 首次启动的记忆模板
     search.py      FTS5（+可选向量）检索
     dreaming.py    夜间整理
   security/
+    redact.py      ✅ 密钥与敏感信息脱敏、注入线索
     policy.py      分层策略引擎 + guardian
     sandbox.py     seatbelt / docker 后端
     broker.py      密钥占位符与出站代理
     ssrf.py        URL/IP 校验
-    redact.py      密钥与敏感信息脱敏
     audit.py       审计日志
-  tools/           内置工具（files、shell、web_fetch、web_search、http_request、schedule、send_message、search_history、skills）
+  tools/
+    base.py        ✅ 工具类别、运行画像、注册表
+    builtin.py     ✅ `memory`（view/create/str_replace/insert/delete/rename）与 `send_message`
+    …              files、shell、web_fetch、web_search、http_request、schedule、search_history、skills
   plugins/         MCP 装载、Skills 装载、渠道/工具注册（entry points）
-  channels/        cli、web（FastAPI + PWA）、telegram、webhook
+  channels/        ✅ base（Channel 协议）、cli；web（Starlette + PWA）、telegram、webhook
   daemon.py        组装并运行 worker / scheduler / dispatcher / 渠道
-  cli.py           `pa` 命令
+  cli.py           ✅ `pa` 命令：init / doctor / chat / ask / status / runs / run / sessions / outbox / memory / prefs
   evals/           场景评测框架
 ```
 
@@ -210,8 +224,8 @@ logs/ run/           日志、锁文件
 | 依赖 | 用途 | 备注 |
 |------|------|------|
 | `openai-agents` (~=0.24) | agent loop、MCP、Session、RunState | 传递依赖 `openai`、`mcp`、`pydantic`、`httpx` |
-| `fastapi` + `uvicorn` | Web 渠道 | SSE 用 `StreamingResponse`，不加 `sse-starlette` |
-| `typer`（含 rich） | CLI | |
+| `starlette` + `uvicorn` | Web 渠道 | Starlette 本来就是 SDK 的传递依赖，不再多引入 FastAPI；SSE 用 `StreamingResponse` |
+| `typer`（含 rich）、`click` | CLI | |
 | `croniter` | cron 表达式 | |
 | `python-dotenv` | `.env` | |
 | `pyyaml` | Skills frontmatter | |
@@ -224,13 +238,37 @@ logs/ run/           日志、锁文件
 | 能力 | 状态 |
 |------|------|
 | 调研文档、参考克隆、架构设计 | ✅ 迭代 0 |
-| 配置 / 目录 / SQLite / 迁移 | 🚧 迭代 1 |
-| 收件箱 / 会话日志 / 发件箱 / runs | 🚧 迭代 1 |
-| 记忆（VirtualFS + memory 工具 + 版本） | 🚧 迭代 1 |
-| Harness（SDK 封装）+ CLI 对话 + Fake-LLM 测试 | 🚧 迭代 1 |
+| 配置 / 目录 / SQLite / 迁移 | ✅ 迭代 1 |
+| 收件箱 / 会话日志 / 发件箱 / runs | ✅ 迭代 1 |
+| 记忆（VirtualFS + memory 工具 + 版本） | ✅ 迭代 1 |
+| Harness（SDK 封装）+ CLI 对话 + Fake-LLM 测试 | ✅ 迭代 1 |
 | Worker / Scheduler / Dispatcher / 预算 | 🚧 迭代 2 |
 | 策略引擎 + 延迟审批 + 审计 | 🚧 迭代 2 |
 | MCP / Skills / 沙箱 / 密钥代理 / 内置工具 | 🚧 迭代 3 |
 | Web PWA / Telegram / Webhook / 配对 / 语音 / 图像 | 🚧 迭代 4 |
 | 检索 / 压缩 / 上下文裁剪 / 做梦 / 子代理 | 🚧 迭代 5 |
 | 评测 / launchd 服务 / 加固 | 🚧 迭代 6 |
+
+### 迭代 1 已被测试钉住的不变量
+
+下列行为都有脚本化模型（`ScriptedModel`，不联网）驱动的测试，见 `tests/test_harness.py`、`test_dispatcher.py`、`test_cli.py` 等：
+
+- **幂等恢复**：run 中途崩溃后重试，不会重复写入用户消息；悬空的工具调用先补上"被中断"结果，再追加新事件。
+- **失败归因**：缺 key / 网络 / 限流 / 偏好不可读属"环境问题"，不消耗事件的重试次数且只提示主人一次；其余失败计入毒丸上限，耗尽后放弃并告知。
+- **偏好每次 fresh 读取**：改 `instructions.md` 后下一次 run 立即生效；文件存在却读不了 → run 在写入任何状态前停止。
+- **不可信内容围栏**：`untrusted` 画像没有 `memory` 工具；外部内容被 `<untrusted>` 围起，无法用内容里的闭合标签逃出。
+- **默认安静**：后台 run 除非调用 `send_message` 否则不投递；交互 run 的最终回答自动入发件箱，空回答给出明确提示。
+- **确认送达才记账**：`on_sent` 提交仅在渠道确认送达后执行；明确失败按退避重试，结果未知（`maybe_sent`）不盲目重发，紧急消息例外。
+- **实时记账**：每次模型调用后立即写入用量与成本，崩溃的 run 也有账。
+- **优先级**：发件箱紧急消息先投递。
+
+### 迭代 1 的已知限制
+
+- **会话窗口是权宜之计**：模型只看到最近 `agent.history_items` 条（默认 400，从最近的用户消息处对齐，避免切断工具往返），日志保留全部。窗口滑动会让提示缓存在那一刻失效；带摘要的压缩与工具结果清理在迭代 5 实现。
+- **目前只有两个工具**（`memory`、`send_message`）；文件、shell、网络、MCP、Skills 在迭代 3。
+- **没有常驻进程**：后台 run、计时器、策略审批、预算上限在迭代 2。`pa chat` / `pa ask` 启动时会清理上次崩溃遗留的 `running` 记录，因此迭代 2 的守护进程运行时会用锁文件避免它们互相干扰。
+- **一次一个会话**：CLI 只处理自己会话里的事件；并发调度在迭代 2。
+
+### 尚未验证（需要真实 `OPENAI_API_KEY`）
+
+本环境没有 key，下面几点只能由你在本机验证：运行 `pa doctor --live`（两次真实调用，几美分）。它会检查 key 与模型名是否有效、工具 schema 是否被接受，以及**无状态模式下把存档历史（含加密推理项）回放给 API** 是否成功。若回放失败，备选方案是把 `reasoning_item_id_policy` 设为 `omit`（已在设计中预留）。
