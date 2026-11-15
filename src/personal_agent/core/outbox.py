@@ -3,7 +3,8 @@
 "Sent" only ever means *delivery was confirmed by the channel*. A message that was handed to
 a channel but whose outcome is unknown (crash, timeout) is `maybe_sent` and is surfaced to the
 owner and to the next run instead of being silently resent or silently forgotten, the same
-"posted / maybe posted / held" distinction Anthropic's daily-brief run record makes.
+"posted / maybe posted / held" distinction Anthropic's daily-brief run record makes. The
+exception is a message that must arrive (`OutMessage.must_arrive`): a duplicate beats a lost one.
 """
 
 from __future__ import annotations
@@ -41,6 +42,22 @@ class OutMessage:
     def text(self) -> str:
         value = self.payload.get("text")
         return value if isinstance(value, str) else ""
+
+    @property
+    def must_arrive(self) -> bool:
+        """Whether a duplicate is better than a message that never came: an alert, an answer to
+        what the owner just said, a request the agent is blocked on. When the outcome of sending
+        anything else is unknown it is parked as `maybe_sent` instead."""
+        return (
+            self.urgency == "urgent"
+            or self.kind == "approval_request"
+            or bool(self.payload.get("interactive"))
+        )
+
+
+MUST_ARRIVE_SQL = """(urgency = 'urgent' OR kind = 'approval_request'
+                      OR COALESCE(json_extract(payload, '$.interactive'), 0) = 1)"""
+"""`OutMessage.must_arrive`, for the queries that decide the same thing in the database."""
 
 
 def _message(row: sqlite3.Row) -> OutMessage:
@@ -212,14 +229,14 @@ class Outbox:
     def recover_stuck(self, *, older_than_s: float = 120.0) -> dict[str, int]:
         """After a crash: messages stuck in `sending` have an unknown outcome.
 
-        Urgent ones are retried (a duplicate beats a lost alert); the rest become
-        `maybe_sent` so the owner can decide.
+        The ones that must arrive (see `OutMessage.must_arrive`) are retried: a duplicate beats a
+        lost alert or an answer nobody saw. The rest become `maybe_sent` so the owner can decide.
         """
         cutoff = self.clock.now() - older_than_s
         with self.db.tx():
             urgent = self.db.execute(
-                """UPDATE outbox SET status = 'pending', claimed_at = NULL
-                   WHERE status = 'sending' AND claimed_at <= ? AND urgency = 'urgent'""",
+                f"""UPDATE outbox SET status = 'pending', claimed_at = NULL
+                    WHERE status = 'sending' AND claimed_at <= ? AND {MUST_ARRIVE_SQL}""",
                 (cutoff,),
             ).rowcount
             other = self.db.execute(

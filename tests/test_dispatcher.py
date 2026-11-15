@@ -137,6 +137,24 @@ async def test_an_urgent_message_with_unknown_outcome_is_retried(make_app, clock
     assert app.outbox.get(message_id).status == "pending"
 
 
+@pytest.mark.parametrize(
+    ("kind", "extra"),
+    [("message", {"interactive": True}), ("approval_request", {})],
+    ids=["an answer the owner is waiting for", "a request for approval"],
+)
+async def test_what_the_owner_is_waiting_for_is_retried_when_its_outcome_is_unknown(
+    make_app, kind, extra
+):
+    app = make_app()
+    message_id = queue(app, kind=kind, extra=extra)
+    dispatcher = Dispatcher(app, {"cli": FakeChannel(raises=ConnectionResetError("reset"))})
+
+    report = await dispatcher.deliver_once()
+
+    assert report.retrying == [message_id] and report.unknown == []
+    assert app.outbox.get(message_id).status == "pending"
+
+
 async def test_only_messages_for_registered_channels_are_claimed(make_app):
     app = make_app()
     queue(app, "for the terminal", channel="cli")

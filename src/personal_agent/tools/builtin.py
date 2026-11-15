@@ -147,12 +147,12 @@ async def send_message_tool(
         text=body,
         urgency=urgency,
         run_id=rc.run_id,
-        dedupe_key=f"run:{rc.run_id}:{digest}",
+        dedupe_key=f"{rc.work_id}:{digest}",
         on_sent=edits or None,
         extra={"interactive": rc.origin.interactive},
     )
     if message_id is None:
-        return "That exact message was already queued in this run; not sending it twice."
+        return "That exact message was already queued for this task; not sending it twice."
     rc.queued_messages.append(message_id)
     return (
         f"Queued as message {message_id}. It is delivered after this run ends; the system confirms "

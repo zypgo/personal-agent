@@ -53,6 +53,10 @@ class RunContext:
     tainted: bool = False
     taint_reasons: list[str] = field(default_factory=list)
     queued_messages: list[int] = field(default_factory=list)
+    work_id: str = ""
+    """Names the work this run does (the events that woke it), and stays the same when the work is
+    tried again after a crash. What a run queues is deduplicated by it, so a retry does not send
+    again what the interrupted attempt had already queued. Defaults to the run itself."""
     owner_request: str = ""
     """What the owner last asked (trusted text), shown to the reviewer in `auto` mode."""
     cost_cap_usd: float | None = None
@@ -64,6 +68,9 @@ class RunContext:
     or search result linked to them, or a request to them went ahead). After the run has read
     content the owner did not write, an address outside this set needs the owner's approval: an
     address can carry data out. Insertion-ordered so the oldest can be dropped."""
+
+    def __post_init__(self) -> None:
+        self.work_id = self.work_id or f"run:{self.run_id}"
 
     def know_urls(self, urls: Iterable[str]) -> None:
         for key in keys_of(urls):
@@ -97,6 +104,7 @@ class RunContext:
             "queued_messages": list(self.queued_messages),
             "owner_request": self.owner_request,
             "known_urls": list(self.known_urls),
+            "work_id": self.work_id,
         }
 
     @classmethod
@@ -113,4 +121,5 @@ class RunContext:
             queued_messages=[int(i) for i in meta.get("queued_messages") or []],
             owner_request=str(meta.get("owner_request") or ""),
             known_urls=dict.fromkeys(str(k) for k in meta.get("known_urls") or []),
+            work_id=str(meta.get("work_id") or ""),
         )

@@ -11,6 +11,7 @@ from personal_agent.config import Config, PolicyConfig
 from personal_agent.core.approvals import DENIED_MESSAGE, EXPIRED_MESSAGE, SUPERSEDED_MESSAGE
 from personal_agent.core.events import Kind, NewEvent
 from personal_agent.core.sessions import INTERRUPTED_RESULT
+from personal_agent.harness.runner import Harness
 from tooling import Spy, drain, install
 
 HOUR = 3600
@@ -57,6 +58,34 @@ async def test_a_risky_call_suspends_the_run_and_asks_the_owner(make_app):
 
     [row] = app.audit.recent()
     assert (row.tool, row.verdict, row.layer, row.outcome) == ("shell", "ask", "mode", None)
+
+
+async def test_a_message_that_comes_back_does_not_close_the_request_it_already_made(
+    make_app, clock
+):
+    """The worker died after the run was suspended but before it said so. The message is claimed
+    again; it must not be taken for a *new* message, which would close (and never run) the very
+    request the first attempt just sent the owner."""
+    model = ScriptedModel([push(), [assistant_message("Pushed.")]])
+    app = make_app(model)
+    spy = install(app, Spy())
+    app.inbox.add(owner_message("please push my branch"))
+    harness = Harness(app)
+    first = app.inbox.claim("worker-1")
+    assert (await harness.run(first)).status == "awaiting_approval"  # the worker dies here
+    clock.advance(app.inbox.lease_s + 1)
+    second = app.inbox.claim("worker-2")
+
+    again = await harness.run(second)
+    app.inbox.complete(second)
+
+    assert again.status == "silent" and len(model.calls) == 1
+    [approval] = app.approvals.pending()  # still waiting, still the owner's to answer
+    assert app.approvals.decide(approval.id, True, by="owner").resume_queued
+    [resumed] = await drain(app)
+    assert resumed.outcome.status == "completed"
+    assert spy.ran("shell") == ["git push origin main"]
+    assert [m.text for m in app.outbox.list() if m.kind == "message"] == ["Pushed."]
 
 
 async def test_approving_continues_the_run_and_runs_the_tool_exactly_once(make_app):

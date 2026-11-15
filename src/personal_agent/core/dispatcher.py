@@ -5,8 +5,9 @@ Rules (the "outbox" primitive):
 - Only then are its `on_sent` commits (bookmarks, ledgers) applied, so state never claims that
   something was delivered when it was not.
 - `ChannelError` = definitely not delivered: retry with backoff (or give up if permanent).
-  Any other exception = unknown outcome: never resend a normal message blindly (`maybe_sent`);
-  an urgent one is retried because a duplicate alert beats a lost one.
+  Any other exception = unknown outcome: never resend a background message blindly
+  (`maybe_sent`); one that must arrive (an alert, an answer to the owner, a request for approval)
+  is retried because a duplicate beats a lost one.
 """
 
 from __future__ import annotations
@@ -69,7 +70,7 @@ class Dispatcher:
                 log.exception(
                     "channel %s raised while sending message %s", message.channel, message.id
                 )
-                if message.urgency == "urgent":
+                if message.must_arrive:
                     outbox.mark_failed(
                         message.id,
                         f"unknown outcome: {exc}",

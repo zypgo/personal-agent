@@ -11,7 +11,7 @@ from personal_agent.core.sessions import INTERRUPTED_RESULT
 from personal_agent.core.worker import Worker
 from personal_agent.harness.errors import ModelUnavailable
 from personal_agent.harness.pricing import cost_usd
-from personal_agent.harness.runner import RESUME_NOTE
+from personal_agent.harness.runner import RESUME_NOTE, Harness
 from personal_agent.memory.store import Actor
 
 
@@ -309,6 +309,111 @@ async def test_a_failed_run_resumes_without_duplicating_the_owners_message(make_
     # The owner is told once that the first attempt failed, then gets the real answer.
     sent = [m.text for m in sorted(app.outbox.list(), key=lambda m: m.id)]
     assert sent == ["Something went wrong. I will retry automatically.", "recovered"]
+
+
+async def test_a_wake_up_that_is_tried_again_does_not_queue_the_same_message_twice(make_app, clock):
+    """The model asks to send the brief, then the run dies; the retry asks again. The owner gets
+    one brief: what a run queues is deduplicated by the events that woke it, not by the attempt."""
+    model = ScriptedModel(
+        [
+            [function_call("send_message", {"text": "Your brief."}, call_id="s1")],
+            RuntimeError("provider exploded"),
+            [function_call("send_message", {"text": "Your brief."}, call_id="s2")],
+            [assistant_message("Told the owner.")],
+        ]
+    )
+    app = make_app(model)
+    app.inbox.add(timer("brief", "Summarise my inbox."))
+    worker = Worker(app)
+
+    assert (await worker.run_once()).failure is not None
+    clock.advance(30)
+    assert (await worker.run_once()).outcome is not None
+
+    assert [m.text for m in app.outbox.list() if m.text == "Your brief."] == ["Your brief."]
+
+
+async def test_the_same_message_in_a_later_wake_up_is_a_new_message(make_app, clock):
+    brief = [function_call("send_message", {"text": "Your brief."}, call_id="s1")]
+    model = ScriptedModel(
+        [
+            brief,
+            [assistant_message("ok")],
+            [function_call("send_message", {"text": "Your brief."}, call_id="s2")],
+            [assistant_message("ok")],
+        ]
+    )
+    app = make_app(model)
+    worker = Worker(app)
+    app.inbox.add(timer("brief", "Summarise my inbox."))
+    await worker.run_once()
+    clock.advance(86_400)
+    app.inbox.add(timer("brief", "Summarise my inbox."))
+    await worker.run_once()
+
+    assert [m.text for m in app.outbox.list()] == ["Your brief.", "Your brief."]
+
+
+async def test_an_event_that_was_already_answered_is_not_run_again(make_app, clock):
+    """The worker died after the run finished but before it said so. The event comes back when the
+    lease runs out; answering it a second time would be the owner's problem."""
+    model = ScriptedModel([[assistant_message("Hello!")], [assistant_message("Hello again!")]])
+    app = make_app(model)
+    app.inbox.add(owner_message("hi"))
+    harness = Harness(app)
+
+    first = app.inbox.claim("worker-1")
+    assert (await harness.run(first)).status == "completed"  # and the worker dies right here
+    clock.advance(app.inbox.lease_s + 1)
+    second = app.inbox.claim("worker-2")
+    assert second.ids == first.ids
+
+    again = await harness.run(second)
+
+    assert again.status == "silent" and not again.queued_message_ids
+    assert len(model.calls) == 1
+    assert [m.text for m in app.outbox.list()] == ["Hello!"]
+
+
+async def test_only_the_new_events_of_a_batch_that_comes_back_are_run(make_app, clock):
+    model = ScriptedModel([[assistant_message("One.")], [assistant_message("Two.")]])
+    app = make_app(model)
+    app.inbox.add(owner_message("first"))
+    harness = Harness(app)
+    await harness.run(app.inbox.claim("worker-1"))  # the worker dies before it completes the batch
+    clock.advance(app.inbox.lease_s + 1)
+    app.inbox.add(owner_message("second"))
+    batch = app.inbox.claim("worker-2")
+    assert len(batch.ids) == 2
+
+    await harness.run(batch)
+
+    texts = [text_of(i) for i in app.sessions.items("main") if i.get("role") == "user"]
+    assert [("first" in t, "second" in t) for t in texts] == [(True, False), (False, True)]
+    assert [m.text for m in sorted(app.outbox.list(), key=lambda m: m.id)] == ["One.", "Two."]
+
+
+async def test_the_answer_and_the_end_of_the_run_are_one_commit(make_app, clock, monkeypatch):
+    """If closing the run fails, the answer must not have been queued: after the retry the owner
+    gets one answer, not two."""
+    model = ScriptedModel([[assistant_message("Hello!")], [assistant_message("Hello!")]])
+    app = make_app(model)
+    app.inbox.add(owner_message("hi"))
+    finish = app.runs.finish
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(app.runs, "finish", broken)
+    first = await Worker(app).run_once()
+    assert first.failure is not None
+    assert [m for m in app.outbox.list() if m.kind == "message"] == []  # nothing half-way
+
+    monkeypatch.setattr(app.runs, "finish", finish)
+    clock.advance(60)
+    await Worker(app).run_once()
+
+    assert [m.text for m in app.outbox.list() if m.kind == "message"] == ["Hello!"]
 
 
 async def test_dangling_tool_calls_are_closed_before_new_events(make_app):

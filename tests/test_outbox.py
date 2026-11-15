@@ -1,6 +1,6 @@
 import pytest
 
-from personal_agent.core.outbox import Outbox
+from personal_agent.core.outbox import MUST_ARRIVE_SQL, URGENCIES, Outbox
 
 
 @pytest.fixture
@@ -101,6 +101,33 @@ def test_crash_recovery_distinguishes_urgent_from_the_rest(outbox, clock):
     assert [m.id for m in outbox.unresolved()] == [normal]
     assert outbox.cancel(normal)
     assert outbox.unresolved() == []
+
+
+@pytest.mark.parametrize("urgency", URGENCIES)
+@pytest.mark.parametrize("kind", ["message", "notice", "approval_request"])
+@pytest.mark.parametrize("interactive", [False, True])
+def test_a_message_that_must_arrive_is_retried_after_a_crash_and_the_rest_are_not(
+    outbox, clock, urgency, kind, interactive
+):
+    """An alert, an answer the owner is waiting for, a request the agent is blocked on: a duplicate
+    beats a lost one. Background messages are parked instead, and the owner decides."""
+    mid = enq(outbox, urgency=urgency, kind=kind, extra={"interactive": interactive})
+    outbox.claim_due()
+    clock.advance(300)
+    must = urgency == "urgent" or kind == "approval_request" or interactive
+
+    assert outbox.get(mid).must_arrive is must
+    assert outbox.recover_stuck() == {"retried": int(must), "maybe_sent": int(not must)}
+    assert outbox.get(mid).status == ("pending" if must else "maybe_sent")
+
+
+@pytest.mark.parametrize("urgency", URGENCIES)
+@pytest.mark.parametrize("kind", ["message", "notice", "approval_request"])
+@pytest.mark.parametrize("extra", [{}, {"interactive": False}, {"interactive": True}])
+def test_the_database_and_the_code_agree_on_what_must_arrive(outbox, urgency, kind, extra):
+    mid = enq(outbox, urgency=urgency, kind=kind, extra=extra)
+    in_sql = outbox.db.scalar(f"SELECT {MUST_ARRIVE_SQL} FROM outbox WHERE id = ?", (mid,))
+    assert bool(in_sql) is outbox.get(mid).must_arrive
 
 
 def test_recent_claims_are_not_considered_stuck(outbox, clock):

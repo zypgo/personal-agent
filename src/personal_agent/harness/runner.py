@@ -235,7 +235,12 @@ class Harness:
         app.budget.check_day()  # before any state changes: deferred events stay exactly as they were
 
         resumes = [e for e in batch.events if e.kind == Kind.APPROVAL_RESPONSE]
-        rest = [e for e in batch.events if e.kind != Kind.APPROVAL_RESPONSE]
+        done = app.runs.handled(
+            batch.session_key, batch.ids, since=min(e.created_at for e in batch.events)
+        )
+        if done:
+            log.info("events %s were already handled by an earlier attempt", sorted(done))
+        rest = [e for e in batch.events if e.kind != Kind.APPROVAL_RESPONSE and e.id not in done]
         outcomes: list[RunOutcome] = []
         for event in resumes:
             outcomes.append(await self._resume(event))
@@ -274,6 +279,7 @@ class Harness:
             origin=self.origin_for(batch),
             trust=Trust.OWNER if batch.trusted else Trust.UNTRUSTED,
             tainted=not batch.trusted,
+            work_id=f"events:{min(batch.ids)}",
             owner_request=self.owner_request_for(batch),
         )
         ctx.know_urls(self.owner_urls_for(batch))
@@ -484,7 +490,6 @@ class Harness:
 
         if result.interruptions:
             return self._suspend(ctx, result)
-        app.approvals.drop_run(ctx.run_id)
         return self._finish(ctx, str(result.final_output or "").strip())
 
     # ---- waiting for the owner ----------------------------------------------------------------
@@ -589,25 +594,30 @@ class Harness:
 
     # ---- endings -----------------------------------------------------------------------
     def _finish(self, ctx: RunContext, final_text: str) -> RunOutcome:
+        """Queue the answer and close the run, all in one commit. Split in two, a crash between the
+        steps would either send the answer again after the retry, or (once the saved state of a run
+        that waited for approval is gone) lose it."""
         app = self.app
         queued = list(ctx.queued_messages)
-        if ctx.origin.interactive and ctx.profile == "full":
-            reply = final_text or "(I finished without a reply. Ask again if you expected one.)"
-            message_id = app.outbox.enqueue(
-                session_key=ctx.session_key,
-                channel=ctx.origin.channel,
-                recipient=ctx.origin.recipient,
-                text=reply,
-                kind="message" if final_text else "notice",
-                run_id=ctx.run_id,
-                dedupe_key=f"run:{ctx.run_id}:final",
-                extra={"interactive": True},
-            )
-            if message_id is not None:
-                queued.append(message_id)
-        # Background runs deliver nothing unless the agent explicitly called send_message.
-        status = "completed" if queued else "silent"
-        app.runs.finish(ctx.run_id, status, final_text=final_text or None)
+        with app.db.tx():
+            app.approvals.drop_run(ctx.run_id)
+            if ctx.origin.interactive and ctx.profile == "full":
+                reply = final_text or "(I finished without a reply. Ask again if you expected one.)"
+                message_id = app.outbox.enqueue(
+                    session_key=ctx.session_key,
+                    channel=ctx.origin.channel,
+                    recipient=ctx.origin.recipient,
+                    text=reply,
+                    kind="message" if final_text else "notice",
+                    run_id=ctx.run_id,
+                    dedupe_key=f"run:{ctx.run_id}:final",
+                    extra={"interactive": True},
+                )
+                if message_id is not None:
+                    queued.append(message_id)
+            # Background runs deliver nothing unless the agent explicitly called send_message.
+            status = "completed" if queued else "silent"
+            app.runs.finish(ctx.run_id, status, final_text=final_text or None)
         return RunOutcome(ctx.run_id, status, final_text, queued)
 
     def _stop(self, ctx: RunContext, *, text: str, key: str, error: str) -> RunOutcome:
@@ -615,22 +625,23 @@ class Harness:
         pass is the exception: it is not the owner's task, `Dreamer` counts its failures and says
         so once if they keep coming."""
         app = self.app
-        app.approvals.drop_run(ctx.run_id)
-        message_id = (
-            None
-            if ctx.profile == "dream"
-            else app.outbox.enqueue(
-                session_key=ctx.session_key,
-                channel=ctx.origin.channel,
-                recipient=ctx.origin.recipient,
-                text=text,
-                kind="notice",
-                run_id=ctx.run_id,
-                dedupe_key=f"run:{ctx.run_id}:{key}",
-                extra={"interactive": ctx.origin.interactive},
+        with app.db.tx():
+            app.approvals.drop_run(ctx.run_id)
+            message_id = (
+                None
+                if ctx.profile == "dream"
+                else app.outbox.enqueue(
+                    session_key=ctx.session_key,
+                    channel=ctx.origin.channel,
+                    recipient=ctx.origin.recipient,
+                    text=text,
+                    kind="notice",
+                    run_id=ctx.run_id,
+                    dedupe_key=f"run:{ctx.run_id}:{key}",
+                    extra={"interactive": ctx.origin.interactive},
+                )
             )
-        )
-        app.runs.finish(ctx.run_id, "failed", error=error)
+            app.runs.finish(ctx.run_id, "failed", error=error)
         return RunOutcome(
             ctx.run_id,
             "failed",

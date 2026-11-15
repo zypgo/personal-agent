@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,6 +17,9 @@ from personal_agent.db import Database, dumps, loads
 
 TERMINAL = ("completed", "silent", "failed", "paused_budget", "cancelled")
 STATUSES = ("running", "awaiting_approval", *TERMINAL)
+SETTLED = ("completed", "silent", "awaiting_approval")
+"""A run in one of these states has nothing left to do for its events: the answer is queued, or the
+owner is being asked. (A `failed`, `cancelled` or budget-paused run is retried on purpose.)"""
 
 
 @dataclass(frozen=True)
@@ -193,6 +197,26 @@ class RunStore:
                 "SELECT SUM(cost_usd) FROM runs WHERE started_at >= ?", (since,), default=0.0
             )
         )
+
+    def handled(self, session_key: str, event_ids: Collection[int], *, since: float) -> set[int]:
+        """Which of these events an earlier run has already dealt with.
+
+        A batch is claimed again when its worker died before saying it was done. If the run had
+        reached its end by then, running it again would answer the owner twice, or close the
+        request that is still waiting for their approval. `since` (when the oldest event arrived)
+        bounds the search to runs that can have seen them.
+        """
+        wanted = set(event_ids)
+        marks = ",".join("?" * len(SETTLED))
+        rows = self.db.query(
+            f"""SELECT event_ids FROM runs
+                WHERE session_key = ? AND started_at >= ? AND status IN ({marks})""",
+            (session_key, since, *SETTLED),
+        )
+        done: set[int] = set()
+        for row in rows:
+            done |= wanted.intersection(loads(row["event_ids"], []))
+        return done
 
     def recover_orphans(self) -> int:
         """Runs left `running` by a process that died are marked failed (called at startup)."""
