@@ -307,7 +307,7 @@ class ServiceManager:
         self,
         paths: Paths,
         *,
-        launchctl: Launchctl = system_launchctl,
+        launchctl: Launchctl | None = None,
         agents: Path | None = None,
         uid: int | None = None,
         python: str | None = None,
@@ -317,7 +317,7 @@ class ServiceManager:
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.paths = paths
-        self.launchctl = launchctl
+        self.launchctl = launchctl if launchctl is not None else system_launchctl
         self.agents = agents if agents is not None else agents_dir()
         self.uid = os.getuid() if uid is None else uid
         self.python = python or sys.executable

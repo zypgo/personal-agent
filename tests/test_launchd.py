@@ -41,6 +41,7 @@ from personal_agent.paths import Paths
 
 UID = 501
 REAL_PLUTIL = Path("/usr/bin/plutil").exists()
+REAL_AGENTS_DIR = launchd.agents_dir  # taken before the guard in conftest replaces it
 
 # What `launchctl print` really prints for a running job (shortened, from a Mac).
 RUNNING = """\
@@ -922,7 +923,7 @@ def test_the_tail_survives_bytes_that_are_not_text(tmp_path):
 # ---- details that decide whether the job works on a real machine -----------------------------------------
 def test_job_files_go_in_the_users_launchagents_folder(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert launchd.agents_dir() == tmp_path / "Library" / "LaunchAgents"
+    assert REAL_AGENTS_DIR() == tmp_path / "Library" / "LaunchAgents"
 
 
 def test_secret_looking_names_are_recognised_whatever_their_case():

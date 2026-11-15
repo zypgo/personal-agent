@@ -605,7 +605,7 @@ Anthropic 的 always-on 文章说"先安静，再去赢得注意力"，"Demystif
 
 ### 迭代 6 已被测试钉住的不变量
 
-（累计 3047 个离线测试，另有 79 个网页脚本测试与 27 个对真实模型的场景。本迭代新增的文件：服务 `test_launchd.py` 152、`test_cli_service.py` 63、`test_doctor_service.py` 12；评测 `test_eval_spec.py` 86、`test_eval_checks.py` 62、`test_eval_bench.py` 32、`test_eval_runner.py` 26、`test_eval_report.py` 21、`test_cli_eval.py` 39、`test_eval_builtin.py` 19；`test_cli_mentions.py` 2。**变异验证**：把保护代码改坏、对应测试必须失败——服务 246 处、评测的场景格式 101 处、判分 / 试验 / 运行器 / 报告 / 命令 252 处，共 599 处，全部被杀死（运行器与三份清单在 `scripts/mutation/`：`uv run python scripts/mutation/run.py scripts/mutation/lists/iteration6_service.py`，它在一份临时副本上改，真实源码不会被碰）。迭代 4b（119 处）与迭代 5（184 处）的清单也在同一个目录里，用这个运行器在迭代 6 的最终代码上整体重跑过：先确认基线干净，再全部被杀死——所以三个迭代共 902 处，现在都有据可查。每一轮都有存活的，几乎全是测试太弱，补了测试后重跑；少数是**等价变异**，处理方式是把代码改到不再有那一处多余的东西，而不是为它写测试。
+（累计 3060 个离线测试，另有 79 个网页脚本测试与 27 个对真实模型的场景。本迭代新增的文件：服务 `test_launchd.py` 152、`test_cli_service.py` 63、`test_doctor_service.py` 12、`test_launchd_guard.py` 13；评测 `test_eval_spec.py` 86、`test_eval_checks.py` 62、`test_eval_bench.py` 32、`test_eval_runner.py` 26、`test_eval_report.py` 21、`test_cli_eval.py` 39、`test_eval_builtin.py` 19；`test_cli_mentions.py` 2。**变异验证**：把保护代码改坏、对应测试必须失败——服务 246 处、评测的场景格式 101 处、判分 / 试验 / 运行器 / 报告 / 命令 252 处，共 599 处，全部被杀死（运行器与三份清单在 `scripts/mutation/`：`uv run python scripts/mutation/run.py scripts/mutation/lists/iteration6_service.py`，它在一份临时副本上改，真实源码不会被碰）。迭代 4b（119 处）与迭代 5（184 处）的清单也在同一个目录里，用这个运行器在迭代 6 的最终代码上整体重跑过：先确认基线干净，再全部被杀死——所以三个迭代共 902 处，现在都有据可查。每一轮都有存活的，几乎全是测试太弱，补了测试后重跑；少数是**等价变异**，处理方式是把代码改到不再有那一处多余的东西，而不是为它写测试。
 
 **这一轮变异验证自己的一个漏洞**：变异运行器没有先确认"没被改过的代码能通过这些测试"。我在最后改了一个内置场景（多加了一个坏脚本），一个写死了"1 个坏脚本"的命令测试因此一直失败，而运行器把"测试失败"一律算成"变异被杀死"——于是报告层与命令层有 13 处变异其实活着，被这条已经坏掉的测试冒名杀死了。完整重跑时它们现身，补了测试（见上面各条：多个 `--tag` 取并集、`show` 念 `about`、坏脚本的错误要脱密、报告不写穿符号链接且 JSON 带缩进、一个残留的 `.json` 也算名字被占、比实际更短的脚本带着原因被指出来、一次失败的试验只显示第一个、`OPENAI_BASE_URL`……），服务一侧的完整重跑也有 5 处存活：两处（配置里的 `base_url` 与环境变量 `OPENAI_BASE_URL` 都算自定义端点、不该提示缺 key）第一轮就活着、当时漏补了；另外三处（`.env` 里的 key 也算、`logs --launchd -f` 跟的是错误文件而不是标准输出、卸载时只剩"已加载"或只剩"文件"一半的状态）原先被杀死过，后来调整测试时覆盖丢了，重跑才发现。运行器现在每开一批先把每一组测试在未改动的代码上跑一遍，不干净就直接停下。）
 
@@ -620,6 +620,7 @@ Anthropic 的 always-on 文章说"先安静，再去赢得注意力"，"Demystif
 - **`pa service status` 与"提示里的命令都存在"**：`pa service` 不带子命令与 `pa service status` 是一回事。这个子命令是后来补的：安装摘要里曾经写着"`pa service status` 显示状态"，而当时没有这个命令，钉住那段文字的测试把错也钉住了。现在 `tests/test_cli_mentions.py` 扫描 `src`、README 与文档里每一个 `pa …`，都必须是真命令。
 - **受保护的文件夹**：桌面 / 文稿 / 下载 / iCloud 里的路径被识别（符号链接按它所在的位置算、`..` 按最终落点算、`~` 先展开）；解释器与代码各自检查，一个警告就够；不在里面的路径不被误报。
 - **`pa doctor`**：没加载、指向的程序不存在、在受保护的文件夹里、加载了却没在跑（带上次退出码）、一切正常——每一种都是一条指名道姓的结论。
+- **测试改不了真实的 launchd**：每个测试都在一道护栏下运行（`tests/conftest.py`）：`launchctl` 只放行 `print`（看），任何改动（`bootstrap`、`bootout`、`enable`……）直接抛错，默认的任务文件夹指向临时目录而不是真正的 `~/Library/LaunchAgents`；`ServiceManager` 的默认 `launchctl` 在构造时才取，所以护栏换得掉。这是出过事才加的：最后一轮变异验证里，一个变异拿掉了"home 还没初始化"的检查，一个没用替身的 CLI 测试（本该停在"先 `pa init`"）就在这台机器上装上并加载了一个真正的任务，它在后台空跑了半个多小时才被我发现（已卸载、已删文件；launchd 的覆盖列表里留下两条无害的 `enabled` 记录）。现在同一个变异仍被杀死，但什么也装不上（`tests/test_launchd_guard.py`）。
 
 **评测**（`tests/test_eval_*.py`、`test_cli_eval.py`）
 

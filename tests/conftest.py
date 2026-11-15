@@ -3,12 +3,32 @@ from __future__ import annotations
 import pytest
 from agents.testing import ScriptedModel
 
+from personal_agent import launchd
 from personal_agent.app import App, build_app
 from personal_agent.clock import ManualClock
 from personal_agent.config import Config
 from personal_agent.db import Database, open_database
 from personal_agent.paths import Paths
 from personal_agent.security.sandbox import SandboxProvider
+
+
+@pytest.fixture(autouse=True)
+def _no_test_changes_the_real_launchd(monkeypatch, tmp_path):
+    """A test may look at launchd but never change it, and never write into the real
+    `~/Library/LaunchAgents`: whatever code a test reaches by mistake (a refactor, or a mutation
+    that removes a guard) must not be able to install a job that starts at the next login.
+
+    This exists because it happened: with a guard mutated away, a CLI test that was meant to stop
+    at "run `pa init` first" installed and loaded a real job that ran for half an hour."""
+    real = launchd.system_launchctl
+
+    def only_looking(*args: str):
+        if args and args[0] == "print":
+            return real(*args)
+        raise AssertionError(f"a test tried to change the real launchd: launchctl {' '.join(args)}")
+
+    monkeypatch.setattr(launchd, "system_launchctl", only_looking)
+    monkeypatch.setattr(launchd, "agents_dir", lambda: tmp_path / "guarded-launchagents")
 
 
 @pytest.fixture
