@@ -41,7 +41,9 @@ def build(open_app: Callable[[], App], console: Console) -> typer.Typer:
             table = Table(box=None, pad_edge=False)
             for column in ("channel", "state", "approved", "waiting for approval"):
                 table.add_column(column)
-            rows = [("cli", "always available in `pa chat`", None)]
+            rows: list[tuple[str, str, str, str]] = [
+                ("cli", "always available in `pa chat`", "-", "-")
+            ]
             telegram = cfg.telegram
             if telegram.enabled:
                 state = (
@@ -51,11 +53,32 @@ def build(open_app: Callable[[], App], console: Console) -> typer.Typer:
                 )
             else:
                 state = "[dim]off[/dim] (\\[telegram] enabled = true)"
-            rows.append(("telegram", state, "telegram"))
-            for name, state, key in rows:
-                approved = len(opened.pairing.senders(key)) if key else "-"
-                waiting = len(opened.pairing.pending(key)) if key else "-"
-                table.add_row(name, state, str(approved), str(waiting))
+            rows.append(
+                (
+                    "telegram",
+                    state,
+                    str(len(opened.pairing.senders("telegram"))),
+                    str(len(opened.pairing.pending("telegram"))),
+                )
+            )
+            if cfg.web.enabled:
+                web_state = "[green]on[/green] (`pa web`)"
+            else:
+                web_state = "[dim]off[/dim] (\\[web] enabled = true)"
+            rows.append(
+                (
+                    "web",
+                    web_state,
+                    str(len(opened.web_auth.sessions())),
+                    str(len(opened.web_auth.pending_invites())),
+                )
+            )
+            for name, spec in sorted(opened.plugin_channels.items()):
+                rows.append(
+                    (escape(name), f"[green]on[/green] (plugin {escape(spec.plugin)})", "-", "-")
+                )
+            for row in rows:
+                table.add_row(*row)
             console.print(table)
             if opened.pairing.pending():
                 console.print(

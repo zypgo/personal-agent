@@ -77,6 +77,24 @@ def test_the_channel_the_owner_last_spoke_on(db, clock):
     assert transcript.last_in_channel() == "web"
 
 
+def test_the_question_can_be_limited_to_the_channels_that_matter(db, clock):
+    transcript = Transcript(db, clock)
+    transcript.add_in("telegram", "a")
+    transcript.add_in("web", "b")
+    transcript.add_in("cli", "c")
+    assert transcript.last_in_channel(among={"telegram", "web"}) == "web"
+    assert transcript.last_in_channel(among={"telegram"}) == "telegram"
+    assert transcript.last_in_channel(among={"telegram", "web"}, exclude={"web"}) == "telegram"
+    assert transcript.last_in_channel(among={"sms"}) is None
+
+
+def test_an_empty_list_of_channels_matches_nothing_rather_than_everything(db, clock):
+    transcript = Transcript(db, clock)
+    transcript.add_in("telegram", "a")
+    assert transcript.last_in_channel(among=set()) is None
+    assert transcript.last_in_channel(among=[]) is None
+
+
 def test_channels_can_be_left_out_when_asking_where_the_owner_last_spoke(db, clock):
     transcript = Transcript(db, clock)
     assert transcript.last_in_channel(exclude={"cli"}) is None

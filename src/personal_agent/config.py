@@ -13,12 +13,36 @@ import tomllib
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from personal_agent.clock import parse_quiet_hours
 from personal_agent.paths import Paths
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+
+_ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")
+
+
+def _check_env_name(value: str, what: str) -> str:
+    """The NAME of an environment variable (capital letters, digits, underscores), never a value.
+
+    Someone who pastes a secret here by mistake must not get it printed back by an error message,
+    a `pa doctor` line or a log, all of which name the variable. A random secret is almost never
+    made only of capital letters, digits and underscores, so asking for that shape stops it."""
+    if not _ENV_NAME.fullmatch(value):
+        raise ValueError(
+            f"{what} is the NAME of an environment variable, in capital letters (like "
+            "GITHUB_WEBHOOK_SECRET), not the secret itself"
+        )
+    return value
 
 
 class _Section(BaseModel):
@@ -54,6 +78,11 @@ class ModelConfig(_Section):
     reasoning_item_ids: Literal["preserve", "omit"] = "preserve"
     """`omit` strips reasoning item IDs when history is replayed to the API. Use it only as a
     fallback if `pa doctor --live` reports that the API rejects replayed reasoning items."""
+    prompt_cache_retention: Literal["in_memory", "24h"] | None = None
+    """How long OpenAI may keep the processed static start of the prompt (instructions and tool
+    definitions, thousands of tokens) so the next run pays a tenth for it. `None`: OpenAI's own
+    default, minutes. `"24h"` keeps it for a day, which suits an agent that wakes up now and then,
+    at the price of OpenAI holding data derived from the prompt that long."""
     timeout_s: float = Field(180.0, gt=0)
     """Per model call attempt."""
     max_retries: int = Field(3, ge=0, le=10)
@@ -120,9 +149,12 @@ class BudgetConfig(_Section):
 
 class NotifyConfig(_Section):
     channel: str = "auto"
-    """Where messages go when no conversation is waiting (scheduled work, alerts): `auto` (the
-    chat app you last wrote from, the terminal if you never used one), or a channel by name:
-    `cli`, `telegram`, `web`, ..."""
+    """Where messages go when no conversation is waiting (scheduled work, alerts): `auto`, or a
+    channel by name (`cli`, `telegram`, `web`, a plugin's).
+
+    `auto` picks the chat app that can reach you on a phone and that you last wrote from; if you
+    never used one, the web page when it is on (it shows the message when you next open it, it
+    cannot ping you), else the terminal."""
     quiet_hours: str | None = None
     """Local time window such as "23:00-08:00". Only urgent messages are delivered inside it."""
     max_per_hour: int = Field(6, ge=1)
@@ -196,6 +228,11 @@ class SecretConfig(_Section):
     """Hosts the value may be sent to: an exact name or `*.example.com`. The model writes
     `{{secret:NAME}}` and never sees the value; a request to any other host is refused."""
 
+    @field_validator("env")
+    @classmethod
+    def _env_is_a_name(cls, value: str) -> str:
+        return _check_env_name(value, "env")
+
 
 class ToolsConfig(_Section):
     files: bool = True
@@ -259,9 +296,7 @@ class TelegramConfig(_Section):
     @field_validator("token_env")
     @classmethod
     def _token_env_is_a_name(cls, value: str) -> str:
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
-            raise ValueError("token_env is the NAME of an environment variable, not the token")
-        return value
+        return _check_env_name(value, "token_env")
 
     @field_validator("api_base")
     @classmethod
@@ -279,11 +314,146 @@ class TelegramConfig(_Section):
         return value.rstrip("/")
 
 
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+_HOSTNAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
+
+
+def _check_listen_host(value: str) -> str:
+    """An IP address (127.0.0.1, 0.0.0.0, ::1) or a plain name such as localhost: no scheme, no
+    port, no path. Anything else would only fail later, when the listener starts."""
+    host = value.strip()
+    bare = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        return str(ipaddress.ip_address(bare))
+    except ValueError:
+        pass
+    if _HOSTNAME.fullmatch(host):
+        return host
+    raise ValueError("host is an address such as 127.0.0.1 or 0.0.0.0, without http:// or a port")
+
+
+def _check_public_url(value: str | None) -> str | None:
+    """Where the outside world reaches a listener: an http(s) origin and nothing else."""
+    if value is None or not value.strip():
+        return None
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(value.strip())
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("public_url must look like https://my-mac.tailnet-name.ts.net")
+    if parts.username or parts.password:
+        raise ValueError("do not put credentials in public_url")
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        raise ValueError(
+            "public_url is an address without a path (https://host or https://host:port)"
+        )
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
+class WebConfig(_Section):
+    """The chat page you open in a browser (your phone's, too)."""
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    """Where to listen. 127.0.0.1 is this computer only. To use the page from a phone, keep this
+    and put Tailscale Serve (or another HTTPS proxy you trust) in front: `tailscale serve --bg 8765`."""
+    port: int = Field(8765, ge=1, le=65535)
+    public_url: str | None = None
+    """The address the phone uses, e.g. "https://my-mac.tailnet-name.ts.net". Pairing links use it,
+    requests from that address are accepted as our own, and an https one makes the session cookie
+    Secure."""
+    allowed_hosts: list[str] = []
+    """More names this page may be reached under (the public_url's name and localhost always may)."""
+    session_days: int = Field(30, ge=1, le=365)
+    """A paired browser stays signed in this long after it was last used."""
+    invite_minutes: int = Field(10, ge=1, le=1440)
+    """How long a pairing link from `pa web pair` works. It works once."""
+
+    @field_validator("host")
+    @classmethod
+    def _host_is_an_address(cls, value: str) -> str:
+        return _check_listen_host(value)
+
+    @field_validator("public_url")
+    @classmethod
+    def _public_url_is_an_origin(cls, value: str | None) -> str | None:
+        return _check_public_url(value)
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def _allowed_hosts_are_names(cls, value: list[str]) -> list[str]:
+        for name in value:
+            if not (_HOSTNAME.fullmatch(name) or name.lower() in _LOOPBACK_HOSTS):
+                raise ValueError(f"{name!r} is not a host name (no scheme, no port)")
+        return [name.lower() for name in value]
+
+
+WEBHOOK_SCHEMES = ("github", "gitlab", "standard", "generic")
+_ROUTE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+
+
+class WebhookRoute(_Section):
+    """One thing that may call the agent: `POST /hook/NAME` with a signature only you and the
+    sender can make."""
+
+    scheme: Literal["github", "gitlab", "standard", "generic"]
+    """How the sender proves it is them. Fixed per route, never guessed from the request:
+    github (X-Hub-Signature-256), gitlab (X-Gitlab-Token), standard (the Standard Webhooks /
+    Svix headers) or generic (X-Webhook-Timestamp + X-Webhook-Signature, see the README)."""
+    secret_env: str
+    """Name of the `.env` entry holding the shared secret. Never the secret itself."""
+    prompt: str = Field("", max_length=4000)
+    """What to do with this kind of event, in your words. The agent follows it; it never follows
+    anything inside the event itself."""
+    events: list[str] = []
+    """Only these event types wake the agent (github: push, pull_request...). Empty: all."""
+    tolerance_s: int = Field(300, ge=30, le=3600)
+    """How old a signed timestamp may be (the schemes that carry one)."""
+
+    @field_validator("secret_env")
+    @classmethod
+    def _secret_env_is_a_name(cls, value: str) -> str:
+        return _check_env_name(value, "secret_env")
+
+
+class WebhooksConfig(_Section):
+    """A second listener, only for webhooks. Separate from [web] on purpose: this is the one you
+    may have to put on the internet (a tunnel), and the chat page should not be reachable there."""
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = Field(8766, ge=1, le=65535)
+    public_url: str | None = None
+    """Where senders reach this listener, shown by `pa webhooks` so you can copy the address."""
+    max_body_bytes: int = Field(262_144, ge=1_024, le=5_000_000)
+    rate_per_minute: int = Field(30, ge=1, le=600)
+    """Accepted deliveries per route per minute; more get 429."""
+    routes: dict[str, WebhookRoute] = {}
+
+    @field_validator("host")
+    @classmethod
+    def _host_is_an_address(cls, value: str) -> str:
+        return _check_listen_host(value)
+
+    @field_validator("public_url")
+    @classmethod
+    def _public_url_is_an_origin(cls, value: str | None) -> str | None:
+        return _check_public_url(value)
+
+    @field_validator("routes")
+    @classmethod
+    def _route_names_are_simple(cls, value: dict[str, WebhookRoute]) -> dict[str, WebhookRoute]:
+        for name in value:
+            if not _ROUTE_NAME.fullmatch(name):
+                raise ValueError(
+                    f"route name {name!r} must be lowercase letters, digits, - or _ (it is part of the URL)"
+                )
+        return value
+
+
 ENV_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 """`${NAME}` in an MCP server's `env` or `headers`: filled in from the agent's environment (`.env`)
 when the server starts, so a credential never has to be written into config.toml."""
-
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
 
 def env_references(text: str) -> list[str]:
@@ -494,6 +664,8 @@ class Config(_Section):
     plugins: PluginsConfig = PluginsConfig()
     media: MediaConfig = MediaConfig()
     telegram: TelegramConfig = TelegramConfig()
+    web: WebConfig = WebConfig()
+    webhooks: WebhooksConfig = WebhooksConfig()
     secrets: dict[str, SecretConfig] = {}
 
     @field_validator("secrets")
@@ -527,6 +699,8 @@ reasoning_effort = "medium"      # none | minimal | low | medium | high | xhigh 
 # api = "chat_completions"       # for compatible servers without the Responses API
 store = false                    # false: OpenAI keeps no copy; history lives in state.db
 # reasoning_item_ids = "omit"    # fallback if `pa doctor --live` says replayed reasoning is rejected
+# prompt_cache_retention = "24h" # keep the prompt's static start cached for a day: much cheaper runs after
+#                                # pauses, but OpenAI then holds data derived from the prompt that long
 timeout_s = 180
 max_retries = 3
 
@@ -559,7 +733,7 @@ per_run_usd = 1.0                # one run above this is stopped and reported
 daily_usd = 5.0                  # all runs since local midnight; reaching it pauses work, loses nothing
 
 [notify]
-channel = "auto"                 # where unprompted messages go: auto (the chat app you last wrote from) | cli | telegram | web
+channel = "auto"                 # where unprompted messages go: auto (the phone chat app you last wrote from) | cli | telegram | web
 # quiet_hours = "23:00-08:00"    # local time; only urgent messages get through
 max_per_hour = 6                 # non-urgent messages per channel per hour
 
@@ -599,6 +773,24 @@ transcribe_model = "gpt-transcribe"
 # [telegram]
 # enabled = true
 # proxy = "socks5://127.0.0.1:1080"    # if Telegram is not reachable directly
+
+# A chat page for any browser, installable on a phone's home screen. It listens on this computer
+# only; `tailscale serve --bg 8765` makes it reachable from your own devices over HTTPS. Pair a
+# browser with `pa web pair` (a link and QR code that work once). Nobody else can open it.
+# [web]
+# enabled = true
+# public_url = "https://my-mac.tailnet-name.ts.net"   # where your phone reaches it
+
+# Let other programs wake the agent (GitHub, a monitoring tool, your own script). Each route needs
+# a secret in .env; the event is treated as outside data, and `prompt` says what to do with it.
+# This listener is separate from the chat page so that only this one needs to face the internet.
+# [webhooks]
+# enabled = true
+# [webhooks.routes.github]
+# scheme = "github"                    # github | gitlab | standard | generic
+# secret_env = "GITHUB_WEBHOOK_SECRET"
+# prompt = "Tell me only about failing checks and reviews requested from me."
+# events = ["check_suite", "pull_request_review"]
 
 # MCP servers add tools (files, GitHub, a database, ...). They run with your privileges, outside the
 # shell sandbox, so add only servers you trust. Nothing is offered until `pa mcp trust NAME` has
@@ -656,8 +848,18 @@ def load_config(paths: Paths) -> Config:
             raise ConfigError(f"cannot read {paths.config_file}: {exc}") from exc
     try:
         return Config.model_validate(data)
-    except Exception as exc:  # pydantic.ValidationError -> readable message
-        raise ConfigError(f"invalid {paths.config_file}:\n{exc}") from exc
+    except ValidationError as exc:
+        raise ConfigError(f"invalid {paths.config_file}:\n{_describe(exc)}") from None
+
+
+def _describe(exc: ValidationError) -> str:
+    """One line per problem: where it is and what is wrong. The value that was given is left out:
+    a secret pasted into the wrong setting must not end up on a terminal or in a log."""
+    lines = []
+    for error in exc.errors(include_input=False, include_url=False, include_context=False):
+        where = ".".join(str(part) for part in error["loc"]) or "(top level)"
+        lines.append(f"  {where}: {error['msg'].removeprefix('Value error, ')}")
+    return "\n".join(lines)
 
 
 def load_env(paths: Paths) -> None:

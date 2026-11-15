@@ -27,6 +27,8 @@ from personal_agent.commands import channels as channels_commands
 from personal_agent.commands import mcp as mcp_commands
 from personal_agent.commands import plugins as plugins_commands
 from personal_agent.commands import skills as skills_commands
+from personal_agent.commands import web as web_commands
+from personal_agent.commands import webhooks as webhooks_commands
 from personal_agent.config import DEFAULT_CONFIG_TOML, DEFAULT_ENV, ConfigError, load_env
 from personal_agent.core.approvals import choose_approvals, split_targets
 from personal_agent.core.dispatcher import Dispatcher
@@ -104,6 +106,8 @@ app.add_typer(skills_commands.build(lambda: _open(), console), name="skills")
 app.add_typer(mcp_commands.build(lambda: _open(), console), name="mcp")
 app.add_typer(plugins_commands.build(lambda: _open(), console), name="plugins")
 app.add_typer(channels_commands.build(lambda: _open(), console), name="channels")
+app.add_typer(web_commands.build(lambda: _open(), console), name="web")
+app.add_typer(webhooks_commands.build(lambda: _open(), console), name="webhooks")
 
 
 def _ago(ts: float | None, now: float) -> str:

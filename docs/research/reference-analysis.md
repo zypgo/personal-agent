@@ -167,3 +167,22 @@ nanobot 的 WebSocket 渠道：默认绑定 `127.0.0.1`，绑 `0.0.0.0` 必须�
 | D14 | 陌生发送者零成本零注入面：不产生事件、不进模型 | openclaw/nanobot/hermes 一致做法 |
 | D15 | 渠道文本命令（`/approve` `/deny` `/new` `/status`…）在渠道层处理，不经模型 | CLI 已有同样的命令 |
 | D16 | 图片入模型时只携带最近 N 张，更早的换成文字占位 | 控制 token 与请求体积 |
+
+### 6.7 迭代 4b 的实现决策（Web 页面、Webhook、插件渠道）
+
+| # | 决策 | 依据 |
+|---|------|------|
+| D17 | 网页只监听回环地址；手机访问靠 Tailscale 的 HTTPS（`tailscale serve`），不在程序里做证书与公网暴露 | nanobot 默认回环、绑 `0.0.0.0` 必须有令牌；个人 agent 不该自己扛公网 |
+| D18 | 配对码放在 URL 片段，页面换成 `HttpOnly; SameSite=Strict` 会话；库里只存 SHA-256；邀请 10 分钟、一次性、最多 5 个未用 | nanobot 的 query 令牌会进日志与 Referer（6.4） |
+| D19 | **Origin 逐字比较（含端口）**，而不只依赖 SameSite | cookie 属于"主机"不是端口：同机另一个端口上的页面与我们是 same-site，它发的请求会带上我们的 cookie |
+| D20 | 页面不用构建链：原生 ES 模块 + 一个 Service Worker；脚本从不把文字变成标记；CSP `default-src 'none'` | 个人项目不需要前端工具链；被注入的"图片"也带不走东西 |
+| D21 | 网页是"拉取"渠道：`send` 只确认"消息已在页面会读的地方"；实时靠 SSE，重连按数据库补齐，不另存状态 | 避免"页面上有而数据库里没有"的状态；Web Push 留作后续 |
+| D22 | Webhook 独立监听端口（与聊天页分开），对外只说很少的话：没有路由 / 密钥不可用 / 签名错 / 过期，一律 404 | 陌生人探测不该得知路由是否存在；原因写进日志，`pa webhooks` 可见 |
+| D23 | 投递 id 的来源逐方案钉死：GitHub 取 `X-GitHub-Delivery`；GitLab 取 `Idempotency-Key`/`webhook-id`；`generic` 取签名本身；都没有时按"路由 + 正文哈希 + 日期"兜底 | **GitLab 的 `X-Gitlab-Webhook-UUID` 标识的是钩子本身、每次都一样**，拿来当 id 会把第二个事件当成重复（变异验证抓到的坑） |
+| D24 | 深层嵌套的 JSON 保留为文本、超大数字保留为文本；`prompt`（主人写的）放在围栏**外**，投递内容放在围栏**内** | 解析器本身不该成为攻击面；可信与不可信的指令分开 |
+
+另外三条在实现中被**真实 API** 证实或纠正的发现：
+
+1. **SDK 默认的 `prompt_cache_key` 是按会话生成的**，让每个新对话的 7.6k token 前缀（指令 + 工具）都重新计费。我们按画像共用一个 key（`personal-agent:<profile>`），另一个对话的第二条消息 80% 以上命中缓存。
+2. **无状态模式（`store=false`）下回放含加密推理项的历史是成立的**（`pa doctor --live`），因此不需要 `reasoning_item_ids = "omit"`。
+3. **配置里的错误文字会回显输入值**：pydantic 的校验错误带 `input_value`，把真密钥贴进 `secret_env` 会被原样打印到终端。现在凡"环境变量名"字段只接受大写字母名字，且 `ConfigError` 从不回显输入。

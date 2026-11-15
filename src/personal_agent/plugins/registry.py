@@ -16,7 +16,13 @@ from becoming a way to run unreviewed code:
   are offered to runs the owner is part of (`full`, `scheduled`), never to runs woken by outside
   content. Rules in `[policy]` apply to them by name.
 
-A plugin that fails to load costs only its own tools: the others, and the agent, carry on.
+A plugin may also add a *channel* (a chat app the owner can talk to the agent through). A channel
+is switched on by the same list: it exists only if its plugin is enabled. The plugin decides who
+the owner is on its side, and hands what they say to `Ingress`, the single door every channel uses
+(see `PluginApi.add_channel`).
+
+A plugin that fails to load costs only its own tools and channels: the others, and the agent,
+carry on.
 """
 
 from __future__ import annotations
@@ -42,11 +48,23 @@ log = logging.getLogger(__name__)
 GROUP = "personal_agent.plugins"
 API_VERSION = 1
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,23}")
+CHANNEL_NAME = re.compile(r"[a-z][a-z0-9-]{1,23}")
+RESERVED_CHANNELS = frozenset({"cli", "web", "telegram", "webhooks", "auto"})
 _NOT_NAME = re.compile(r"[^A-Za-z0-9_-]")
 
 
 class PluginError(Exception):
     """A plugin asked for something the API does not allow."""
+
+
+@dataclass(frozen=True)
+class ChannelSpec:
+    """A channel a plugin offers: built (with the app) only when the daemon starts."""
+
+    name: str
+    factory: Callable[[Any], Any]
+    push: bool
+    plugin: str
 
 
 class PluginApi:
@@ -60,12 +78,15 @@ class PluginApi:
         registry: ToolRegistry,
         paths: Paths,
         settings: dict[str, Any] | None = None,
+        channels: dict[str, ChannelSpec] | None = None,
     ) -> None:
         self.name = name
         self._registry = registry
         self._paths = paths
         self._settings = settings or {}
+        self._channels = channels if channels is not None else {}
         self.added: list[str] = []
+        self.added_channels: list[str] = []
         self.log = logging.getLogger(f"personal_agent.plugin.{name}")
 
     @property
@@ -130,10 +151,42 @@ class PluginApi:
         self.added.append(public)
         return public
 
+    def add_channel(self, name: str, factory: Callable[[Any], Any], *, push: bool = True) -> str:
+        """Offer a channel: a way for the owner to talk to the agent from some app.
+
+        `factory(app)` is called once when the daemon starts and returns an object with
+
+        * `name` (the same as here) and `async send(message)`: deliver an outbox message. Return
+          normally only when the app really took it; raise `personal_agent.channels.base.
+          ChannelError` when it definitely did not, anything else when the outcome is unknown.
+        * optionally `async run(daemon)`: listen for the owner (it is supervised and restarted).
+
+        Who may talk is the channel's decision: only an account the owner approved may reach
+        `Ingress(app, wake=daemon.wake).owner_message(channel=name, text=..., external_id=...,
+        recipient=...)`, and `app.pairing` is there to do the approving (`pa channels approve`).
+        A stranger's message must never be passed on: it would reach the model.
+
+        `push=False` says the app shows a message only when the owner opens it, so unprompted news
+        prefers one that can ping them."""
+        if not CHANNEL_NAME.fullmatch(name):
+            raise PluginError("a channel name is 2-24 lowercase letters, digits and hyphens")
+        if name in RESERVED_CHANNELS:
+            raise PluginError(f"{name!r} is a built-in channel name")
+        if name in self._channels:
+            raise PluginError(f"another plugin already provides a channel called {name!r}")
+        if not callable(factory):
+            raise PluginError("add_channel takes a function that builds the channel")
+        self._channels[name] = ChannelSpec(name, factory, bool(push), self.name)
+        self.added_channels.append(name)
+        return name
+
     def rollback(self) -> None:
         for name in self.added:
             self._registry.unregister(name)
         self.added.clear()
+        for channel in self.added_channels:
+            self._channels.pop(channel, None)
+        self.added_channels.clear()
 
 
 @dataclass(frozen=True)
@@ -143,6 +196,7 @@ class PluginInfo:
     """`loaded`, `failed`, `missing` (enabled but nothing installed provides it) or `off`."""
     detail: str = ""
     tools: tuple[str, ...] = field(default_factory=tuple)
+    channels: tuple[str, ...] = field(default_factory=tuple)
 
 
 def installed() -> dict[str, metadata.EntryPoint]:
@@ -156,8 +210,10 @@ def load_plugins(
     registry: ToolRegistry,
     paths: Paths,
     entry_points: Iterable[Any] | None = None,
+    channels: dict[str, ChannelSpec] | None = None,
 ) -> list[PluginInfo]:
-    """Load the enabled plugins. Never raises: what went wrong is in the returned report."""
+    """Load the enabled plugins. Never raises: what went wrong is in the returned report.
+    Channels the plugins offer are added to `channels`."""
     found = {
         ep.name: ep for ep in (entry_points if entry_points is not None else installed().values())
     }
@@ -176,7 +232,7 @@ def load_plugins(
                 )
             )
             continue
-        api = PluginApi(name, registry, paths, config.settings.get(name))
+        api = PluginApi(name, registry, paths, config.settings.get(name), channels)
         try:
             entry.load()(api)
         except (Exception, SystemExit) as exc:
@@ -185,7 +241,7 @@ def load_plugins(
             log.warning("plugin %s could not be loaded: %r", name, exc)
             report.append(PluginInfo(name, "failed", f"{type(exc).__name__}: {text}"[:300]))
             continue
-        report.append(PluginInfo(name, "loaded", "", tuple(api.added)))
+        report.append(PluginInfo(name, "loaded", "", tuple(api.added), tuple(api.added_channels)))
     enabled = set(config.enabled)
     report.extend(
         PluginInfo(name, "off", "installed, not listed in [plugins] enabled")

@@ -11,8 +11,10 @@ from datetime import tzinfo
 from pathlib import Path
 from typing import Any
 
+from personal_agent.channels.base import PULL_ONLY
 from personal_agent.channels.pairing import PairingStore
 from personal_agent.channels.transcribe import OpenAITranscriber, Transcriber
+from personal_agent.channels.web.auth import WebAuth
 from personal_agent.clock import Clock, SystemClock, get_tz
 from personal_agent.config import Config, load_config, load_env
 from personal_agent.core.approvals import Approvals
@@ -31,7 +33,7 @@ from personal_agent.memory.store import MemoryStore
 from personal_agent.memory.templates import bootstrap
 from personal_agent.paths import Paths
 from personal_agent.plugins.mcp import McpHub, ServerFactory
-from personal_agent.plugins.registry import PluginInfo, load_plugins
+from personal_agent.plugins.registry import ChannelSpec, PluginInfo, load_plugins
 from personal_agent.security.audit import Audit
 from personal_agent.security.broker import SecretBroker
 from personal_agent.security.guardian import Guardian, LLMGuardian
@@ -76,14 +78,31 @@ class App:
     live: LiveBus
     media: MediaStore
     transcriber: Transcriber
+    web_auth: WebAuth
     plugins: list[PluginInfo] = field(default_factory=list)
+    plugin_channels: dict[str, ChannelSpec] = field(default_factory=dict)
+
+    def push_channels(self) -> set[str]:
+        """Chat channels that are switched on and can reach the owner without them looking: a
+        message there pings the phone."""
+        names = {name for name, spec in self.plugin_channels.items() if spec.push}
+        if self.config.telegram.enabled:
+            names.add("telegram")
+        return names - PULL_ONLY
 
     def notify_channel(self) -> str:
-        """Where unprompted messages go. `auto` means the chat app the owner last wrote from."""
+        """Where unprompted messages go.
+
+        `auto`: the chat app that can ping the owner and that they last wrote from. If they never
+        used one, the web page when it is on (they see the message when they open it), else the
+        terminal. A channel that is not switched on is never picked: nothing would deliver there."""
         configured = self.config.notify.channel
         if configured != "auto":
             return configured
-        return self.transcript.last_in_channel(exclude={"cli"}) or "cli"
+        found = self.transcript.last_in_channel(among=self.push_channels())
+        if found:
+            return found
+        return "web" if self.config.web.enabled else "cli"
 
     def recover(self) -> dict[str, int]:
         """Clean up after a previous process that died: orphaned runs and half-sent messages.
@@ -149,10 +168,16 @@ def build_app(
         bootstrap(memory)
     tools = ToolRegistry()
     register_builtin(tools, cfg)
+    plugin_channels: dict[str, ChannelSpec] = {}
     plugins = load_plugins(
-        cfg.plugins, registry=tools, paths=paths, entry_points=plugin_entry_points
+        cfg.plugins,
+        registry=tools,
+        paths=paths,
+        entry_points=plugin_entry_points,
+        channels=plugin_channels,
     )
     register_secret_envs(secret.env for secret in cfg.secrets.values())
+    register_secret_envs(route.secret_env for route in cfg.webhooks.routes.values())
     tz = get_tz(cfg.agent.timezone)
     inbox = Inbox(database, clock)
     runs = RunStore(database, clock)
@@ -203,5 +228,12 @@ def build_app(
         live=live,
         media=MediaStore(paths.media_dir),
         transcriber=transcriber or OpenAITranscriber(cfg.model, cfg.media),
+        web_auth=WebAuth(
+            database,
+            clock,
+            session_days=cfg.web.session_days,
+            invite_minutes=cfg.web.invite_minutes,
+        ),
         plugins=plugins,
+        plugin_channels=plugin_channels,
     )

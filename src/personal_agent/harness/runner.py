@@ -38,7 +38,7 @@ from personal_agent.harness.instructions import (
     describe_trigger,
     event_to_item,
 )
-from personal_agent.harness.models import model_settings
+from personal_agent.harness.models import cache_key_for, model_settings, shares_prompt_cache
 from personal_agent.harness.pricing import cost_usd
 from personal_agent.harness.runctx import Origin, RunContext
 from personal_agent.memory.store import PreferencesUnavailable
@@ -305,11 +305,14 @@ class Harness:
     def _agent(self, ctx: RunContext, instructions: str, model) -> Agent:
         app, cfg = self.app, self.app.config
         hosted = hosted_tools(app, ctx.profile)
+        cache_key = cache_key_for(ctx.profile) if shares_prompt_cache(model) else None
         return Agent(
             name=cfg.agent.name,
             instructions=instructions,
             model=model,
-            model_settings=model_settings(cfg.model, hosted_search=bool(hosted)),
+            model_settings=model_settings(
+                cfg.model, hosted_search=bool(hosted), cache_key=cache_key
+            ),
             tools=[
                 *(
                     self.guard.wrap(t)

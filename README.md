@@ -20,7 +20,7 @@
 | 3a | 双手与出站：沙箱 shell（seatbelt）、硬性底线、文件工具、SSRF 安全的 `web_fetch` / `http_request`、托管 `web_search`、密钥代理、"地址会带走数据"的出站控制 | ✅ |
 | 3b | 可插拔：MCP（定义先审阅再启用）、Agent Skills（渐进披露）、Python 插件注册表、外部文字清洗 | ✅ |
 | 4a | 渠道基础与 Telegram：配对（只能在本机批准）、对话历史、聊天内命令与审批按钮、语音转文字、图片、实时事件 | ✅ |
-| 4b | Web PWA（手机可用）、Webhook、插件提供的渠道 | 🚧 |
+| 4b | Web 页面（PWA，手机可用）、Webhook（签名校验）、插件提供的渠道、真实模型验证套件 | ✅ |
 | 5 | 记忆智能：做梦、检索、压缩、子代理 | 🚧 |
 | 6 | 评测、launchd 常驻服务、加固 | 🚧 |
 
@@ -71,6 +71,49 @@ uv run pa channels approve telegram ABCD-EFGH   # 只在你自己的电脑上批
 
 之后手机上直接聊天即可：文字、语音（需要 `brew install ffmpeg` 才能处理 Telegram 的 Ogg 语音）和图片都行；`/status`、`/approvals` 查看状态，需要你点头的动作会带 ✅/❌ 按钮；它主动找你的消息会发到你最近用的那个聊天 App。
 
+在手机或任意浏览器上用它（网页，一个不用构建的 PWA）：
+
+```bash
+# 1. ~/.personal-agent/config.toml 里写  [web]  enabled = true
+uv run pa serve                        # 常驻（网页默认只监听 127.0.0.1:8765）
+uv run pa web pair --label phone       # 打印一次性配对链接（只有这台电脑能发出；10 分钟有效、只能用一次）
+uv run pa web open                     # 在这台电脑上直接打开并自动配对
+uv run pa web sessions                 # 已配对的浏览器；pa web revoke <id> 收回某一个
+```
+
+要让手机访问，最稳妥的办法是 [Tailscale](https://tailscale.com)：`tailscale serve --bg 8765` 会给这台电脑一个只有你的设备能访问的 `https://<电脑名>.<tailnet>.ts.net` 地址；把它写进 `[web] public_url`，`pa web pair` 打印的链接就会用它。手机 Safari 打开链接 →"添加到主屏幕"即可当 App 用。配对令牌放在地址的 `#` 之后（不会发给任何服务器、也不进日志），换成 HttpOnly 的 SameSite=Strict cookie 后立即从地址栏清掉。想直接监听别的网卡（`host = "0.0.0.0"`）？`pa doctor` 会指出风险：网页只有配对过的浏览器能进，但没有 HTTPS 就不该离开你信任的网络。
+
+> 目前网页是"你打开它就能看到"（SSE 实时推送），**没有系统推送通知**；需要它主动叫你的话，同时开着 Telegram。iOS 的"主屏幕 App"与 Safari 不共享 cookie，所以要在主屏幕 App 里再配对一次。
+
+让别的程序叫醒它（Webhook，例如 GitHub、CI、定时脚本）：
+
+```toml
+# config.toml
+[webhooks]
+enabled = true                       # 只监听 127.0.0.1:8766；要给外部服务用，用 tailscale funnel / 反向代理转发这一个端口
+
+[webhooks.routes.github]
+scheme = "github"                    # github | gitlab | standard（Standard Webhooks / Svix）| generic
+secret_env = "GITHUB_WEBHOOK_SECRET" # 密钥放 .env，这里只写变量名
+events = ["push", "pull_request"]    # 只放行这些事件，其余直接丢弃
+prompt = "只告诉我失败的检查和需要我评审的 PR；没有就别打扰我。"
+```
+
+```bash
+uv run pa webhooks secret github     # 生成一把新密钥，并告诉你该往 .env 的哪一行填（不写文件）
+uv run pa webhooks                   # 各路由的地址、密钥是否就绪、最近投递/拒绝、监听端口是否可用
+uv run pa webhooks send github --event push --body '{"ref":"refs/heads/main"}'   # 用真实密钥签名，发一次测试投递
+```
+
+收到的内容一律当作**不可信数据**（放进围栏里，`prompt` 是唯一的可信指令），agent 以最小权限的 `untrusted` 画像运行（只能看、只能告诉你，不能动手）。没有这条路由、密钥没配好、签名错误或已过期的请求，一律回同样的 404，不泄露路由是否存在，原因只写进日志（`pa webhooks` 会显示最近一次）；过大回 413、超速回 429，不在白名单里的事件和重复投递回 202（收到了，不处理）。`generic` 方案的签名自己算也很简单：
+
+```bash
+BODY='{"event":"deploy","status":"failed"}'; TS=$(date +%s)
+SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | sed 's/^.* //')
+curl -X POST http://127.0.0.1:8766/hook/ROUTE -H "X-Webhook-Timestamp: $TS" \
+     -H "X-Webhook-Signature: sha256=$SIG" -d "$BODY"
+```
+
 想先试用而不动你的主目录：`PA_HOME=./.pa-home uv run pa init`（`.pa-home/` 已被 git 忽略）。
 
 ## 开发环境
@@ -78,6 +121,8 @@ uv run pa channels approve telegram ABCD-EFGH   # 只在你自己的电脑上批
 ```bash
 uv sync --all-extras          # Python 3.13 + 全部依赖
 uv run pytest                 # 测试（不需要 API key，模型由脚本化的 ScriptedModel 代替）
+node --test tests/js/*.test.mjs   # 网页前端的纯逻辑测试
+PA_LIVE=1 uv run pytest tests/live   # 用真实 OPENAI_API_KEY 的端到端验证（会花钱；key 只从环境读）
 uv run ruff check src tests && uv run ruff format --check src tests
 uv run pa --version
 scripts/fetch_references.sh   # 重新拉取只读参考项目到 references/

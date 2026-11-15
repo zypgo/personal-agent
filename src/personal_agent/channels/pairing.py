@@ -44,7 +44,7 @@ def normalize_code(text: str) -> str:
     return f"{cleaned[:4]}-{cleaned[4:]}" if len(cleaned) == CODE_LENGTH else cleaned
 
 
-def _label(text: str) -> str:
+def clean_label(text: str) -> str:
     """A display name chosen by a stranger, shown in the owner's terminal: no control or
     invisible characters, bounded length."""
     flat = " ".join(strip_invisible(text, formatting=True).split())
@@ -169,7 +169,7 @@ class PairingStore:
             self.db.execute(
                 """INSERT INTO pairings(code, channel, sender, label, created_at, expires_at)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (code, channel, str(sender), _label(label), now, now + self.ttl_s),
+                (code, channel, str(sender), clean_label(label), now, now + self.ttl_s),
             )
             created = self.db.one("SELECT * FROM pairings WHERE code = ?", (code,))
         assert created is not None
@@ -238,12 +238,12 @@ class PairingStore:
             self.db.execute(
                 """INSERT INTO senders(channel, sender, label, approved_at) VALUES (?, ?, ?, ?)
                    ON CONFLICT(channel, sender) DO UPDATE SET label = excluded.label""",
-                (channel, str(sender), _label(label), now),
+                (channel, str(sender), clean_label(label), now),
             )
             self.db.execute(
                 "DELETE FROM pairings WHERE channel = ? AND sender = ?", (channel, str(sender))
             )
-        return Sender(channel, str(sender), _label(label), now)
+        return Sender(channel, str(sender), clean_label(label), now)
 
     def revoke(self, channel: str, sender: str) -> bool:
         with self.db.tx():

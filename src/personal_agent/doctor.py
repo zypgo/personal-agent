@@ -16,6 +16,7 @@ import sqlite3
 import stat
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -235,6 +236,8 @@ def capability_checks(paths: Paths) -> list[Check]:
     checks.extend(_mcp_checks(paths, cfg))
     checks.extend(_plugin_checks(cfg))
     checks.extend(_channel_checks(paths, cfg))
+    checks.extend(_chat_page_checks(paths, cfg))
+    checks.extend(_webhook_checks(paths, cfg))
 
     for name, secret in cfg.secrets.items():
         hosts = ", ".join(secret.hosts)
@@ -399,17 +402,210 @@ def _channel_checks(paths: Paths, cfg) -> list[Check]:
                 )
             )
     notify = cfg.notify.channel
-    known = {"cli", "auto"} | ({"telegram"} if telegram.enabled else set())
+    known = (
+        {"cli", "auto"}
+        | ({"telegram"} if telegram.enabled else set())
+        | ({"web"} if cfg.web.enabled else set())
+    )
     if notify not in known:
+        if cfg.plugins.enabled and notify not in {"telegram", "web"}:
+            # Doctor does not run plugin code, so it cannot see which channels they offer.
+            checks.append(
+                Check(
+                    "notify channel",
+                    "warn",
+                    f"[notify] channel = {notify!r} is not a built-in channel; it works only if "
+                    "an enabled plugin provides it",
+                    "`pa plugins` lists the channels the plugins offer.",
+                )
+            )
+        else:
+            checks.append(
+                Check(
+                    "notify channel",
+                    "warn",
+                    f"[notify] channel = {notify!r}, but no such channel is switched on",
+                    "Messages the agent sends on its own would wait for a channel that never "
+                    "runs. Enable it in config.toml or pick another.",
+                )
+            )
+    return checks
+
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _open_to_other_devices(host: str) -> bool:
+    return host not in LOOPBACK_HOSTS
+
+
+def _is_https(url: str | None) -> bool:
+    return bool(url) and url.startswith("https://")
+
+
+def _public_host(url: str) -> str:
+    from urllib.parse import urlsplit
+
+    return (urlsplit(url).hostname or "").lower()
+
+
+def _live_count(paths: Paths, query: str) -> int | None:
+    """One number from the database (read-only), or None if it cannot be had (no database yet, an
+    older schema)."""
+    if not paths.db_file.exists():
+        return 0
+    try:
+        conn = sqlite3.connect(f"file:{paths.db_file}?mode=ro", uri=True, timeout=1.0)
+        try:
+            row = conn.execute(query, (time.time(),)).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+    return int(row[0]) if row else 0
+
+
+def _port_check(name: str, paths: Paths, host: str, port: int) -> Check | None:
+    """Can `pa serve` take this address? Asked only while nothing is running the agent: a running
+    agent holds its own ports."""
+    import ipaddress
+
+    from personal_agent.daemon import LOCK_NAME, EngineLock
+
+    if EngineLock.is_taken(paths.run_dir / LOCK_NAME):
+        return None
+    try:
+        family = socket.AF_INET6 if ipaddress.ip_address(host).version == 6 else socket.AF_INET
+    except ValueError:
+        family = socket.AF_INET  # "localhost"
+    probe = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as the server does
+        probe.bind((host, port))
+    except OSError as exc:
+        return Check(
+            f"{name} port",
+            "warn",
+            f"{host}:{port} cannot be used: {exc.strerror or exc}",
+            f"Stop the program that uses it, or choose another port under [{name}] in config.toml.",
+        )
+    finally:
+        probe.close()
+    return None
+
+
+def _chat_page_checks(paths: Paths, cfg) -> list[Check]:
+    """The chat page: where it can be reached from, and whether any browser is paired."""
+    web = cfg.web
+    if not web.enabled:
+        return []
+    where = f"{web.host}:{web.port}"
+    public = web.public_url
+    if _open_to_other_devices(web.host) and not _is_https(public):
+        checks = [
+            Check(
+                "chat page",
+                "warn",
+                f"listening on {where}: other devices on the network can reach it, and without "
+                "HTTPS what you type and read can be seen on the way",
+                'Keep host = "127.0.0.1" and put HTTPS in front, for example '
+                f"`tailscale serve --bg {web.port}`, then set public_url.",
+            )
+        ]
+    elif public and not _is_https(public) and _public_host(public) not in LOOPBACK_HOSTS:
+        checks = [
+            Check(
+                "chat page",
+                "warn",
+                f"public_url {public} is not https: the browser will not keep a Secure cookie "
+                "and the traffic is readable",
+                "Use the https address of your proxy (Tailscale Serve gives one).",
+            )
+        ]
+    else:
+        reach = f"reached as {public}" if public else "this computer only"
+        checks = [Check("chat page", "ok", f"on {where}; {reach}")]
+    paired = _live_count(
+        paths, "SELECT COUNT(*) FROM web_sessions WHERE revoked_at IS NULL AND expires_at > ?"
+    )
+    if paired == 0:
         checks.append(
             Check(
-                "notify channel",
+                "chat page browsers",
                 "warn",
-                f"[notify] channel = {notify!r}, but no such channel is switched on",
-                "Messages the agent sends on its own would wait for a channel that never runs. "
-                "Enable it in config.toml or pick another.",
+                "no browser is paired yet",
+                "Run `pa web pair` and open the link in the browser (the page cannot be used before).",
             )
         )
+    elif paired:
+        checks.append(Check("chat page browsers", "ok", f"{paired} paired"))
+    if port := _port_check("web", paths, web.host, web.port):
+        checks.append(port)
+    return checks
+
+
+def _webhook_checks(paths: Paths, cfg) -> list[Check]:
+    """Webhooks: is every route's secret there and strong enough, and how is the listener exposed?"""
+    from personal_agent.channels.webhooks.service import route_secret
+
+    hooks = cfg.webhooks
+    if not hooks.enabled:
+        return []
+    if not hooks.routes:
+        return [
+            Check(
+                "webhooks",
+                "warn",
+                "switched on, but there is no route, so nothing listens",
+                "Add [webhooks.routes.NAME] to config.toml (scheme, secret_env, prompt).",
+            )
+        ]
+    checks: list[Check] = []
+    for name, route in hooks.routes.items():
+        key, problem = route_secret(route, os.environ)
+        label = f"webhook {name}"
+        if key is None:
+            fix = f"Run `pa webhooks secret {name}` and put the line it prints in {paths.env_file}."
+            checks.append(Check(label, "fail", f"{problem}; deliveries are refused", fix))
+        else:
+            detail = f"{route.scheme}; secret set"
+            if route.events:
+                detail += f"; only {', '.join(route.events)}"
+            checks.append(Check(label, "ok", detail))
+    where = f"{hooks.host}:{hooks.port}"
+    public = hooks.public_url
+    if _open_to_other_devices(hooks.host) and not _is_https(public):
+        checks.append(
+            Check(
+                "webhook listener",
+                "warn",
+                f"listening on {where} without HTTPS: deliveries are signed, but their content "
+                "travels in the clear",
+                'Put a tunnel or proxy with HTTPS in front and keep host = "127.0.0.1".',
+            )
+        )
+    elif public and not _is_https(public) and _public_host(public) not in LOOPBACK_HOSTS:
+        checks.append(
+            Check(
+                "webhook listener",
+                "warn",
+                f"public_url {public} is not https: the content of deliveries is readable on the way",
+                "Use the https address of your tunnel.",
+            )
+        )
+    elif not public:
+        checks.append(
+            Check(
+                "webhook listener",
+                "ok",
+                f"on {where}; reachable from this computer only (set public_url once a tunnel "
+                "exposes it)",
+            )
+        )
+    else:
+        checks.append(Check("webhook listener", "ok", f"on {where}; reached as {public}"))
+    if port := _port_check("webhooks", paths, hooks.host, hooks.port):
+        checks.append(port)
     return checks
 
 

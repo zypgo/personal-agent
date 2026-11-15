@@ -54,6 +54,31 @@ def test_the_overview_counts_approved_accounts_and_flags_waiting_ones(ready):
     assert "pa channels pending" in out
 
 
+def test_the_overview_includes_the_web_page_and_its_browsers(wired):
+    from personal_agent.config import WebConfig
+
+    app = wired(config=Config(web=WebConfig(enabled=True)))
+    app.web_auth.redeem(app.web_auth.invite("phone").code)
+    app.web_auth.invite("laptop")
+    out = flat(invoke("channels").output)
+    assert "web on (`pa web`) 1 1" in out  # one paired browser, one link waiting
+
+
+def test_the_overview_says_when_the_web_page_is_off(wired):
+    wired()
+    out = flat(invoke("channels").output)
+    assert "web off ([web] enabled = true) 0 0" in out
+
+
+def test_the_overview_lists_the_channels_plugins_provide(wired):
+    from personal_agent.plugins.registry import ChannelSpec
+
+    app = wired()
+    app.plugin_channels["signal"] = ChannelSpec("signal", lambda a: None, True, "signal-bridge")
+    out = flat(invoke("channels").output)
+    assert "signal on (plugin signal-bridge)" in out
+
+
 # ---- pairing ----------------------------------------------------------------------------------
 def test_pending_lists_who_is_waiting_and_with_which_code(ready):
     app = ready()

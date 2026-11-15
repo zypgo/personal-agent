@@ -265,6 +265,30 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX spend_at ON spend(at);
     """,
+    # ---- 5: iteration 4b, the web page ----------------------------------------------------
+    """
+    -- A pairing link from `pa web pair`. Only a hash of the code is kept, and it works once.
+    CREATE TABLE web_invites (
+        token_hash  TEXT PRIMARY KEY,        -- sha256 of the code in the link
+        label       TEXT NOT NULL DEFAULT '',
+        created_at  REAL NOT NULL,
+        expires_at  REAL NOT NULL,
+        used_at     REAL
+    );
+
+    -- A browser that redeemed a link. The cookie holds a random token; only its hash is kept, so
+    -- a copy of this database cannot be used to open the page.
+    CREATE TABLE web_sessions (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_hash    TEXT NOT NULL UNIQUE,
+        label         TEXT NOT NULL DEFAULT '',      -- named by the owner when pairing
+        agent         TEXT NOT NULL DEFAULT '',      -- what the browser called itself, for recognising it
+        created_at    REAL NOT NULL,
+        last_seen_at  REAL NOT NULL,
+        expires_at    REAL NOT NULL,
+        revoked_at    REAL
+    );
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

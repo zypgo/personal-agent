@@ -56,9 +56,28 @@ class OpenAIModels:
         return OpenAIResponsesModel(model=name, openai_client=self.client)
 
 
-def model_settings(cfg: ModelConfig, *, hosted_search: bool = False) -> ModelSettings:
+def shares_prompt_cache(model: object) -> bool:
+    """Whether `model` talks to OpenAI itself, the only endpoint that is known to understand
+    `prompt_cache_key` (the Agents SDK makes the same call before adding a key of its own)."""
+    check = getattr(model, "_supports_default_prompt_cache_key", None)
+    return bool(check()) if callable(check) else False
+
+
+def cache_key_for(profile: str) -> str:
+    """One routing key for every run of the same kind.
+
+    OpenAI only reuses a cached prompt start for requests with the same `prompt_cache_key`. The
+    SDK's own key is made per conversation, so a timer, a webhook and each chat would all pay in
+    full for the same instructions and tools. Runs of one profile share those, so they share a key."""
+    return f"personal-agent:{profile}"
+
+
+def model_settings(
+    cfg: ModelConfig, *, hosted_search: bool = False, cache_key: str | None = None
+) -> ModelSettings:
     """`hosted_search`: also return the sources of OpenAI's web searches, so the addresses the
-    model was shown can be told apart from ones it made up (see `tools/urls.py`)."""
+    model was shown can be told apart from ones it made up (see `tools/urls.py`).
+    `cache_key`: see `cache_key_for`; `None` leaves the SDK's own per-conversation key in place."""
     reasoning = Reasoning(effort=cfg.reasoning_effort)
     if cfg.reasoning_context is not None:
         reasoning = Reasoning(effort=cfg.reasoning_effort, context=cfg.reasoning_context)
@@ -72,6 +91,8 @@ def model_settings(cfg: ModelConfig, *, hosted_search: bool = False) -> ModelSet
         store=cfg.store if cfg.api == "responses" else None,
         # Stateless mode: ask for encrypted reasoning so it can be replayed from our own log.
         response_include=include or None,
+        extra_args={"prompt_cache_key": cache_key} if cache_key else None,
+        prompt_cache_retention=cfg.prompt_cache_retention if cache_key else None,
         timeout=cfg.timeout_s,
         retry=ModelRetrySettings(
             max_retries=cfg.max_retries,

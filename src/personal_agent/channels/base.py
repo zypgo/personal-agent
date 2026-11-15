@@ -21,6 +21,11 @@ class ChannelError(Exception):
         self.retry_after = retry_after
 
 
+PULL_ONLY = frozenset({"cli", "web"})
+"""Channels that show a message only when the owner looks: the terminal and the web page cannot
+ping a phone. Unprompted news goes to one that can, when there is one."""
+
+
 class Channel(Protocol):
     name: str
 

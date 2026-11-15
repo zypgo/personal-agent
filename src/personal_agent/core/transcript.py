@@ -132,15 +132,22 @@ class Transcript:
     def last_id(self) -> int:
         return int(self.db.scalar("SELECT MAX(id) FROM transcript", default=0))
 
-    def last_in_channel(self, *, exclude: Collection[str] = ()) -> str | None:
-        """The channel the owner last spoke on, ignoring `exclude` (where a "tell me when..."
-        should be answered)."""
+    def last_in_channel(
+        self, *, among: Collection[str] | None = None, exclude: Collection[str] = ()
+    ) -> str | None:
+        """The channel the owner last spoke on (where a "tell me when..." should be answered),
+        counting only the channels in `among` when given and never those in `exclude`."""
         skip = tuple(exclude)
-        marks = ",".join("?" * len(skip))
-        row = self.db.one(
-            "SELECT channel FROM transcript WHERE direction = 'in'"
-            + (f" AND channel NOT IN ({marks})" if skip else "")
-            + " ORDER BY id DESC LIMIT 1",
-            skip,
-        )
+        only = None if among is None else tuple(among)
+        if only is not None and not only:
+            return None
+        sql = "SELECT channel FROM transcript WHERE direction = 'in'"
+        params: list[str] = []
+        if only is not None:
+            sql += f" AND channel IN ({','.join('?' * len(only))})"
+            params.extend(only)
+        if skip:
+            sql += f" AND channel NOT IN ({','.join('?' * len(skip))})"
+            params.extend(skip)
+        row = self.db.one(sql + " ORDER BY id DESC LIMIT 1", params)
         return row["channel"] if row else None

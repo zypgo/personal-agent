@@ -37,7 +37,8 @@ Commands:
 [start, end]; end = -1 means to the end of the file).
 - create: make a new file (path, file_text). Fails if the file already exists.
 - str_replace: replace one exact, unique piece of text in a file (path, old_str, new_str).
-- insert: insert text after a line (path, insert_line, insert_text); insert_line 0 means the top.
+- insert: insert text after a line (path, insert_line, insert_text); insert_line 0 puts it above \
+the first line, so to append pass the number of the last line.
 - delete: delete a file or directory (path).
 - rename: move or rename (old_path, new_path).
 Only store facts you cannot look up elsewhere; for things that live in another system, store a \
