@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 from agents.testing import ScriptedModel
+from hypothesis import HealthCheck, settings
 
 from personal_agent import launchd
 from personal_agent.app import App, build_app
@@ -10,6 +13,16 @@ from personal_agent.config import Config
 from personal_agent.db import Database, open_database
 from personal_agent.paths import Paths
 from personal_agent.security.sandbox import SandboxProvider
+
+# Property tests: `HYPOTHESIS_PROFILE=thorough pytest` runs ten times as many examples. A slow
+# machine must not fail a property because one example took long, so there is no per-example
+# deadline (the tests that care about speed time themselves).
+settings.register_profile("default", max_examples=100, deadline=None)
+settings.register_profile("thorough", max_examples=1000, deadline=None)
+settings.register_profile(
+    "quick", max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow]
+)
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 
 @pytest.fixture(autouse=True)

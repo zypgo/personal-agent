@@ -71,7 +71,11 @@ def text_of(item: dict[str, Any]) -> str:
 
 
 def invoke(*args: str, input: str | None = None):
-    """Run a `pa` command in-process."""
+    """Run a `pa` command in-process.
+
+    The terminal is made very wide: Rich wraps at 80 columns when there is no terminal, and a long
+    temporary path would otherwise split a sentence across lines and break `in output` checks."""
     from personal_agent import cli
 
+    cli.console.size = (10_000, 50)  # Rich only honours a width that comes with a height
     return CliRunner().invoke(cli.app, list(args), input=input)

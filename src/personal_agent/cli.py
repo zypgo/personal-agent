@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextlib
 import os
 import re
 import signal
@@ -169,7 +170,8 @@ def doctor(
 ) -> None:
     """Check the setup and explain how to fix what is wrong."""
     paths = Paths.resolve()
-    load_env(paths)
+    with contextlib.suppress(ConfigError):  # a .env that cannot be read is reported below
+        load_env(paths)
     checks = static_checks(paths)
     checks += capability_checks(paths)  # says nothing if the config is broken (already reported)
     skipped_live = live and any(c.status == "fail" for c in checks)

@@ -323,6 +323,8 @@ class MemoryStore:
                 )
         except PathError as exc:
             return str(exc)
+        except UnicodeDecodeError:
+            return f"Error: {name} failed: the file is not UTF-8 text, so it cannot be edited"
         except OSError as exc:
             return f"Error: {name} failed: {exc.strerror or exc}"
         return f"Error: unknown command {name}"

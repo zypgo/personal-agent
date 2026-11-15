@@ -359,3 +359,17 @@ env = { KEY = "${DOCS_KEY}" }
 """
     check = doctor_checks(app, toml)["mcp docs"]
     assert check.status == "ok" and check.detail == "stdio; 1 tool(s) reviewed"
+
+
+def test_editing_a_config_that_is_not_utf8_is_refused_in_words(tmp_path):
+    from personal_agent.plugins.mcp_config import ConfigEditError, add_server, remove_server
+
+    path = tmp_path / "config.toml"
+    original = "\u4f60\u597d\uff0c\u4e16\u754c".encode("gbk")
+    path.write_bytes(original)
+
+    with pytest.raises(ConfigEditError, match="cannot read"):
+        add_server(path, {"name": "files", "command": "npx"})
+    with pytest.raises(ConfigEditError, match="cannot read"):
+        remove_server(path, "files")
+    assert path.read_bytes() == original  # and nothing was written

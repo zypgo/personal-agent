@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from personal_agent.clock import get_tz
-from personal_agent.config import Config, ConfigError, api_key, load_config
+from personal_agent.config import Config, ConfigError, api_key, load_config, read_text_file
 from personal_agent.db import SCHEMA_VERSION
 from personal_agent.harness.pricing import is_known
 from personal_agent.paths import Paths
@@ -54,6 +54,18 @@ def _fts5_available() -> bool:
     return True
 
 
+def _env_file_check(paths: Paths) -> Check:
+    if not paths.env_file.exists():
+        return Check("env file", "warn", "no .env file", "Run: pa init")
+    try:
+        read_text_file(paths.env_file)
+    except ConfigError as exc:
+        return Check("env file", "fail", str(exc), f"Save {paths.env_file} as UTF-8 text")
+    if problems := paths.env_file_warnings():
+        return Check("env file", "warn", problems[0])
+    return Check("env file", "ok", "private (owner only)")
+
+
 def static_checks(paths: Paths) -> list[Check]:
     checks: list[Check] = []
 
@@ -76,12 +88,7 @@ def static_checks(paths: Paths) -> list[Check]:
     else:
         add("home", "ok", str(paths.home))
 
-    if not paths.env_file.exists():
-        add("env file", "warn", "no .env file", "Run: pa init")
-    elif problems := paths.env_file_warnings():
-        add("env file", "warn", problems[0])
-    else:
-        add("env file", "ok", "private (owner only)")
+    checks.append(_env_file_check(paths))
 
     try:
         cfg = load_config(paths)

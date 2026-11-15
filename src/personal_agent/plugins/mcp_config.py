@@ -27,8 +27,8 @@ def _read(path: Path) -> tomlkit.TOMLDocument:
     if not path.exists():
         return tomlkit.document()
     try:
-        return tomlkit.parse(path.read_text(encoding="utf-8"))
-    except (OSError, TOMLKitError) as exc:
+        return tomlkit.parse(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, TOMLKitError) as exc:
         raise ConfigEditError(f"cannot read {path}: {exc}") from exc
 
 

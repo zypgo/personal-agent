@@ -6,13 +6,15 @@ Unknown keys are rejected so typos are noticed instead of silently ignored.
 
 from __future__ import annotations
 
+import io
 import ipaddress
 import os
 import re
 import tomllib
+from pathlib import Path
 from typing import Any, Literal
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -911,13 +913,29 @@ class ConfigError(Exception):
     pass
 
 
+def read_text_file(path: Path) -> str:
+    """The text of a file the owner edits by hand, or a `ConfigError` that says what to do.
+
+    An editor that saves "ANSI" or GBK instead of UTF-8 is the usual reason a file cannot be
+    read; a byte-order mark (Notepad's "UTF-8 with BOM") is accepted."""
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ConfigError(
+            f"cannot read {path}: it is not UTF-8 text (byte {exc.start} is not); "
+            "save the file as UTF-8"
+        ) from exc
+    except OSError as exc:
+        raise ConfigError(f"cannot read {path}: {exc}") from exc
+
+
 def load_config(paths: Paths) -> Config:
     """Read `config.toml` (optional) and validate it."""
     data: dict[str, Any] = {}
     if paths.config_file.exists():
         try:
-            data = tomllib.loads(paths.config_file.read_text(encoding="utf-8"))
-        except (OSError, tomllib.TOMLDecodeError) as exc:
+            data = tomllib.loads(read_text_file(paths.config_file))
+        except tomllib.TOMLDecodeError as exc:
             raise ConfigError(f"cannot read {paths.config_file}: {exc}") from exc
     try:
         return Config.model_validate(data)
@@ -942,7 +960,10 @@ def load_env(paths: Paths) -> None:
     may belong to an unrelated project and must not leak into this agent.
     """
     if paths.env_file.exists():
-        load_dotenv(paths.env_file, override=False)
+        values = dotenv_values(stream=io.StringIO(read_text_file(paths.env_file)))
+        for name, value in values.items():
+            if value is not None:
+                os.environ.setdefault(name, value)
 
 
 def api_key() -> str | None:

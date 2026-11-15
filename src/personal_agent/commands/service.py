@@ -121,7 +121,10 @@ def build(open_app: Callable[[], App], console: Console) -> typer.Typer:
         paths = Paths.resolve()
         if not paths.home.is_dir():
             raise fail(f"{paths.home} does not exist. Run `pa init` first.")
-        load_env(paths)
+        try:
+            load_env(paths)
+        except ConfigError as exc:
+            raise fail(str(exc), 2) from exc
         return paths
 
     # ---- status -------------------------------------------------------------------------------

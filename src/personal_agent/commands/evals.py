@@ -228,8 +228,8 @@ def build(console: Console) -> typer.Typer:
 
         if not paths.home.is_dir():
             raise fail(f"{paths.home} does not exist. Run `pa init` first.", 2)
-        load_env(paths)
         try:
+            load_env(paths)
             owner = load_config(paths)
         except ConfigError as exc:
             raise fail(str(exc), 2) from exc

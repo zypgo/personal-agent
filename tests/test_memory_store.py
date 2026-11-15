@@ -309,6 +309,36 @@ def test_an_argument_that_is_not_text_is_an_error_the_model_can_read(store, comm
     assert "hi" in run(store, command="view", path="/memories/state/x.md")
 
 
+def test_a_file_that_is_not_utf8_is_reported_not_crashed_on_and_left_alone(store, paths):
+    """An editor that saves GBK instead of UTF-8 leaves a file the tool cannot edit as text."""
+    original = "\u4f60\u597d\uff0c\u4e16\u754c".encode("gbk") + b"\n"
+    (paths.state_dir / "gbk.md").write_bytes(original)
+    attempts = [
+        {"command": "view", "path": "/memories/state/gbk.md"},
+        {
+            "command": "str_replace",
+            "path": "/memories/state/gbk.md",
+            "old_str": "x",
+            "new_str": "y",
+        },
+        {
+            "command": "insert",
+            "path": "/memories/state/gbk.md",
+            "insert_line": 0,
+            "insert_text": "z",
+        },
+    ]
+
+    for attempt in attempts:
+        result = store.execute(attempt, actor=Actor.AGENT)
+        assert result.startswith("Error:") and "UTF-8" in result, attempt
+
+    assert (paths.state_dir / "gbk.md").read_bytes() == original
+    assert run(
+        store, command="rename", old_path="/memories/state/gbk.md", new_path="/memories/state/ok.md"
+    ).startswith("Successfully")  # moving or deleting it never needed to read it
+
+
 def test_new_text_may_be_left_out_to_delete_what_was_matched(store):
     run(store, command="create", path="/memories/state/x.md", file_text="keep this, drop that")
     result = run(store, command="str_replace", path="/memories/state/x.md", old_str=", drop that")
