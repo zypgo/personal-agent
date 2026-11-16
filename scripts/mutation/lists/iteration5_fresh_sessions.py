@@ -11,9 +11,12 @@ TR = "src/personal_agent/core/transcript.py"
 IN = "src/personal_agent/harness/instructions.py"
 TK = "src/personal_agent/memory/tasks.py"
 SE = "src/personal_agent/core/sessions.py"
+ST = "src/personal_agent/memory/store.py"
+JO = "src/personal_agent/memory/journal.py"
 
 TF = ["tests/test_fresh_sessions.py", "tests/test_recent_messages.py", "tests/test_task_index.py"]
 TT = ["tests/test_recent_messages.py", "tests/test_task_index.py", "tests/test_instructions.py"]
+TTJ = [*TT, "tests/test_memory_journal.py"]
 
 M = [
     # ---- who starts a new conversation ---------------------------------------------------
@@ -215,46 +218,49 @@ M = [
     # ---- the task list --------------------------------------------------------------------
     (
         "me tasks: symlinked folder followed",
-        TK,
-        "if limit <= 0 or directory.is_symlink() or not directory.is_dir():",
-        "if limit <= 0 or not directory.is_dir():",
+        ST,
+        "if self.cfg.task_index_lines <= 0 or directory.is_symlink():",
+        "if self.cfg.task_index_lines <= 0:",
         TT,
     ),
     (
         "me tasks: switch ignored",
         TK,
-        "if limit <= 0 or directory.is_symlink() or not directory.is_dir():",
-        "if directory.is_symlink() or not directory.is_dir():",
+        '    if limit <= 0:\n        return ""',
+        '    if False:\n        return ""',
         TT,
     ),
     (
         "me tasks: hidden files listed",
-        TK,
-        '            entry.name.startswith(".")\n            or not entry.name.endswith(".md")',
-        '            not entry.name.endswith(".md")',
-        TT,
+        JO,
+        '                    for name in [*dirs, *files]\n                    if not name.startswith(".") and not (Path(parent) / name).is_symlink()',
+        "                    for name in [*dirs, *files]\n                    if not (Path(parent) / name).is_symlink()",
+        TTJ,
     ),
-    ("me tasks: any extension", TK, '            or not entry.name.endswith(".md")\n', "", TT),
     (
-        "me tasks: symlinked file followed",
-        TK,
-        "            or entry.is_symlink()\n            or not entry.is_file()",
-        "            or not entry.is_file()",
+        "me tasks: any extension",
+        ST,
+        'if kind != "file" or path.suffix != ".md":',
+        'if kind != "file":',
         TT,
     ),
+    # No mutation here for "a symlinked note is followed": it is refused in two layers (the listing in
+    # `MemoryJournal.entries` skips it, and `MemoryJournal.disk` raises for it), so deleting either
+    # check alone changes nothing a test can observe (an equivalent mutant). The behaviour is pinned
+    # by `test_only_markdown_files_directly_in_the_folder_count`.
     (
         "me tasks: folders listed",
-        TK,
-        "            or entry.is_symlink()\n            or not entry.is_file()",
-        "            or entry.is_symlink()",
+        ST,
+        'if kind != "file" or path.suffix != ".md":',
+        'if path.suffix != ".md":',
         TT,
     ),
-    ("me tasks: whole file read", TK, "head = handle.read(4096)", "head = handle.read()", TT),
+    ("me tasks: whole file read", TK, "head = note.text[:4096]", "head = note.text", TT),
     (
         "me tasks: bad bytes raise",
-        TK,
-        'with open(entry.path, encoding="utf-8", errors="replace") as handle:',
-        'with open(entry.path, encoding="utf-8") as handle:',
+        ST,
+        '.decode("utf-8", errors="replace")',
+        '.decode("utf-8")',
         TT,
     ),
     (
@@ -300,7 +306,7 @@ M = [
         "    found.sort(",
         TT,
     ),
-    ("me tasks: no name fallback", TK, 'or entry.name.removesuffix(".md")', 'or ""', TT),
+    ("me tasks: no name fallback", TK, 'or note.name.removesuffix(".md")', 'or ""', TT),
     (
         "me tasks: empty status shown",
         TK,

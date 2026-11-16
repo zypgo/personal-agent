@@ -22,6 +22,7 @@ CM = "src/personal_agent/commands/dream.py"
 TD = ["tests/test_dreaming.py"]
 TB = ["tests/test_dreaming.py", "tests/test_budget.py"]
 TC = ["tests/test_compaction.py", "tests/test_sessions.py"]
+TCF = [*TC, "tests/test_compaction_failures.py"]
 TS = ["tests/test_search_history.py", "tests/test_transcript.py", "tests/test_db.py"]
 TH = ["tests/test_dreaming.py", "tests/test_harness.py"]
 TM = ["tests/test_dreaming.py", "tests/test_memory_store.py"]
@@ -176,15 +177,15 @@ M = [
     (
         "dr finished: completed only",
         DR,
-        'if outcome.status not in ("completed", "silent"):',
-        'if outcome.status not in ("completed",):',
+        'if status not in ("completed", "silent"):',
+        'if status not in ("completed",):',
         TD,
     ),
     (
         "dr finished: silent only",
         DR,
-        'if outcome.status not in ("completed", "silent"):',
-        'if outcome.status not in ("silent",):',
+        'if status not in ("completed", "silent"):',
+        'if status not in ("silent",):',
         TD,
     ),
     (
@@ -197,7 +198,7 @@ M = [
     (
         "dr finished: no review",
         DR,
-        "reverted = self.review(outcome.run_id)",
+        "reverted = self.review(run_id)",
         "reverted = False",
         TD,
     ),
@@ -293,7 +294,7 @@ M = [
     (
         "ru dream: no bookkeeping",
         RU,
-        "            Dreamer(app).finished(batch, outcome)",
+        "            dreamer.finished(batch, outcome)",
         "            pass",
         TD,
     ),
@@ -356,8 +357,8 @@ M = [
     (
         "me revert: oldest first",
         ME,
-        "for row in reversed(self.changes_by_run(run_id)):",
-        "for row in self.changes_by_run(run_id):",
+        "for row in reversed(changes):",
+        "for row in changes:",
         TM,
     ),
     (
@@ -488,7 +489,13 @@ M = [
         "for allowance in (self.cfg.summary_max_tokens, self.cfg.summary_max_tokens):",
         TC,
     ),
-    ("cp summarizer: cut off accepted", CP, 'text if text and not cut_off else ""', "text", TC),
+    (
+        "cp summarizer: cut off accepted",
+        CP,
+        "            if text and not cut_off:",
+        "            if text:",
+        TC,
+    ),
     (
         "cp summarizer: cut off not seen",
         CP,
@@ -528,8 +535,8 @@ M = [
     (
         "cp summarizer: never returns early",
         CP,
-        "            if total.text:\n                return total\n",
-        "            if False:\n                return total\n",
+        "            if text and not cut_off:\n                return dataclasses.replace(accounting.spent, text=text)",
+        "            if False:\n                return dataclasses.replace(accounting.spent, text=text)",
         TC,
     ),
     ("cp clean: credentials stay", CP, "return redact(text.strip())", "return text.strip()", TC),
@@ -634,9 +641,23 @@ M = [
     (
         "cp compact: rejected cost lost",
         CP,
-        "            if isinstance(exc, SummaryRejected):\n                self._record(run_id, exc.spent)",
-        "            if isinstance(exc, SummaryRejected):\n                pass",
+        "            if isinstance(exc, SummaryRejected) and not accounted:\n                self._record(run_id, exc.spent)",
+        "            if isinstance(exc, SummaryRejected) and not accounted:\n                pass",
         TC,
+    ),
+    (
+        "cp compact: an accounted summary is charged twice",
+        CP,
+        "        accounted = isinstance(app.summarizer, LLMSummarizer)",
+        "        accounted = False",
+        TCF,
+    ),
+    (
+        "cp compact: an accounted summary is not charged at all",
+        CP,
+        "        accounted = isinstance(app.summarizer, LLMSummarizer)",
+        "        accounted = True",
+        TCF,
     ),
     (
         "cp compact: failure not remembered",

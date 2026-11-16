@@ -167,8 +167,15 @@ M = [
     (
         "ck memory: any word",
         CK_,
-        "        if all(s in text for s in wanted):",
-        "        if any(s in text for s in wanted):",
+        "        if all(s in text for s in wanted) and matches:",
+        "        if any(s in text for s in wanted) and matches:",
+        CKT,
+    ),
+    (
+        "ck memory: pattern ignored",
+        CK_,
+        "        matches = not check.pattern or re.search(check.pattern, text, re.IGNORECASE | re.MULTILINE)",
+        "        matches = True",
         CKT,
     ),
     (

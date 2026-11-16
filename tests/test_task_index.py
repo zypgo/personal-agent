@@ -143,6 +143,31 @@ def test_only_markdown_files_directly_in_the_folder_count(make_app):
     assert index(app) == "- tasks/real.md: Real [status: in progress]"
 
 
+def test_a_folder_named_like_a_note_is_not_a_task(make_app):
+    """The journal also reports directories; only regular files may be listed as tasks."""
+    app = make_app()
+    task(app, "real.md", "# Real\nstatus: in progress\n")
+    tasks_dir = app.paths.state_dir / "tasks"
+    (tasks_dir / "folder.md").mkdir()
+    (tasks_dir / "folder.md" / "inner.md").write_text("# Inner\nstatus: in progress\n")
+    assert index(app) == "- tasks/real.md: Real [status: in progress]"
+
+
+def test_the_renderer_itself_ignores_a_status_beyond_the_first_4096_characters():
+    """`load_task_index` already cuts the text; the renderer must not rely on its caller for it."""
+    from personal_agent.memory.tasks import TaskHead, task_index
+
+    note = TaskHead("long.md", "# Long\n" + "x" * 5000 + "\nstatus: done\n", 1.0)
+    assert task_index([note], 5, "/memories/state/tasks") == "- tasks/long.md: Long"
+
+
+def test_the_renderer_itself_lists_nothing_when_the_limit_is_zero():
+    from personal_agent.memory.tasks import TaskHead, task_index
+
+    note = TaskHead("a.md", "# A\nstatus: waiting\n", 1.0)
+    assert task_index([note], 0, "/memories/state/tasks") == ""
+
+
 def test_a_named_pipe_in_the_folder_is_never_opened(make_app):
     """Opening a pipe waits for someone to write to it: one in the folder must not hold up every
     run that starts."""

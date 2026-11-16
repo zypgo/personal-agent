@@ -13,18 +13,32 @@ CF = "src/personal_agent/config.py"
 DO = "src/personal_agent/doctor.py"
 
 MT = ["tests/test_maintenance.py", "tests/test_prop_maintenance.py"]
+MTP = [*MT, "tests/test_pending_memory_retention.py"]
 DT = ["tests/test_db.py", "tests/test_maintenance.py"]
 CT = ["tests/test_retention_config.py", "tests/test_config_template.py"]
 DC = ["tests/test_doctor_database.py"]
 
 M = [
     # ---- which rows may go: the state they must be in --------------------------------------
-    ("rule events: live ones go too", MA, "\"status IN ('done', 'dead')\"", '"1"', MT),
+    (
+        "rule events: live ones go too",
+        MA,
+        "\"status IN ('done', 'dead') AND NOT EXISTS \"",
+        '"1 AND NOT EXISTS "',
+        MT,
+    ),
     (
         "rule events: dead ones stay",
         MA,
-        "\"status IN ('done', 'dead')\"",
-        "\"status = 'done'\"",
+        "\"status IN ('done', 'dead') AND NOT EXISTS \"",
+        "\"status = 'done' AND NOT EXISTS \"",
+        MT,
+    ),
+    (
+        "rule events: a dead event goes before its notice is durable",
+        MA,
+        "\"status IN ('done', 'dead') AND NOT EXISTS \"\n        \"(SELECT 1 FROM dead_event_notices WHERE event_id=events.id)\",",
+        "\"status IN ('done', 'dead')\",",
         MT,
     ),
     (
@@ -100,16 +114,23 @@ M = [
     (
         "rule memory: the newest version goes too",
         MA,
-        '"id NOT IN (SELECT MAX(id) FROM memory_versions GROUP BY path)"',
-        '"1"',
+        '"id NOT IN (SELECT MAX(id) FROM memory_versions GROUP BY path) "',
+        '"1 "',
         MT,
     ),
     (
         "rule memory: only the newest of all files stays",
         MA,
-        '"id NOT IN (SELECT MAX(id) FROM memory_versions GROUP BY path)"',
-        '"id NOT IN (SELECT MAX(id) FROM memory_versions)"',
+        '"id NOT IN (SELECT MAX(id) FROM memory_versions GROUP BY path) "',
+        '"id NOT IN (SELECT MAX(id) FROM memory_versions) "',
         MT,
+    ),
+    (
+        "rule memory: versions of an unfinished dream are pruned",
+        MA,
+        '        "AND id < COALESCE((SELECT MIN(v.id) FROM memory_versions v WHERE EXISTS "\n        "(SELECT 1 FROM kv WHERE key = \'dream:pending:\' || v.run_id)), 9223372036854775807)",',
+        '        ",",',
+        MTP,
     ),
     # ---- the moment a row ended -------------------------------------------------------------
     ("moment events: made, not done", MA, '"COALESCE(done_at, created_at)"', '"created_at"', MT),

@@ -1562,7 +1562,7 @@ M = [
     (
         "do svc: runs off a mac",
         DO,
-        '    if sys.platform != "darwin":\n        return []\n    from personal_agent.launchd',
+        '    if platform != "darwin":\n        return []\n    from personal_agent.launchd',
         "    if False:\n        return []\n    from personal_agent.launchd",
         DT,
     ),

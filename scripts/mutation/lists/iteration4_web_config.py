@@ -9,6 +9,7 @@ Format and meaning: scripts/mutation/run.py.
 DOC = ["tests/test_doctor_channels.py"]
 CFG = ["tests/test_web_config.py", "tests/test_config_template.py", "tests/test_channel_config.py"]
 WEBCLI = ["tests/test_cli_web.py"]
+PHONE_LINKS = ["tests/test_cli_web.py", "tests/test_phone_connect.py"]
 HOOKCLI = ["tests/test_cli_webhooks.py"]
 CHANS = ["tests/test_cli_channels.py"]
 PLUG = ["tests/test_plugin_channels.py", "tests/test_plugins.py"]
@@ -224,8 +225,8 @@ M = [
     (
         "web: pair works when off",
         W,
-        "        _require_enabled(agent)\n        try:\n            invite = agent.web_auth.invite(label)",
-        "        try:\n            invite = agent.web_auth.invite(label)",
+        "        _require_enabled(agent)\n        _pair_link(agent, label, qr)",
+        "        _pair_link(agent, label, qr)",
         WEBCLI,
     ),
     (
@@ -252,23 +253,44 @@ M = [
     (
         "web: qr for local addresses",
         W,
-        "        if _reachable_from_a_phone(url):\n            if qr:",
-        "        if True:\n            if qr:",
+        "    if _reachable_from_a_phone(url):\n        if qr:",
+        "    if True:\n        if qr:",
         WEBCLI,
     ),
     (
         "web: qr flag ignored",
         W,
-        "            if qr:\n                echo(qr_text(url))",
-        "            if True:\n                echo(qr_text(url))",
+        "        if qr:\n            echo(qr_text(url))",
+        "        if True:\n            echo(qr_text(url))",
         WEBCLI,
     ),
     (
         "web: everything reachable",
         W,
-        'return not url.startswith(("http://127.", "http://localhost", "http://[::1]"))',
-        "return True",
-        WEBCLI,
+        '    if host.lower() == "localhost":\n        return False\n    try:\n        return not ipaddress.ip_address(host).is_loopback\n    except ValueError:\n        return bool(host)',
+        "    return True",
+        PHONE_LINKS,
+    ),
+    (
+        "web: localhost reachable",
+        W,
+        '    if host.lower() == "localhost":\n        return False',
+        "    if False:\n        return False",
+        PHONE_LINKS,
+    ),
+    (
+        "web: loopback address reachable",
+        W,
+        "        return not ipaddress.ip_address(host).is_loopback",
+        "        return True",
+        PHONE_LINKS,
+    ),
+    (
+        "web: a host name is not reachable",
+        W,
+        "    except ValueError:\n        return bool(host)",
+        "    except ValueError:\n        return False",
+        PHONE_LINKS,
     ),
     ("web: label not escaped", W, 'escape(session.label or "-"),', 'session.label or "-",', WEBCLI),
     (
@@ -295,8 +317,8 @@ M = [
     (
         "web: no serve hint after pairing",
         W,
-        '        if daemon_state(agent).kind != "daemon":\n            say("[yellow]Nothing is serving',
-        '        if False:\n            say("[yellow]Nothing is serving',
+        '    if daemon_state(agent).kind != "daemon":\n        say("[yellow]Nothing is serving',
+        '    if False:\n        say("[yellow]Nothing is serving',
         WEBCLI,
     ),
     # ---- pa webhooks
