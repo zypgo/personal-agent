@@ -21,11 +21,15 @@ PROBE_KEY = "web:connection-probe-key"
 
 
 def probe_signature(db: Database, challenge: str) -> str:
-    with db.tx():
-        key = db.kv_get(PROBE_KEY)
-        if key is None:
-            key = secrets.token_hex(32)
-            db.kv_set(PROBE_KEY, key, now=0)
+    # The health route needs no sign-in, so the common case is a plain read; only the first call
+    # (and only once, even if two race) takes the write lock to create the key.
+    key = db.kv_get(PROBE_KEY)
+    if key is None:
+        with db.tx():
+            key = db.kv_get(PROBE_KEY)
+            if key is None:
+                key = secrets.token_hex(32)
+                db.kv_set(PROBE_KEY, key, now=0)
     return hmac.new(
         bytes.fromhex(str(key)),
         b"personal-agent-phone-probe\0" + challenge.encode(),

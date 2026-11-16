@@ -166,6 +166,7 @@ def test_connect_command_preserves_other_settings_and_prints_a_usable_invite(wir
     assert result.exit_code == 0, result.output
     assert "http://192.168.1.23:9010/#pair=" in result.output
     assert "pa service restart" in result.output
+    assert "scan the code" not in result.output  # --no-qr prints no code to scan
     cfg = load_config(app.paths)
     assert cfg.web.enabled and cfg.web.host == "192.168.1.23" and cfg.agent.name == "Ada"
     assert "# keep my notes" in app.paths.config_file.read_text()
@@ -239,6 +240,25 @@ def test_http_200_from_an_unrelated_service_is_not_a_healthy_agent(wired, monkey
     )
     result = invoke("web", "check")
     assert result.exit_code == 1 and "cannot be verified" in result.output
+
+
+def test_an_anonymous_probe_does_not_take_the_write_lock_once_its_key_exists(make_app, monkeypatch):
+    """`/api/health` needs no sign-in, so every call from the network must be a plain read: a
+    write transaction per request would queue anyone on the Wi-Fi in front of the agent's writers."""
+    from personal_agent.channels.web.probe import probe_signature
+
+    app = make_app()
+    first = probe_signature(app.db, "a" * 32)  # the first call creates the key: that one may write
+    opened = []
+    original = app.db.tx
+
+    def counting():
+        opened.append(True)
+        return original()
+
+    monkeypatch.setattr(app.db, "tx", counting)
+    assert [probe_signature(app.db, "a" * 32) for _ in range(3)] == [first] * 3
+    assert opened == []
 
 
 def test_probe_returns_only_a_challenge_signature_and_never_authenticates_a_browser(make_app):

@@ -206,7 +206,10 @@ def connect(
         say(
             "Apply the settings: restart `pa serve`, or run `pa service restart` if the service is installed."
         )
-        say("Then scan the code below. `pa web check` diagnoses the connection.")
+        say(
+            ("Then scan the code below. " if qr else "Then open the link below on your phone. ")
+            + "`pa web check` diagnoses the connection."
+        )
         _pair_link(agent, label, qr)
 
 
