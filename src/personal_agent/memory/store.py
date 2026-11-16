@@ -14,8 +14,6 @@ resolves symlinks, and a version record for every change.
 from __future__ import annotations
 
 import os
-import secrets
-import shutil
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -26,7 +24,8 @@ from typing import Any
 from personal_agent.clock import Clock, SystemClock
 from personal_agent.config import MemoryConfig
 from personal_agent.db import Database
-from personal_agent.memory.tasks import task_index
+from personal_agent.memory.journal import MISSING, MemoryJournal
+from personal_agent.memory.tasks import TaskHead, task_index
 from personal_agent.paths import Paths
 from personal_agent.security.redact import find_secrets, injection_hints
 from personal_agent.security.sanitize import scrub_surrogates
@@ -59,6 +58,14 @@ class PathError(Exception):
 
 class PreferencesUnavailable(Exception):
     """The owner's preferences exist but could not be read. Runs must not proceed without them."""
+
+
+class MemoryRestoreError(RuntimeError):
+    """An automatic rollback could not safely restore every change; nothing was committed."""
+
+
+class MemoryConflictError(MemoryRestoreError):
+    """A later owner or other run edit requires review before an automatic rollback."""
 
 
 @dataclass(frozen=True)
@@ -125,6 +132,7 @@ class MemoryStore:
         self.cfg = config or MemoryConfig()
         self.clock = clock or SystemClock()
         self._lock = threading.RLock()
+        self._journal = MemoryJournal(paths.memory_dir, db, self.clock)
         for mount_dir in (paths.preferences_dir, paths.state_dir):
             mount_dir.mkdir(parents=True, exist_ok=True)
 
@@ -201,9 +209,14 @@ class MemoryStore:
                     yield full
 
     def _tree_size(self, path: Path) -> int:
-        if path.is_file():
-            return path.stat().st_size
-        return sum(f.stat().st_size for f in self._files(path))
+        kind, data = self._journal.get(path)
+        if kind == "file":
+            return len(data or b"")
+        return sum(
+            len(value[1] or b"")
+            for value in self._journal.entries(path).values()
+            if value[0] == "file"
+        )
 
     def _check_limits(
         self, target: _Target, new_size: int, old_size: int, *, new_file: bool
@@ -220,7 +233,7 @@ class MemoryStore:
                 f"Error: memory is full ({total} bytes would exceed the {self.cfg.max_total_bytes} byte limit). "
                 "Delete or summarize old notes first."
             )
-        if new_file and sum(1 for _ in self._files(state)) >= self.cfg.max_files:
+        if new_file and self.file_count() >= self.cfg.max_files:
             raise PathError(
                 f"Error: memory already holds {self.cfg.max_files} files. Merge or delete notes before creating more."
             )
@@ -246,21 +259,64 @@ class MemoryStore:
     # ------------------------------------------------------------------------------------
     # low level file helpers
     # ------------------------------------------------------------------------------------
-    @staticmethod
-    def _read(path: Path) -> str:
-        return path.read_text(encoding="utf-8")
+    def _read(self, path: Path) -> str:
+        kind, data = self._journal.get(path)
+        if kind == "missing":
+            raise FileNotFoundError(str(path))
+        if kind != "file":
+            raise IsADirectoryError(str(path))
+        return clean_text((data or b"").decode("utf-8"))
 
-    @staticmethod
-    def _atomic_write(path: Path, text: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.tmp-{secrets.token_hex(4)}")
-        try:
-            tmp.write_text(text, encoding="utf-8")
-            tmp.chmod(0o600)
-            os.replace(tmp, path)
-        finally:
-            if tmp.exists():
-                tmp.unlink(missing_ok=True)
+    def _exists(self, path: Path) -> bool:
+        return self._journal.get(path)[0] != "missing"
+
+    def _is_file(self, path: Path) -> bool:
+        return self._journal.get(path)[0] == "file"
+
+    def _is_dir(self, path: Path) -> bool:
+        return self._journal.get(path)[0] == "directory"
+
+    def _parents(self, path: Path) -> None:
+        for parent in reversed(path.parents):
+            if parent == self._journal.root or self._journal.root not in parent.parents:
+                continue
+            kind, _ = self._journal.get(parent)
+            if kind == "file":
+                raise PathError("Error: cannot write memory: a parent path is a file")
+            if kind == "missing":
+                self._journal.stage(parent, ("directory", None))
+
+    def _save(
+        self,
+        target: _Target,
+        action: str,
+        old: str | None,
+        new: str | None,
+        actor: Actor,
+        run_id: str | None,
+    ) -> None:
+        with self.db.tx():
+            if new is not None:
+                self._parents(target.physical)
+            self._record(target.virtual, action, old, new, actor, run_id)
+            self._journal.stage(
+                target.physical, ("file", new.encode()) if new is not None else MISSING
+            )
+
+    def recover(self) -> None:
+        """Finish committed file projections after a process stopped; safe to repeat."""
+        self._journal.recover()
+
+    def known(self, virtual_path: str) -> bool:
+        """Whether this path already has durable state, including an intentional deletion."""
+        target = self._parse(virtual_path)
+        return (
+            self.db.one(
+                "SELECT 1 FROM memory_documents WHERE path = ?",
+                (self._journal.key(target.physical),),
+            )
+            is not None
+        )
 
     def _record(
         self,
@@ -367,12 +423,12 @@ class MemoryStore:
     # ---- view -----------------------------------------------------------------------------
     def view(self, path: Any, view_range: Any = None) -> str:
         target = self._parse(path)
-        if not target.physical.exists():
+        if not self._exists(target.physical):
             if target.is_root or target.is_mount_root:
                 target.physical.mkdir(parents=True, exist_ok=True)
             else:
                 return f"The path {target.virtual} does not exist. Please provide a valid path."
-        if target.physical.is_dir():
+        if self._is_dir(target.physical):
             return self._view_dir(target)
         return self._view_file(target, view_range)
 
@@ -382,20 +438,24 @@ class MemoryStore:
             "excluding hidden items and node_modules:"
         ]
         entries: list[tuple[int, str]] = []
+        snapshots = self._journal.entries(target.physical)
 
         def add(directory: Path, virtual: str, depth: int) -> None:
             size = max(self._tree_size(directory), 4096)
             entries.append((size, virtual))
             if depth >= 2:
                 return
-            for child in sorted(directory.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
-                if child.name.startswith(".") or child.name == "node_modules" or child.is_symlink():
+            children = [path for path in snapshots if path.parent == directory]
+            for child in sorted(
+                children, key=lambda p: (snapshots[p][0] == "file", p.name.lower())
+            ):
+                if child.name == "node_modules":
                     continue
                 child_virtual = f"{virtual}/{child.name}"
-                if child.is_dir():
+                if snapshots[child][0] == "directory":
                     add(child, child_virtual, depth + 1)
                 else:
-                    entries.append((child.stat().st_size, child_virtual))
+                    entries.append((len(snapshots[child][1] or b""), child_virtual))
 
         if target.is_root:
             entries.append((max(self._tree_size(target.physical), 4096), target.virtual))
@@ -462,16 +522,12 @@ class MemoryStore:
         target = self._parse(path)
         self._require_writable(target, actor)
         file_text = clean_text(file_text)
-        with self._lock:
-            if target.physical.exists():
+        with self._lock, self.db.tx():
+            if self._exists(target.physical):
                 return f"Error: File {target.virtual} already exists"
             note = self._check_content(target, file_text)
             self._check_limits(target, len(file_text.encode()), 0, new_file=True)
-            try:
-                self._atomic_write(target.physical, file_text)
-            except (NotADirectoryError, FileExistsError):
-                return f"Error: cannot create {target.virtual}: a parent path is a file"
-            self._record(target.virtual, "create", None, file_text, actor, run_id)
+            self._save(target, "create", None, file_text, actor, run_id)
         return f"File created successfully at: {target.virtual}{note}"
 
     # ---- str_replace ----------------------------------------------------------------------
@@ -487,8 +543,8 @@ class MemoryStore:
         target = self._parse(path)
         self._require_writable(target, actor)
         old_str, new_str = clean_text(old_str), clean_text(new_str)
-        with self._lock:
-            if not target.physical.is_file():
+        with self._lock, self.db.tx():
+            if not self._is_file(target.physical):
                 return (
                     f"Error: The path {target.virtual} does not exist. Please provide a valid path."
                 )
@@ -510,8 +566,7 @@ class MemoryStore:
             updated = text[:idx] + new_str + text[idx + len(old_str) :]
             note = self._check_content(target, new_str)
             self._check_limits(target, len(updated.encode()), len(text.encode()), new_file=False)
-            self._atomic_write(target.physical, updated)
-            self._record(target.virtual, "update", text, updated, actor, run_id)
+            self._save(target, "update", text, updated, actor, run_id)
 
         first = text.count("\n", 0, idx) + 1
         added = new_str.count("\n") + 1
@@ -532,8 +587,8 @@ class MemoryStore:
         target = self._parse(path)
         self._require_writable(target, actor)
         insert_text = clean_text(insert_text)
-        with self._lock:
-            if not target.physical.is_file():
+        with self._lock, self.db.tx():
+            if not self._is_file(target.physical):
                 return f"Error: The path {target.virtual} does not exist"
             text = self._read(target.physical)
             lines = lines_of(text)
@@ -552,35 +607,39 @@ class MemoryStore:
             updated = "".join(lines[:line_no]) + chunk + "".join(lines[line_no:])
             note = self._check_content(target, insert_text)
             self._check_limits(target, len(updated.encode()), len(text.encode()), new_file=False)
-            self._atomic_write(target.physical, updated)
-            self._record(target.virtual, "update", text, updated, actor, run_id)
+            self._save(target, "update", text, updated, actor, run_id)
         return f"The file {target.virtual} has been edited.{note}"
 
     # ---- delete ---------------------------------------------------------------------------
     def delete(self, path: Any, *, actor: Actor = Actor.AGENT, run_id: str | None = None) -> str:
         target = self._parse(path)
         self._require_writable(target, actor)
-        with self._lock:
-            if not target.physical.exists():
+        with self._lock, self.db.tx():
+            if not self._exists(target.physical):
                 return f"Error: The path {target.virtual} does not exist"
-            if target.physical.is_dir():
-                for f in self._files(target.physical):
-                    rel = f.relative_to(target.physical)
-                    try:
-                        old = self._read(f)
-                    except UnicodeDecodeError:
-                        old = None
-                    self._record(
-                        self._virtual_of(target.virtual, rel), "delete", old, None, actor, run_id
-                    )
-                shutil.rmtree(target.physical)
+            if self._is_dir(target.physical):
+                for path, (kind, _) in self._journal.entries(target.physical).items():
+                    if kind == "file":
+                        try:
+                            old = self._read(path)
+                        except UnicodeDecodeError:
+                            old = None
+                        self._record(
+                            self._virtual_of(target.virtual, path.relative_to(target.physical)),
+                            "delete",
+                            old,
+                            None,
+                            actor,
+                            run_id,
+                        )
+                    self._journal.stage(path, MISSING)
+                self._journal.stage(target.physical, MISSING)
             else:
                 try:
                     old = self._read(target.physical)
                 except UnicodeDecodeError:
                     old = None
-                target.physical.unlink()
-                self._record(target.virtual, "delete", old, None, actor, run_id)
+                self._save(target, "delete", old, None, actor, run_id)
         return f"Successfully deleted {target.virtual}"
 
     # ---- rename ---------------------------------------------------------------------------
@@ -591,17 +650,24 @@ class MemoryStore:
         dest = self._parse(new_path)
         self._require_writable(source, actor)
         self._require_writable(dest, actor)
-        with self._lock:
-            if not source.physical.exists():
+        with self._lock, self.db.tx():
+            if not self._exists(source.physical):
                 return f"Error: The path {source.virtual} does not exist"
-            if dest.physical.exists():
+            if self._exists(dest.physical):
                 return f"Error: The destination {dest.virtual} already exists"
-            if source.physical.is_dir() and (
+            if self._is_dir(source.physical) and (
                 dest.physical == source.physical or source.physical in dest.physical.parents
             ):
                 return f"Error: cannot move {source.virtual} into itself"
-            dest.physical.parent.mkdir(parents=True, exist_ok=True)
-            source.physical.rename(dest.physical)
+            self._parents(dest.physical)
+            entries = (
+                self._journal.entries(source.physical) if self._is_dir(source.physical) else {}
+            )
+            entries[source.physical] = self._journal.get(source.physical)
+            for path, snapshot in entries.items():
+                new_path = dest.physical / path.relative_to(source.physical)
+                self._journal.stage(new_path, snapshot)
+                self._journal.stage(path, MISSING)
             self._record(dest.virtual, "rename", source.virtual, dest.virtual, actor, run_id)
         return f"Successfully renamed {source.virtual} to {dest.virtual}"
 
@@ -629,16 +695,15 @@ class MemoryStore:
         target = self._parse(virtual_path)
         self._require_writable(target, actor)
         text = clean_text(text)
-        with self._lock:
-            old = self._read(target.physical) if target.physical.is_file() else None
+        with self._lock, self.db.tx():
+            if self._is_dir(target.physical):
+                raise IsADirectoryError(str(target.physical))
+            old = self._read(target.physical) if self._is_file(target.physical) else None
             self._check_content(target, text)
             self._check_limits(
                 target, len(text.encode()), len(old.encode()) if old else 0, new_file=old is None
             )
-            self._atomic_write(target.physical, text)
-            self._record(
-                target.virtual, "create" if old is None else "update", old, text, actor, run_id
-            )
+            self._save(target, "create" if old is None else "update", old, text, actor, run_id)
 
     def load_preferences(self) -> Preferences:
         """Read the owner's standing instructions fresh. Missing files are fine (nothing set yet);
@@ -677,7 +742,23 @@ class MemoryStore:
 
     def load_task_index(self) -> str:
         """One line for each unfinished task file in state/tasks/, newest first (see `tasks.py`)."""
-        return task_index(self._mount_dir(STATE) / "tasks", self.cfg.task_index_lines, TASKS_DIR)
+        directory = self._mount_dir(STATE) / "tasks"
+        if self.cfg.task_index_lines <= 0 or directory.is_symlink():
+            return ""
+        notes: list[TaskHead] = []
+        for path, (kind, data) in self._journal.entries(
+            directory, recursive=False, ignore_errors=True
+        ).items():
+            if kind != "file" or path.suffix != ".md":
+                continue
+            try:
+                stamp = self._journal.modified_at(path)
+            except OSError:
+                continue
+            # A UTF-8 character needs at most four bytes; labels never inspect beyond the head.
+            text = clean_text((data or b"")[: 4096 * 4].decode("utf-8", errors="replace"))[:4096]
+            notes.append(TaskHead(path.name, text, stamp))
+        return task_index(notes, self.cfg.task_index_lines, TASKS_DIR)
 
     def history(self, virtual_path: str, limit: int = 20) -> list[dict[str, Any]]:
         rows = self.db.query(
@@ -688,7 +769,9 @@ class MemoryStore:
 
     def file_count(self) -> int:
         """How many notes the agent's own memory (state/) holds."""
-        return sum(1 for _ in self._files(self._mount_dir(STATE)))
+        return sum(
+            value[0] == "file" for value in self._journal.entries(self._mount_dir(STATE)).values()
+        )
 
     def changes_by_run(self, run_id: str) -> list[dict[str, Any]]:
         """Every change one run made to memory, oldest first."""
@@ -698,27 +781,50 @@ class MemoryStore:
         return [dict(r) for r in rows]
 
     def revert_run(self, run_id: str) -> list[str]:
-        """Undo everything one run did to memory, newest change first. Returns the paths put back.
+        """Undo a run atomically, refusing to overwrite a later owner's or another run's edit.
 
-        Best effort, one change at a time: a change that cannot be undone (its old text is no
-        longer allowed, say) is skipped and left for `pa memory restore`. The undoing is itself
-        recorded, as the system."""
+        A failed restore raises so the caller keeps its recovery receipt. Both restored contents
+        and their versions commit together; the files are projected only after that commit.
+        """
         undone: list[str] = []
-        for row in reversed(self.changes_by_run(run_id)):
-            path, action, old = row["path"], row["action"], row["old_content"]
-            try:
-                if action == "create":
-                    result = self.delete(path, actor=Actor.SYSTEM)
-                elif action in ("update", "delete") and old is not None:
-                    self.write_text(path, old, actor=Actor.SYSTEM)
-                    result = ""
-                elif action == "rename" and old:
-                    result = self.rename(path, old, actor=Actor.SYSTEM)
-                else:
-                    continue
-            except (PathError, OSError):
-                continue
-            if not result.startswith("Error"):
+        with self._lock, self.db.tx():
+            changes = self.changes_by_run(run_id)
+            # Bring direct Markdown edits into the version log before deciding whether undoing
+            # the run would overwrite newer work. The preflight precedes our own undo versions.
+            for row in changes:
+                target = self._parse(row["path"])
+                if self._is_dir(target.physical):
+                    self._journal.entries(target.physical)
+            for row in changes:
+                target = self._parse(row["path"])
+                self._journal.get(target.physical)
+                prefix = row["path"].rstrip("/") + "/"
+                later = self.db.one(
+                    """SELECT 1 FROM memory_versions WHERE id > ?
+                       AND (path = ? OR substr(path, 1, ?) = ?)
+                       AND (run_id IS NULL OR run_id != ?) LIMIT 1""",
+                    (row["id"], row["path"], len(prefix), prefix, run_id),
+                )
+                if later is not None:
+                    raise MemoryConflictError(
+                        f"Cannot undo {row['path']}: it has a later edit; review it first"
+                    )
+            for row in reversed(changes):
+                path, action, old = row["path"], row["action"], row["old_content"]
+                try:
+                    if action == "create":
+                        result = self.delete(path, actor=Actor.SYSTEM)
+                    elif action in ("update", "delete") and old is not None:
+                        self.write_text(path, old, actor=Actor.SYSTEM)
+                        result = ""
+                    elif action == "rename" and old:
+                        result = self.rename(path, old, actor=Actor.SYSTEM)
+                    else:
+                        raise MemoryRestoreError(f"Cannot restore the previous contents of {path}")
+                except (PathError, OSError) as exc:
+                    raise MemoryRestoreError(f"Could not restore {path}") from exc
+                if result.startswith(("Error", "No replacement")):
+                    raise MemoryRestoreError(f"Could not restore {path}: {result}")
                 undone.append(path)
         return undone
 

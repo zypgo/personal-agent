@@ -42,7 +42,7 @@ def bootstrap(store: MemoryStore) -> list[str]:
     """Create any missing template files. Returns the virtual paths that were created."""
     created: list[str] = []
     for path, text in TEMPLATES.items():
-        if store.read_text(path) is None:
+        if store.read_text(path) is None and not store.known(path):
             store.write_text(path, text, actor=Actor.SYSTEM)
             created.append(path)
     return created

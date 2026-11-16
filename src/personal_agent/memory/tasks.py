@@ -8,9 +8,9 @@ and costs the same few lines however many tasks have ever been finished.
 
 from __future__ import annotations
 
-import os
 import re
-from pathlib import Path
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 from personal_agent.security.sanitize import strip_invisible
 
@@ -30,38 +30,33 @@ _STATUS_LINE = re.compile(r"(?im)^\s*(?:[-*>]\s*)?\**status\**\s*:\s*\**\s*(.+?)
 _TITLE_LINE = re.compile(r"(?m)^\s*#+\s*(.+?)\s*$")
 
 
-def task_index(directory: Path, limit: int, virtual_dir: str) -> str:
-    """One line for each unfinished task file in `directory`, newest first, at most `limit` of them.
-    `virtual_dir` is where the model finds that folder, for the lines that say how many are left out."""
-    if limit <= 0 or directory.is_symlink() or not directory.is_dir():
+@dataclass(frozen=True)
+class TaskHead:
+    name: str
+    text: str
+    modified_at: float
+
+
+def task_index(notes: Iterable[TaskHead], limit: int, virtual_dir: str) -> str:
+    """Render unfinished tasks from logical memory snapshots, newest first.
+
+    Only each file's first 4096 characters participate in its title/status. `virtual_dir` is
+    where the model finds omitted notes. The caller supplies current contents, including
+    committed changes whose files have not yet been projected.
+    """
+    if limit <= 0:
         return ""
     found: list[tuple[float, str]] = []
     finished = 0
-    try:
-        entries = list(os.scandir(directory))
-    except OSError:
-        return ""
-    for entry in entries:
-        if (
-            entry.name.startswith(".")
-            or not entry.name.endswith(".md")
-            or entry.is_symlink()
-            or not entry.is_file()
-        ):
-            continue
-        try:
-            with open(entry.path, encoding="utf-8", errors="replace") as handle:
-                head = handle.read(4096)
-            stamp = entry.stat().st_mtime
-        except OSError:
-            continue
+    for note in notes:
+        head = note.text[:4096]
         status = _label(_STATUS_LINE.search(head), 100)
         if _FINISHED_RE.match(status):
             finished += 1
             continue
-        title = _label(_TITLE_LINE.search(head), 80) or entry.name.removesuffix(".md")
-        line = f"- tasks/{entry.name}: {title}" + (f" [status: {status}]" if status else "")
-        found.append((stamp, line))
+        title = _label(_TITLE_LINE.search(head), 80) or note.name.removesuffix(".md")
+        line = f"- tasks/{note.name}: {title}" + (f" [status: {status}]" if status else "")
+        found.append((note.modified_at, line))
     if not found:
         return ""
     found.sort(key=lambda item: (-item[0], item[1]))
