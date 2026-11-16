@@ -9,6 +9,7 @@
 
 > 调研与取舍：[docs/research/anthropic-guidance.md](docs/research/anthropic-guidance.md) · [docs/research/reference-analysis.md](docs/research/reference-analysis.md)
 > 架构：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)（含各能力的实现状态）
+> 手机连接：[docs/MOBILE.md](docs/MOBILE.md) · 本轮修复与升级：[docs/RELIABILITY.md](docs/RELIABILITY.md)
 
 ## 当前进度
 
@@ -77,14 +78,18 @@ uv run pa channels approve telegram ABCD-EFGH   # 只在你自己的电脑上批
 在手机或任意浏览器上用它（网页，一个不用构建的 PWA）：
 
 ```bash
-# 1. ~/.personal-agent/config.toml 里写  [web]  enabled = true
-uv run pa serve                        # 常驻（网页默认只监听 127.0.0.1:8765）
-uv run pa web pair --label phone       # 打印一次性配对链接（只有这台电脑能发出；10 分钟有效、只能用一次）
+uv run pa web connect --via tailscale  # 配置私有 HTTPS 并打印一次性配对二维码
+# 同一个可信 Wi-Fi 也可以：uv run pa web connect --via lan --host 192.168.1.23
+uv run pa serve                        # 首次启动；已在后台运行则用 pa service restart
+uv run pa web check                    # 检查本地监听和手机地址是否属于这个 agent
+uv run pa web pair --label phone       # 需要新的配对链接时（默认10分钟、仅一次）
 uv run pa web open                     # 在这台电脑上直接打开并自动配对
 uv run pa web sessions                 # 已配对的浏览器；pa web revoke <id> 收回某一个
 ```
 
-要让手机访问，最稳妥的办法是 [Tailscale](https://tailscale.com)：`tailscale serve --bg 8765` 会给这台电脑一个只有你的设备能访问的 `https://<电脑名>.<tailnet>.ts.net` 地址；把它写进 `[web] public_url`，`pa web pair` 打印的链接就会用它。手机 Safari 打开链接 →"添加到主屏幕"即可当 App 用。配对令牌放在地址的 `#` 之后（不会发给任何服务器、也不进日志），换成 HttpOnly 的 SameSite=Strict cookie 后立即从地址栏清掉。想直接监听别的网卡（`host = "0.0.0.0"`）？`pa doctor` 会指出风险：网页只有配对过的浏览器能进，但没有 HTTPS 就不该离开你信任的网络。
+`connect` 保留现有配置与注释，拒绝覆盖其他 Tailscale 服务；局域网模式只接受本机的私网地址。已占用端口必须通过当前 agent 的签名探针，防止把其他本地服务代理出去。Tailscale 模式使用 Serve，不开放 Funnel；手机连接同一 tailnet 后扫描二维码。局域网 HTTP 可聊天、发图片和上传录音，浏览器麦克风需要 HTTPS。手机页“设置 → Recent tasks”可看排队、待审批、重试时间和最终停止。
+
+配对令牌放在地址的 `#` 之后，不进入 HTTP 请求路径；页面兑换为 HttpOnly、SameSite=Strict cookie 后清除片段。HTTPS 时 cookie 同时具有 Secure 属性。完整配置、设备撤销和排障见[手机连接说明](docs/MOBILE.md)。
 
 > 目前网页是"你打开它就能看到"（SSE 实时推送），**没有系统推送通知**；需要它主动叫你的话，同时开着 Telegram。iOS 的"主屏幕 App"与 Safari 不共享 cookie，所以要在主屏幕 App 里再配对一次。
 
