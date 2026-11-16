@@ -1,6 +1,6 @@
 """The web page's server side: a handful of routes on Starlette, behind `Guard`.
 
-Everything under `/api/` except pairing needs a session cookie, and the session is looked up
+Everything under `/api/` except pairing and a challenge-only health proof needs a session cookie, and the session is looked up
 before a request's body is touched. The page itself and its files are public (they contain
 nothing private: the agent's name, its messages and its state are only ever sent through `/api/`).
 
@@ -32,7 +32,10 @@ from starlette.routing import Route
 
 from personal_agent.channels.commands import ChatCommands
 from personal_agent.channels.ingress import MAX_IMAGES, Ingress, Upload
+from personal_agent.channels.web.connect import connection_info
+from personal_agent.channels.web.probe import probe_signature
 from personal_agent.channels.web.security import Guard
+from personal_agent.core.activity import activity_snapshot
 from personal_agent.core.approvals import Approval, plain
 from personal_agent.core.transcript import Turn
 
@@ -312,7 +315,9 @@ class WebApi:
                     "voice_seconds": cfg.media.max_voice_seconds,
                     "max_images": MAX_IMAGES,
                     "max_image_bytes": cfg.media.max_image_bytes,
+                    "max_voice_bytes": cfg.media.max_voice_bytes,
                 },
+                "connection": connection_info(cfg.web),
             }
         )
 
@@ -447,8 +452,22 @@ class WebApi:
                 "spent_today": round(budget.spent_today, 4),
                 "daily_limit": budget.daily_limit,
                 "text": ChatCommands(app).status(),
+                "activity": activity_snapshot(app),
+                "connection": connection_info(app.config.web),
             }
         )
+
+    async def activity(self, request: Request) -> Response:
+        self._need(request)
+        return self._json(activity_snapshot(self.app))
+
+    async def health(self, request: Request) -> Response:
+        # A local setup command proves the listener belongs to its home before configuring a
+        # proxy. This response contains only a signature of caller-supplied random bytes.
+        challenge = request.query_params.get("challenge", "")
+        if not re.fullmatch(r"[0-9a-f]{32}", challenge):
+            raise HTTPException(400, "A fresh probe challenge is required.")
+        return self._json({"proof": probe_signature(self.app.db, challenge)})
 
     # ---- live updates -------------------------------------------------------------------
     def _recent_approvals(self) -> list[dict[str, Any]]:
@@ -548,6 +567,8 @@ class WebApi:
             Route("/api/approvals", self.approvals),
             Route("/api/approvals/{approval_id}", self.decide, methods=["POST"]),
             Route("/api/status", self.status),
+            Route("/api/activity", self.activity),
+            Route("/api/health", self.health),
         ]
 
 
