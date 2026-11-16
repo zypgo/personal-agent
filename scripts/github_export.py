@@ -18,14 +18,22 @@ Before anything leaves this machine, what is new there is read, and any one find
 - no `.env`, key, certificate or database file, and no file over 5 MiB;
 - nothing the owner keeps private: the patterns in the private config, and the values in the
   `.env` files it names (a value shorter than 12 characters is not looked for);
-- `gitleaks` finds no secret in the new commits.
+- `gitleaks` finds no secret in the new commits. What could let a finding through is for the owner
+  to say, never for the commits being checked: a `.gitleaks.toml`, a `.gitleaksignore` or a
+  `gitleaks:allow` comment that comes with them is not read.
 
 The private config is `~/.config/pa-export/config.toml` (or `--config`, or `$PA_EXPORT_CONFIG`).
-It lives outside the repository on purpose: it is made of exactly what must not be published.
+It lives outside the repository on purpose: it is made of exactly what must not be published,
+and of what may be let through.
 
     denylist  = ["a-regex", "another"]       # matched without regard to case; never empty
     env_files = ["~/.personal-agent/.env"]   # whose values must never appear (`<repo>/.env` too)
     gitleaks  = "~/.local/share/pa-export/gitleaks"   # default: `gitleaks` on the PATH
+    gitleaks_config = "~/.config/pa-export/gitleaks.toml"   # default: gitleaks's own rules
+
+`gitleaks_config` is an ordinary gitleaks config. Start it with `[extend]` and `useDefault = true`
+to keep gitleaks's own rules, then name a value that is known not to be a secret in an
+`[[allowlists]]` entry with `regexes = ['''the-value''']`. Without the key, nothing is let through.
 
 What was found is reported by place (a file, a commit) and by which rule, never by value.
 Exit status: 0 pushed or nothing to push, 1 refused, 2 this machine cannot check (nothing pushed).
@@ -80,6 +88,7 @@ class Config:
     denylist: tuple[re.Pattern[bytes], ...]
     env_files: tuple[Path, ...]
     gitleaks: Path | None
+    gitleaks_config: Path | None
 
 
 # ---- running git -----------------------------------------------------------------------------
@@ -157,10 +166,14 @@ def load_config(path: Path) -> Config:
     if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
         raise Setup(f"{path}: `env_files` must be a list of paths")
     binary = raw.get("gitleaks")
+    rules = raw.get("gitleaks_config")
+    if rules is not None and not (isinstance(rules, str) and rules):
+        raise Setup(f"{path}: `gitleaks_config` must be the path of a gitleaks config file")
     return Config(
         denylist=tuple(compiled),
         env_files=tuple(Path(f).expanduser() for f in files),
         gitleaks=Path(binary).expanduser() if isinstance(binary, str) and binary else None,
+        gitleaks_config=Path(rules).expanduser() if rules else None,
     )
 
 
@@ -344,22 +357,37 @@ def check_contents(work: Path, paths: Mapping[str, str], rules: Rules) -> list[s
     ]
 
 
-def check_secrets(binary: Path, work: Path, exclude: bool) -> list[str]:
+def default_gitleaks_config(scratch: Path) -> Path:
+    """gitleaks's own rules and nothing allowed, as a file whose path can be given."""
+    path = scratch / "gitleaks.toml"
+    path.write_text("[extend]\nuseDefault = true\n", encoding="utf-8")
+    return path
+
+
+def check_secrets(binary: Path, work: Path, exclude: bool, config: Path) -> list[str]:
+    """What gitleaks finds in the new commits, by the owner's rules and by nothing the commits say.
+
+    Left alone, gitleaks also reads a config, an ignore file and `gitleaks:allow` comments from
+    the thing it checks, so a commit could switch off the check that is looking at it (tried:
+    each of the three lets a token through). The config is given by path, which comes before any
+    other; the ignore file is taken out of the checkout, because gitleaks reads the one at the
+    top of the directory it is run in (the history is what is checked, not the checkout); and the
+    comments are told not to count.
+    """
+    (work / ".gitleaksignore").unlink(missing_ok=True)
     proc = run(
         [binary, "git", "--no-banner", "--no-color", "--redact", "--exit-code", "1",
-         f"--log-opts={' '.join(range_args(exclude))}", "--gitleaks-ignore-path", work, work],
+         "--ignore-gitleaks-allow", "--config", config,
+         f"--log-opts={' '.join(range_args(exclude))}", work],
         cwd=work,
     )  # fmt: skip
     if proc.returncode == 0:
         return []
-    if proc.returncode != 1:
-        raise Setup(f"gitleaks failed to run (exit {proc.returncode}): {tidy(proc.stderr)}")
     report = proc.stderr.decode("utf-8", "replace") + proc.stdout.decode("utf-8", "replace")
-    count = re.search(r"leaks found: (\d+)", report)
-    return [
-        f"gitleaks found {count.group(1) if count else 'a'} possible secret(s): "
-        "run it by hand to see where"
-    ]
+    found = re.search(r"leaks found: (\d+)", report)
+    if proc.returncode != 1 or not found:  # exit 1 is also what a config it cannot read gives
+        raise Setup(f"gitleaks failed to run (exit {proc.returncode}): {tidy(report)}")
+    return [f"gitleaks found {found.group(1)} possible secret(s): run it by hand to see where"]
 
 
 # ---- the whole thing --------------------------------------------------------------------------
@@ -381,6 +409,8 @@ def export(
     missing = [str(f) for f in env_files if not f.is_file()]
     if missing:
         raise Setup(f"env_files lists a file that is not there: {', '.join(missing)}")
+    if config.gitleaks_config and not config.gitleaks_config.is_file():
+        raise Setup(f"gitleaks_config names a file that is not there: {config.gitleaks_config}")
     env = {name: values for f in env_files for name, values in env_needles(f).items()}
     url = git("remote", "get-url", remote, cwd=source).strip()
     tip_there, tags_there = remote_state(url, branch, source)
@@ -432,7 +462,12 @@ def export(
             *check_identities(work, exclude),
             *check_paths_and_sizes(work, paths, rules, exclude),
             *check_contents(work, paths, rules),
-            *check_secrets(binary, work, exclude),
+            *check_secrets(
+                binary,
+                work,
+                exclude,
+                config.gitleaks_config or default_gitleaks_config(Path(scratch)),
+            ),
         ]
         if findings:
             raise Refusal(

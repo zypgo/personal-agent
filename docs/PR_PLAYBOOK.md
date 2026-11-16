@@ -15,7 +15,7 @@ Cursor 里监视这个终端的对话被这一行唤醒，按本手册处理：*
 
 .venv/bin/python scripts/pr_watch.py status           # 它知道每个 PR 的什么（pending 的就是在等答复）
 .venv/bin/python scripts/pr_watch.py status --json
-.venv/bin/python scripts/pr_watch.py selftest --delay 5   # 5 秒后打印一行假事件：测"唤醒"这一段通不通
+.venv/bin/python scripts/pr_watch.py selftest --delay 5   # 5 秒后打印一行假事件；要在同样监视 ^PR_WATCH_EVENT 的后台 Shell 里跑，才测得到"唤醒"
 ```
 
 - 第一次运行只记下已有的 PR（不重放历史）；`--include-open` 才把此刻开着的也当作新的。
@@ -52,7 +52,8 @@ REVIEWED=$(git rev-parse refs/pr/$N)   # 必须等于 status 里记录的 head�
 在对话里向用户说明 PR 要做什么、你的看法、建议；用户同意之后同一个 PR 仍可继续（`needs_user` 的 PR 可以再被 `ack`）。
 
 - `trusted` 为 false，或 `reasons` 非空；
-- 改了守门人自己的代码：`scripts/pr_watch.py`、`scripts/github_export*`、`scripts/check.sh`、`docs/PR_PLAYBOOK.md`、`.cursor/**`、`.github/**`；
+- 改了守门人自己的代码或它的测试：`scripts/pr_watch.py`、`scripts/github_export*`、`tests/test_pr_watch.py`、`tests/test_github_export.py`、
+  `scripts/check.sh`、`docs/PR_PLAYBOOK.md`、`.cursor/**`、`.github/**`，以及任何 `.gitleaks*` 文件；
 - 加了依赖，或改了安全默认值（沙箱、SSRF 网关、白名单、审批策略、密钥处理）；
 - 任何一个提交里出现密钥、真实邮箱或个人数据的迹象。
 
@@ -94,8 +95,11 @@ git push origin main                                    # origin 是完整历史
 ```
 
 - GitHub 只通过 `scripts/github_export.py` 推送；不在 GitHub 上点合并，不强推，不移动标签。
-- 导出被拒（隐私名单、`.env` 值、gitleaks、非 noreply 地址、体积、GitHub 领先）时，**在源头修**（本地还没推到 origin 的提交可以改写；
-  已推到 origin 的就追加修复提交），再重跑。**不得**为了放行去改 `~/.config/pa-export/config.toml`、`.gitleaksignore` 或脚本本身。
+- 导出被拒（隐私名单、`.env` 值、gitleaks、非 noreply 地址、体积、GitHub 领先）时，**在源头修**，再重跑。本地还没推到 origin 的提交可以改写。
+  **已经推到 origin 的提交里的发现，追加一个修复提交清不掉**：导出逐个提交扫描新范围，早先那个提交仍在里面。
+  真密钥：先作废它，再请用户决定怎么改写历史（改写已推送的历史要对 origin 强推，不得自行做）。
+  误报（确认是编造的值）：把值和理由告诉用户，由用户决定是否写进 `~/.config/pa-export/gitleaks.toml` 的 `[[allowlists]]`。
+  **不得**自行为了放行去改 `~/.config/pa-export/` 下的任何文件，也不得改脚本本身。
   `origin` 已推而 GitHub 被拒时，PR 保持未答复，修好后重跑导出即可（导出是幂等的）。
 
 **7. 收尾，同样按顺序：**
@@ -133,8 +137,11 @@ git worktree remove "$WT" && git branch -d "integrate/pr-$N"
 - **一次拉取看最近创建的 100 个 PR。** 同一轮之间新开超过 100 个、或者很久以前开的被搁置的 PR 来了新提交而它已被挤出前 100 个，会漏。对个人仓库不会发生。
 - **GitHub 的副本是过滤过的**：含 `.github/workflows` 的提交被改写（令牌没有 `workflow` 权限，GitHub 拒收）。改写是确定的，所以每次推送都是快进；
   所以 PR 的基础是 GitHub 上的 `main`，而回收发生在 origin 的 `main` 上——这就是用 cherry-pick 而不是合并的原因。
-- 导出脚本的私有配置 `~/.config/pa-export/config.toml`（隐私名单、要保护的 `.env` 文件、gitleaks 路径）在仓库**之外**，因为它的内容正是不能公开的东西；
-  换一台机器要自己建，格式见 `scripts/github_export.py --help`。
+- 导出脚本的私有配置在 `~/.config/pa-export/`，在仓库**之外**：`config.toml`（隐私名单、要保护的 `.env` 文件、gitleaks 路径）的内容正是不能公开的东西；
+  `gitleaks.toml`（gitleaks 的规则和放行名单）必须由主人说了算——提交里自带的 `.gitleaks.toml`、`.gitleaksignore`、行内 `gitleaks:allow`
+  导出时一律不读，否则一个提交就能关掉检查它自己的那道检查（实测三种都能让令牌通过，见 `docs/research/reference-analysis.md` 第九节）。
+  放行按**值**写，不按提交号：导出会改写提交号，按提交号的指纹会对不上。换一台机器要自己建，格式见 `scripts/github_export.py --help`；
+  手动扫整个历史：`gitleaks git --config ~/.config/pa-export/gitleaks.toml --redact .`。
 
 ## 七、借鉴与取舍
 

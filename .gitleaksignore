@@ -1,4 +1,0 @@
-# A made-up key in a test that proves error messages never show a key (tests/test_errors.py).
-# It is not a secret: it matches no value in any .env file. gitleaks matches it by fingerprint
-# (commit:file:rule:line), so a real key anywhere else is still found.
-09d1c66ccd21a061aabed0a1afdee89d4cfb11ce:tests/test_errors.py:generic-api-key:68

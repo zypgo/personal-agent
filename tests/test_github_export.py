@@ -72,7 +72,13 @@ class World:
 
     # -- setting up
     def configure(
-        self, *, denylist=("quokka-private-[0-9]+",), env_files=(), gitleaks_exit=0, binary=None
+        self,
+        *,
+        denylist=("quokka-private-[0-9]+",),
+        env_files=(),
+        gitleaks_exit=0,
+        binary=None,
+        gitleaks_config=None,
     ):
         if binary is None:  # the stand-in is told by the environment what to do and where to write
             binary = self.stand_in
@@ -83,6 +89,8 @@ class World:
             f"env_files = {json.dumps([str(f) for f in env_files])}",
             f"gitleaks = {json.dumps(str(binary))}",
         ]
+        if gitleaks_config is not None:
+            lines.append(f"gitleaks_config = {json.dumps(str(gitleaks_config))}")
         self.config.write_text("\n".join(lines) + "\n")
 
     def commit(self, message, files=None, *, author=GOOD, committer=None) -> str:
@@ -153,6 +161,9 @@ class World:
     def gitleaks_args(self) -> list[str]:
         return self.gitleaks_log.read_text().splitlines()
 
+    def gitleaks_config_seen(self) -> str:
+        return Path(f"{self.gitleaks_log}.config").read_text()
+
 
 @pytest.fixture(scope="session")
 def stand_in_gitleaks(tmp_path_factory) -> Path:
@@ -161,8 +172,17 @@ def stand_in_gitleaks(tmp_path_factory) -> Path:
     path = tmp_path_factory.mktemp("stand-in") / "gitleaks"
     path.write_text(
         "#!/bin/sh\n"
+        # what it was asked, the config it was given (the scratch copy is gone afterwards), and
+        # whether the directory it was run on (the last argument) has an ignore file
         'printf \'%s\\n\' "$@" > "$FAKE_GITLEAKS_LOG"\n'
-        '[ "$FAKE_GITLEAKS_EXIT" = 1 ] && echo "WRN leaks found: 1" >&2\n'
+        "prev=\n"
+        "for a; do\n"
+        '  [ "$prev" = --config ] && cp "$a" "$FAKE_GITLEAKS_LOG.config"\n'
+        "  prev=$a; last=$a\n"
+        "done\n"
+        '[ -e "$last/.gitleaksignore" ] && echo "ignore file present" >> "$FAKE_GITLEAKS_LOG"\n'
+        '[ "$FAKE_GITLEAKS_EXIT" = 1 ] && [ -z "$FAKE_GITLEAKS_QUIET" ]'
+        ' && echo "WRN leaks found: 1" >&2\n'
         'exit "${FAKE_GITLEAKS_EXIT:-0}"\n'
     )
     path.chmod(0o755)
@@ -401,9 +421,43 @@ def test_gitleaks_is_asked_about_what_is_new_only(world):
     args = world.gitleaks_args()
     assert args[0] == "git" and "--redact" in args and "--no-banner" in args
     assert "--log-opts=--branches --tags ^refs/export/remote" in args
-    assert (
-        args[-1] == args[-2] and "pa-export-" in args[-1]
-    )  # the scratch copy: ignore file and repo
+    assert "pa-export-" in args[-1]  # the scratch copy of the repository is the last argument
+
+
+def test_gitleaks_is_given_its_own_rules_unless_the_owner_gave_others(world):
+    world.plain()
+
+    assert world.export().code == 0
+
+    args = world.gitleaks_args()
+    given = Path(args[args.index("--config") + 1])
+    assert given.parent == Path(args[-1]).parent  # beside the copy of the repository, not in it
+    assert world.gitleaks_config_seen() == "[extend]\nuseDefault = true\n"
+
+
+def test_gitleaks_is_given_the_owners_rules_when_there_are_some(world):
+    mine = Path(os.environ["HOME"]) / "mine.toml"  # the test's own home (see the fixture)
+    mine.parent.mkdir(parents=True, exist_ok=True)
+    mine.write_text("[extend]\nuseDefault = true\n# the owner's\n")
+    world.configure(gitleaks_config="~/mine.toml")  # written the way the owner writes it
+    world.plain()
+
+    assert world.export().code == 0
+
+    args = world.gitleaks_args()
+    assert args[args.index("--config") + 1] == str(mine)
+    assert world.gitleaks_config_seen().endswith("# the owner's\n")
+
+
+def test_nothing_that_comes_with_the_commits_can_loosen_the_check(world):
+    world.plain()
+    world.commit("hide it", {".gitleaksignore": "a:b:c:1\n", ".gitleaks.toml": "x = 1\n"})
+
+    assert world.export().code == 0
+
+    args = world.gitleaks_args()
+    assert "--ignore-gitleaks-allow" in args  # a comment in a file is not the owner's word
+    assert "ignore file present" not in args  # the copy it is run in has no ignore file
 
 
 def test_a_secret_that_gitleaks_finds_stops_everything(world):
@@ -423,6 +477,18 @@ def test_gitleaks_that_cannot_run_means_nothing_is_pushed(world):
     result = world.export()
 
     assert result.code == 2 and "gitleaks failed to run" in result.err
+    assert world.remote_tip() is None
+
+
+def test_an_exit_that_is_not_followed_by_a_report_is_not_taken_for_a_finding(world, monkeypatch):
+    """gitleaks exits 1 for a finding, and also for a config it cannot read."""
+    world.configure(gitleaks_exit=1)
+    monkeypatch.setenv("FAKE_GITLEAKS_QUIET", "1")
+    world.plain()
+
+    result = world.export()
+
+    assert result.code == 2 and "gitleaks failed to run (exit 1)" in result.err
     assert world.remote_tip() is None
 
 
@@ -453,6 +519,73 @@ def test_the_real_gitleaks_lets_clean_work_through_and_stops_a_token(world):
     assert result.code == 1 and "gitleaks found 1" in result.err
     assert token not in result.err + result.out
     assert world.remote_tip() == before
+
+
+def made_up_token(seed: bytes = b"a made-up seed") -> str:
+    return "ghp_" + hashlib.sha256(seed).hexdigest()[:36]
+
+
+needs_gitleaks = pytest.mark.skipif(
+    not os.access(REAL_GITLEAKS, os.X_OK), reason="gitleaks is not installed"
+)
+
+
+# What a commit can bring with it to hide a token from the check that reads that commit. Each of
+# these let the token through when gitleaks was left to find its own config and ignore file.
+@needs_gitleaks
+@pytest.mark.parametrize("how", ["config", "comment", "ignore file"])
+def test_a_commit_cannot_hide_its_own_token_from_the_check(world, how):
+    world.configure(binary=Path(REAL_GITLEAKS))
+    token = made_up_token()
+    line = f'token = "{token}"\n'
+    world.plain()
+    assert world.export().code == 0
+    before = world.remote_tip()
+    if how == "config":
+        world.commit(
+            "leak", {"cfg.txt": line, ".gitleaks.toml": '[allowlist]\npaths = ["cfg.txt"]\n'}
+        )
+    elif how == "comment":
+        world.commit("leak", {"cfg.txt": f"{line.strip()}  # gitleaks:allow\n"})
+    else:  # the commit is named by the id it has once pushed: no rewrite here, so the same one
+        leak = world.commit("leak", {"cfg.txt": line})
+        world.commit("hide it", {".gitleaksignore": f"{leak}:cfg.txt:github-pat:1\n"})
+
+    result = world.export()
+
+    assert result.code == 1 and "gitleaks found" in result.err, result.err
+    assert token not in result.err + result.out
+    assert world.remote_tip() == before
+
+
+@needs_gitleaks
+def test_the_owner_can_let_one_known_value_through_and_no_other(world, tmp_path):
+    known, other = made_up_token(b"known"), made_up_token(b"other")
+    mine = tmp_path / "mine.toml"
+    mine.write_text(f"[extend]\nuseDefault = true\n[[allowlists]]\nregexes = ['''{known}''']\n")
+    world.configure(binary=Path(REAL_GITLEAKS), gitleaks_config=mine)
+    world.plain()
+    assert world.export().code == 0
+    world.commit("a value the owner vouched for", {"a.txt": f'token = "{known}"\n'})
+    assert world.export().code == 0, "the owner's allowance was not honoured"
+    world.commit("another one", {"b.txt": f'token = "{other}"\n'})
+
+    result = world.export()
+
+    assert result.code == 1 and "gitleaks found" in result.err
+
+
+@needs_gitleaks
+def test_a_gitleaks_config_that_cannot_be_read_is_not_taken_for_a_finding(world, tmp_path):
+    broken = tmp_path / "broken.toml"
+    broken.write_text("this is [ not toml\n")
+    world.configure(binary=Path(REAL_GITLEAKS), gitleaks_config=broken)
+    world.plain()
+
+    result = world.export()
+
+    assert result.code == 2 and "gitleaks failed to run" in result.err
+    assert world.remote_tip() is None
 
 
 # ---- when the two copies disagree -------------------------------------------------------------
@@ -560,6 +693,9 @@ def test_a_rewrite_that_left_the_workflow_files_in_stops_the_export(world, monke
         ("this is [ not toml", "not valid TOML"),
         ('denylist = ["x"]\nenv_files = 3', "list of paths"),
         ('denylist = ["x"]\nenv_files = ["/nonexistent/keys.env"]', "not there"),
+        ('denylist = ["x"]\ngitleaks_config = 3', "path of a gitleaks config file"),
+        ('denylist = ["x"]\ngitleaks_config = ""', "path of a gitleaks config file"),
+        ('denylist = ["x"]\ngitleaks_config = "/nonexistent/gl.toml"', "names a file that is not"),
     ],
 )
 def test_a_config_that_cannot_be_relied_on_means_nothing_is_pushed(world, content, why):
