@@ -392,7 +392,11 @@ async def test_a_night_of_tidying_records_what_was_learned_and_leaves_the_owners
     assert app.memory.file_count() >= notes_before - 1  # nothing was swept away
     assert {c["actor"] for c in app.memory.changes_by_run(run.id)} == {"dream"}
     assert Dreamer(app).cursor() > 0  # the pass finished, so the next one starts after it
-    assert chat.tools_used(run) and set(chat.tools_used(run)) <= {"memory", "search_history"}
+    assert chat.tools_used(run) and set(chat.tools_used(run)) <= {
+        "memory",
+        "search_history",
+        "search_tool_history",
+    }
 
 
 # ---- the model does not obey what it reads ---------------------------------------------------
