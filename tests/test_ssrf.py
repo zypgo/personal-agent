@@ -460,3 +460,161 @@ def test_what_a_redirect_keeps_is_a_short_list_of_harmless_headers():
     assert (
         not {"authorization", "cookie", "x-api-key", "proxy-authorization"} & ssrf.KEPT_ACROSS_SITES
     )
+
+
+# ---- what a redirect asks for (the decision alone, with no network) ---------------------------------------
+def request(url: str, verb: str = "GET", content: bytes | None = None, **headers: str):
+    return ssrf._Request(httpx.URL(url), verb, content, headers)
+
+
+def test_a_redirect_within_a_site_changes_only_the_address():
+    asked = request("https://a.example/start", Authorization="Bearer x", Accept="text/html")
+    follows = asked.after(302, "/elsewhere?x=1")
+    assert str(follows.url) == "https://a.example/elsewhere?x=1"
+    assert (follows.verb, follows.headers) == ("GET", asked.headers)
+
+
+def test_a_redirect_to_another_site_leaves_behind_every_header_that_is_not_known_to_be_harmless():
+    asked = request(
+        "https://a.example/start",
+        Authorization="Bearer x",
+        **{
+            "PRIVATE-TOKEN": "t",
+            "X-Auth-Token": "u",
+            "Accept": "text/html",
+            "Accept-Language": "zh",
+        },
+    )
+    follows = asked.after(302, "https://b.example/landing")
+    assert follows.headers == {"Accept": "text/html", "Accept-Language": "zh"}
+    assert asked.headers["Authorization"] == "Bearer x"  # the request that was asked is untouched
+
+
+@pytest.mark.parametrize("status", [307, 308])
+def test_data_is_not_replayed_to_another_site_but_is_within_one(status):
+    posting = request(
+        "https://a.example/form", "POST", b"secret=1", **{"Content-Type": "text/plain"}
+    )
+    with pytest.raises(Blocked, match="carries data to another address"):
+        posting.after(status, "https://b.example/")
+    same_site = posting.after(status, "/again")
+    assert (same_site.verb, same_site.content) == ("POST", b"secret=1")
+    assert same_site.headers == {"Content-Type": "text/plain"}
+
+
+@pytest.mark.parametrize("status", [301, 302, 303])
+def test_these_redirects_turn_a_post_into_a_get_without_the_body_or_what_describes_it(status):
+    posting = request(
+        "https://a.example/form",
+        "POST",
+        b"secret=1",
+        **{"Content-Type": "text/plain", "Content-Length": "8", "Accept": "text/html"},
+    )
+    follows = posting.after(status, "/done")
+    assert (follows.verb, follows.content) == ("GET", None)
+    assert follows.headers == {"Accept": "text/html"}
+
+
+@pytest.mark.parametrize("status", [301, 302, 303])
+def test_a_post_sent_on_to_another_site_becomes_a_get_there_and_takes_nothing_with_it(status):
+    """Only 307 and 308 ask for the data to follow; the others ask for a page, and get one."""
+    posting = request(
+        "https://a.example/form",
+        "POST",
+        b"secret=1",
+        **{"Content-Type": "text/plain", "Authorization": "Bearer x", "Accept": "text/html"},
+    )
+    follows = posting.after(status, "https://b.example/done")
+    assert (str(follows.url), follows.verb, follows.content) == (
+        "https://b.example/done",
+        "GET",
+        None,
+    )
+    assert follows.headers == {"Accept": "text/html"}
+
+
+def test_a_head_request_stays_a_head_request():
+    assert request("https://a.example/", "HEAD").after(301, "/x").verb == "HEAD"
+
+
+@pytest.mark.parametrize("location", ["http://user:pw@b.example/", "ftp://b.example/"])
+def test_a_redirect_to_an_address_the_gate_would_not_accept_is_not_followed(location):
+    with pytest.raises(Blocked):
+        request("https://a.example/").after(302, location)
+
+
+@pytest.mark.parametrize(
+    "location", ["http://b.example:abc/", "http://[::1/", "http://b.example:99999/"]
+)
+async def test_a_redirect_to_something_that_is_not_an_address_ends_in_an_error_the_tools_word(
+    site, location
+):
+    """httpx reads the Location itself before the gate sees it. That is what keeps an unparseable
+    address from escaping as `httpx.InvalidURL`, which is not an `HTTPError` and so would not be
+    caught: if a new httpx stops doing it, this fails and says where the gate must."""
+    with pytest.raises((Blocked, httpx.HTTPError)):
+        await fetch(LOCAL, "GET", f"{site.base}/redirect?to={location}")
+    assert len(site.seen) == 1
+
+
+# ---- what a request says about itself ---------------------------------------------------------------------
+async def test_a_request_says_who_it_is_what_it_reads_and_that_it_wants_the_plain_text(site):
+    await fetch(LOCAL, "GET", f"{site.base}/text")
+    sent = dict(site.seen[0].lines)
+    assert sent["user-agent"] == LOCAL.user_agent
+    assert "text/html" in sent["accept"] and sent["accept-encoding"] == "identity"
+
+
+@pytest.mark.parametrize("spelling", ["Accept", "accept", "ACCEPT"])
+async def test_a_header_the_caller_writes_replaces_ours_in_any_capitalization(site, spelling):
+    """A server joins two lines of one header into one list, so `Accept: application/json` after our
+    own `accept: text/html,...` asked for both. It did, until this was written."""
+    await fetch(LOCAL, "GET", f"{site.base}/text", headers={spelling: "application/json"})
+    names = [name for name, _ in site.seen[0].lines]
+    assert [v for n, v in site.seen[0].lines if n == "accept"] == ["application/json"]
+    assert names.count("user-agent") == 1 and names.count("accept-encoding") == 1
+
+
+async def test_what_a_request_says_about_itself_is_said_again_after_a_redirect(site):
+    await fetch(
+        LOCAL, "GET", f"{site.base}/redirect?to=/text", headers={"Accept": "application/json"}
+    )
+    assert len(site.seen) == 2
+    for seen in site.seen:
+        names = [name for name, _ in seen.lines]
+        assert [v for n, v in seen.lines if n == "accept"] == ["application/json"]
+        assert names.count("user-agent") == 1 and names.count("accept-encoding") == 1
+        assert dict(seen.lines)["user-agent"] == LOCAL.user_agent
+        assert dict(seen.lines)["accept-encoding"] == "identity"
+
+
+# ---- the capped read --------------------------------------------------------------------------------------
+class Chunks(httpx.AsyncByteStream):
+    """A body that arrives in the given pieces."""
+
+    def __init__(self, *parts: bytes) -> None:
+        self.parts = parts
+
+    async def __aiter__(self):
+        for part in self.parts:
+            yield part
+
+
+@pytest.mark.parametrize(
+    ("parts", "limit", "expected"),
+    [
+        ((b"abcdef",), 7, (b"abcdef", False)),
+        ((b"abcdef",), 6, (b"abcdef", False)),  # fits exactly: nothing was left out
+        ((b"abcdef",), 5, (b"abcde", True)),
+        ((b"abc", b"def"), 6, (b"abcdef", False)),  # fits exactly across two pieces
+        ((b"abc", b"def"), 5, (b"abcde", True)),
+        ((b"abc", b"def"), 3, (b"abc", True)),  # the first piece fills it and more follows
+        ((b"abc", b""), 3, (b"abc", False)),
+        ((), 3, (b"", False)),
+    ],
+)
+async def test_a_body_is_cut_at_the_limit_and_only_said_to_be_cut_when_something_was_left(
+    parts, limit, expected
+):
+    response = httpx.Response(200, stream=Chunks(*parts))
+    assert await ssrf._read_capped(response, limit) == expected

@@ -26,6 +26,8 @@ class Seen:
     path: str
     headers: dict[str, str]
     body: bytes
+    lines: list[tuple[str, str]] = field(default_factory=list)
+    """Every header line as it arrived, lower-cased and in order: `headers` keeps one per name."""
 
 
 @dataclass
@@ -75,6 +77,7 @@ class Site:
                             self.path,
                             {k.lower(): v for k, v in self.headers.items()},
                             body,
+                            [(k.lower(), v) for k, v in self.headers.items()],
                         )
                     )
                 parts = urlsplit(self.path)

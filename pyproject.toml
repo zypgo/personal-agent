@@ -29,12 +29,6 @@ dependencies = [
     "tomlkit>=0.13",
 ]
 
-[project.optional-dependencies]
-# Optional vector search for memory/history (FTS5 works without it).
-vector = ["numpy>=2"]
-# Docker sandbox backend helper (the CLI `docker` binary is used directly; this is optional).
-docker = ["docker>=6.1"]
-
 [project.scripts]
 pa = "personal_agent.cli:main"
 

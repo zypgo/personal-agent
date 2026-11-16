@@ -101,8 +101,8 @@ def test_a_secret_that_would_not_protect_anything_is_reported(ready, monkeypatch
     assert "weakpw" not in out  # not even the bad one is printed
 
 
-def test_a_working_secret_is_never_printed(ready):
-    ready()
+def test_a_working_secret_is_never_printed(ready, listener):
+    listener(ready())  # the delivery goes to the route's own code, not to a port on this machine
     out = invoke("webhooks").output + invoke("webhooks", "send", "github").output
     assert not any(value in out for value in ENV.values())
 

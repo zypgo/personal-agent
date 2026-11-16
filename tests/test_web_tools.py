@@ -250,6 +250,14 @@ async def test_a_redirect_into_a_forbidden_address_is_stopped_and_reported(make_
     assert len(site.seen) == 1
 
 
+async def test_an_api_call_that_asks_for_json_is_not_also_asking_for_html(make_app, site):
+    """The tool sends its own `Accept` for pages; one the model writes must replace it, not join it."""
+    call = req("c1", f"{site.base}/json", headers=[{"name": "Accept", "value": "application/json"}])
+    app = make_app(ScriptedModel([[call], [assistant_message("ok")]]), config=cfg())
+    await run(app)
+    assert [v for n, v in site.seen[0].lines if n == "accept"] == ["application/json"]
+
+
 # ---- http_request -------------------------------------------------------------------------------------------
 async def test_an_api_answer_is_pretty_printed_and_fenced(make_app, site):
     model = ScriptedModel([[req("c1", f"{site.base}/json")], [assistant_message("ok")]])

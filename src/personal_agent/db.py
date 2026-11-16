@@ -333,6 +333,14 @@ MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     """,
     # ---- 6: iteration 5, searching what was said --------------------------------------------
     _transcript_search_index,
+    # ---- 7: iteration 9, the question every worker asks every second ----------------------------
+    """
+    -- "Has a lease run out?" asks about the few events that are leased, among the many that were
+    -- handled long ago. `events_ready` cannot answer it: it counts three kinds of status and so
+    -- guesses that a third of the table is leased, and the question read all of it, twice a second.
+    -- An index of only the leased rows is exactly as big as the answer.
+    CREATE INDEX events_leased ON events(lease_expires_at) WHERE status = 'leased';
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

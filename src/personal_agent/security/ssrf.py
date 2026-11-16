@@ -355,6 +355,68 @@ async def fetch(
         ) from exc
 
 
+@dataclass(frozen=True)
+class _Request:
+    """One request of a fetch. A redirect replaces it with the one the redirect asks for."""
+
+    url: httpx.URL
+    verb: str
+    content: bytes | None
+    headers: dict[str, str]
+
+    def after(self, status: int, location: str) -> _Request:
+        """The request that follows a redirect, or Blocked when making it would send something
+        where it was not meant to go."""
+        target = check_url(str(self.url.join(location)))
+        verb, content, headers = self.verb, self.content, self.headers
+        if origin_of(target) != origin_of(self.url):
+            if content is not None and status in (307, 308):
+                raise Blocked(
+                    "the site redirected a request that carries data to another address, "
+                    "which was not followed"
+                )
+            # What was written for one site is not for wherever it sends us: a header may be a
+            # credential whatever it is called.
+            headers = {k: v for k, v in headers.items() if k.lower() in KEPT_ACROSS_SITES}
+        if status in (301, 302, 303) and verb not in ("GET", "HEAD"):
+            verb, content = "GET", None  # what browsers do; the body is not re-sent
+            headers = {
+                k: v
+                for k, v in headers.items()
+                if k.lower() not in ("content-type", "content-length")
+            }
+        return _Request(target, verb, content, headers)
+
+
+def _headers_of(cfg: NetConfig, written: dict[str, str]) -> httpx.Headers:
+    """The headers a request is sent with: what every request says about itself, each replaced by
+    the one the caller wrote under the same name. Names are the same in any capitalization, and a
+    server joins two lines of one header into one list: `Accept: application/json` after our own
+    `accept: text/html,...` would ask for both."""
+    headers = httpx.Headers(
+        {
+            "user-agent": cfg.user_agent,
+            "accept": "text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.5",
+            # Compressed answers are unpacked before they are measured, so a small download can
+            # become a very large one. Asking for the plain text keeps honest servers from doing it.
+            "accept-encoding": "identity",
+        }
+    )
+    headers.update(written)
+    return headers
+
+
+async def _read_capped(response: httpx.Response, limit: int) -> tuple[bytes, bool]:
+    """The body of a response up to `limit` bytes, and whether there was more."""
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        room = limit - len(body)
+        body += chunk[:room]
+        if len(chunk) > room:
+            return bytes(body), True
+    return bytes(body), False
+
+
 async def _follow(
     cfg: NetConfig,
     method: str,
@@ -366,66 +428,33 @@ async def _follow(
     policy: NetPolicy,
 ) -> Fetched:
     limit = max_bytes or cfg.max_response_bytes
-    current = check_url(url)
+    request = _Request(check_url(url), method.upper(), content, dict(headers or {}))
     previous: httpx.URL | None = None
     visited: list[str] = []
-    verb = method.upper()
     timeout = httpx.Timeout(cfg.timeout_s, connect=min(10.0, cfg.timeout_s))
-    base_headers = {
-        "user-agent": cfg.user_agent,
-        "accept": "text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.5",
-        # Compressed answers are unpacked before they are measured, so a small download can
-        # become a very large one. Asking for the plain text keeps honest servers from doing it.
-        "accept-encoding": "identity",
-    }
     async with httpx.AsyncClient(
         transport=GuardedTransport(policy), timeout=timeout, follow_redirects=False, trust_env=False
     ) as client:
         for _ in range(cfg.max_redirects + 1):
             if on_hop is not None:
-                on_hop(current, previous)
-            request_headers = {**base_headers, **(headers or {})}
+                on_hop(request.url, previous)
             async with client.stream(
-                verb, current, headers=request_headers, content=content
+                request.verb,
+                request.url,
+                headers=_headers_of(cfg, request.headers),
+                content=request.content,
             ) as response:
                 if response.status_code in REDIRECT_STATUSES and "location" in response.headers:
-                    target = check_url(str(current.join(response.headers["location"])))
-                    visited.append(str(target))
-                    if origin_of(target) != origin_of(current):
-                        if content is not None and response.status_code in (307, 308):
-                            raise Blocked(
-                                "the site redirected a request that carries data to another "
-                                "address, which was not followed"
-                            )
-                        # What was written for one site is not for wherever it sends us: a
-                        # header may be a credential whatever it is called.
-                        headers = {
-                            k: v
-                            for k, v in (headers or {}).items()
-                            if k.lower() in KEPT_ACROSS_SITES
-                        }
-                    previous, current = current, target
-                    if response.status_code in (301, 302, 303) and verb not in ("GET", "HEAD"):
-                        verb, content = "GET", None  # what browsers do; the body is not re-sent
-                        headers = {
-                            k: v
-                            for k, v in (headers or {}).items()
-                            if k.lower() not in ("content-type", "content-length")
-                        }
+                    following = request.after(response.status_code, response.headers["location"])
+                    visited.append(str(following.url))
+                    previous, request = request.url, following
                     continue
-                body = bytearray()
-                truncated = False
-                async for chunk in response.aiter_bytes():
-                    room = limit - len(body)
-                    body += chunk[:room]
-                    if len(chunk) > room:
-                        truncated = True
-                        break
+                body, truncated = await _read_capped(response, limit)
                 return Fetched(
-                    url=str(current),
+                    url=str(request.url),
                     status=response.status_code,
                     headers={k.lower(): v for k, v in response.headers.items()},
-                    body=bytes(body),
+                    body=body,
                     truncated=truncated,
                     redirects=visited,
                 )

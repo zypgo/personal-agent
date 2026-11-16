@@ -14,7 +14,6 @@ resolves symlinks, and a version record for every change.
 from __future__ import annotations
 
 import os
-import re
 import secrets
 import shutil
 import threading
@@ -27,9 +26,10 @@ from typing import Any
 from personal_agent.clock import Clock, SystemClock
 from personal_agent.config import MemoryConfig
 from personal_agent.db import Database
+from personal_agent.memory.tasks import task_index
 from personal_agent.paths import Paths
 from personal_agent.security.redact import find_secrets, injection_hints
-from personal_agent.security.sanitize import scrub_surrogates, strip_invisible
+from personal_agent.security.sanitize import scrub_surrogates
 
 ROOT = "/memories"
 PREFERENCES = "preferences"
@@ -40,20 +40,6 @@ REQUIRED_TEXT = {"create": ("file_text",), "str_replace": ("old_str",), "insert"
 """The text a command must carry: what it writes, or what it looks for."""
 
 TASKS_DIR = f"{ROOT}/{STATE}/tasks"
-FINISHED = (
-    "done",
-    "finished",
-    "complete",
-    "completed",
-    "closed",
-    "cancelled",
-    "canceled",
-    "abandoned",
-)
-"""A task whose `status:` line starts with one of these words is over; it is not listed any more."""
-_FINISHED_RE = re.compile(r"(?i)(?:" + "|".join(FINISHED) + r")\b")
-_STATUS_LINE = re.compile(r"(?im)^\s*(?:[-*>]\s*)?\**status\**\s*:\s*\**\s*(.+?)\s*$")
-_TITLE_LINE = re.compile(r"(?m)^\s*#+\s*(.+?)\s*$")
 PROPOSALS_PATH = f"{ROOT}/{STATE}/proposals.md"
 INDEX_PATH = f"{ROOT}/{STATE}/MEMORY.md"
 INSTRUCTIONS_PATH = f"{ROOT}/{PREFERENCES}/instructions.md"
@@ -690,52 +676,8 @@ class MemoryStore:
         return "\n".join(kept)
 
     def load_task_index(self) -> str:
-        """One line for each unfinished task file in state/tasks/, newest first.
-
-        Work that takes several wake-ups keeps a progress file (what is done, what is next, where
-        things are). Only this list is put in front of the model; it opens a file when it takes the
-        task up again. The list is built here, not by the model, so it is always as current as the
-        files and costs the same few lines however many tasks have ever been finished."""
-        limit = self.cfg.task_index_lines
-        directory = self._mount_dir(STATE) / "tasks"
-        if limit <= 0 or directory.is_symlink() or not directory.is_dir():
-            return ""
-        found: list[tuple[float, str]] = []
-        finished = 0
-        try:
-            entries = list(os.scandir(directory))
-        except OSError:
-            return ""
-        for entry in entries:
-            if (
-                entry.name.startswith(".")
-                or not entry.name.endswith(".md")
-                or entry.is_symlink()
-                or not entry.is_file()
-            ):
-                continue
-            try:
-                with open(entry.path, encoding="utf-8", errors="replace") as handle:
-                    head = handle.read(4096)
-                stamp = entry.stat().st_mtime
-            except OSError:
-                continue
-            status = _label(_STATUS_LINE.search(head), 100)
-            if _FINISHED_RE.match(status):
-                finished += 1
-                continue
-            title = _label(_TITLE_LINE.search(head), 80) or entry.name.removesuffix(".md")
-            line = f"- tasks/{entry.name}: {title}" + (f" [status: {status}]" if status else "")
-            found.append((stamp, line))
-        if not found:
-            return ""
-        found.sort(key=lambda item: (-item[0], item[1]))
-        lines = [line for _, line in found[:limit]]
-        if len(found) > limit:
-            lines.append(f"[{len(found) - limit} more unfinished tasks are in {TASKS_DIR}/]")
-        if finished:
-            lines.append(f"[{finished} finished tasks are in {TASKS_DIR}/ and not listed]")
-        return "\n".join(lines)
+        """One line for each unfinished task file in state/tasks/, newest first (see `tasks.py`)."""
+        return task_index(self._mount_dir(STATE) / "tasks", self.cfg.task_index_lines, TASKS_DIR)
 
     def history(self, virtual_path: str, limit: int = 20) -> list[dict[str, Any]]:
         rows = self.db.query(
@@ -804,11 +746,3 @@ def _need(command: dict[str, Any], key: str, default: str | None = None) -> str:
     if not isinstance(value, str):
         raise PathError(f"Error: `{key}` must be text for {command.get('command')}")
     return value
-
-
-def _label(match: re.Match[str] | None, limit: int) -> str:
-    """One short line of plain text out of a file the model wrote (and so is only data)."""
-    if match is None:
-        return ""
-    text = " ".join(strip_invisible(match.group(1)).split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"

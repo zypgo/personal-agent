@@ -25,11 +25,12 @@
 | 6 | 评测（`pa eval`：场景文件、先验证判分本身、再用真实模型多次试验）、launchd 常驻服务（`pa service`）、加固与最终验证 | ✅ |
 | 7 | 系统性优化：整个包在 mypy strict 下；属性测试与模糊测试；崩溃一致性（在每一次落盘之后把进程杀掉，再看会不会少答、多答、重复动手）与真实进程的端到端；CLI 按主题拆开、延迟加载；数据的生命周期（`pa db`、`[retention]`、每天一次的整理） | ✅ |
 | 8 | 一次全新的代码复盘与修复（每条结论先核实、先写会失败的测试再修）：审批看到的就是批准的（不被截断、不被改写、带上载荷）、读过外部内容后请求头也带不走数据、安全读文件、`deny` 看得见链式命令里的每一条、run 进行中租约不会被收走、跨站重定向只带白名单里的头、Python 3.11 真的能跑 | ✅ |
+| 9 | 在一个活了很久的进程里会怎样——量出来再改：空闲时每秒问的几个查询在大库上从扫全表变成走索引（23 ms → 4 µs）；测试不再碰得到正在运行的 agent（顺着日志发现测试曾真的往你的 webhook 端口 POST 过）；重定向的决定与任务进度索引各拆成可单独测试的小块（拆完做变异时抓到一个旧缺陷：调用方写的 `Accept` 与我们自己的 `accept` 两行一起发出）；删掉两个没人用的可选依赖 | ✅ |
 
 ## 快速开始
 
 ```bash
-uv sync --all-extras
+uv sync
 uv run pa init                # 创建 ~/.personal-agent（配置、数据库、记忆模板、空的 .env）
 # 用编辑器把 OPENAI_API_KEY=sk-... 填进 ~/.personal-agent/.env（不要贴进聊天）
 uv run pa doctor              # 检查环境；加 --live 会做两次真实调用（几美分）
@@ -167,7 +168,7 @@ uv run pa db vacuum                    # 把删掉的空间还给磁盘（要先
 ## 开发环境
 
 ```bash
-uv sync --all-extras          # Python 3.13 + 全部依赖
+uv sync                       # Python 3.13 + 全部依赖（含开发组）
 scripts/check.sh              # 提交前要过的一关：格式、lint、类型（mypy strict）、全部离线测试、网页脚本测试；--fast 不跑测试
 scripts/check.sh --python 3.11   # 在声明的最低 Python 版本上跑整套测试（私有环境，不动 .venv）
 uv run pytest                 # 测试（不需要 API key，模型由脚本化的 ScriptedModel 代替；没有关掉的文件或连接——有就是测试失败）

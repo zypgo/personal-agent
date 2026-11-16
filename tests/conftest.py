@@ -3,12 +3,14 @@ from __future__ import annotations
 import gc
 import logging
 import os
+from pathlib import Path
 
 import pytest
 from agents.testing import ScriptedModel
 from hypothesis import HealthCheck, settings
 
 from helpers import our_log_handlers
+from network_guard import guard_connects
 from personal_agent import launchd
 from personal_agent.app import App, build_app
 from personal_agent.clock import ManualClock
@@ -73,6 +75,27 @@ def _no_test_changes_the_real_launchd(monkeypatch, tmp_path):
 
     monkeypatch.setattr(launchd, "system_launchctl", only_looking)
     monkeypatch.setattr(launchd, "agents_dir", lambda: tmp_path / "guarded-launchagents")
+
+
+LIVE = Path(__file__).parent / "live"
+
+
+@pytest.fixture(autouse=True)
+def _a_test_stays_on_this_machine(monkeypatch, request):
+    """An offline test talks to servers it started itself, never to another machine and never to
+    the agent somebody has running on the default ports (see `network_guard.py`).
+
+    This exists because it happened: `pa webhooks send` was run for real by a test that had not
+    put a stand-in for the network in its place. On a machine with nothing listening it failed
+    quietly and passed; on one with an agent running it posted a delivery to it, once per run of
+    the suite, and the agent logged a refusal each time. (Tests under `live/` are meant to reach
+    the real API.)"""
+    if LIVE in request.node.path.parents:
+        yield
+        return
+    tried = guard_connects(monkeypatch)
+    yield
+    assert not tried, "a test tried to connect to: " + "; ".join(tried)
 
 
 @pytest.fixture(autouse=True)
