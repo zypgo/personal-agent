@@ -40,6 +40,7 @@ from agents.mcp import (
     MCPServerStreamableHttp,
 )
 from mcp.client.stdio import stdio_client
+from mcp.shared.exceptions import MCPError
 
 from personal_agent.clock import Clock
 from personal_agent.config import ENV_REFERENCE, McpConfig, McpServerConfig, RuntimeConfig
@@ -57,7 +58,7 @@ from personal_agent.plugins.mcp_convert import (
 from personal_agent.plugins.mcp_pins import Definition, McpPins, Review, definition_of, digest_of
 from personal_agent.security.audit import safe_args
 from personal_agent.security.redact import known_secret_values, redact, register_secret_envs
-from personal_agent.tools.base import Category, ToolDef, ToolRegistry
+from personal_agent.tools.base import Category, ToolDef, ToolRegistry, ToolResult
 
 log = logging.getLogger(__name__)
 
@@ -327,7 +328,8 @@ class McpHub:
             name = st.config.name
             if st.status == "failed":
                 notes.append(
-                    f"MCP server '{name}' is not available ({st.error}); its tools are not offered in this run."
+                    f"MCP server '{name}' is not available; its tools are not offered in this run. "
+                    f"The owner can inspect it with `pa mcp tools {name}`."
                 )
             elif st.status == "review":
                 notes.append(
@@ -607,7 +609,7 @@ class McpHub:
     def _tool_def(self, cfg: McpServerConfig, info: ToolInfo) -> ToolDef:
         hub, server_name, tool_name = self, cfg.name, info.name
 
-        async def invoke(_context: Any, raw_args: str) -> str:
+        async def invoke(_context: Any, raw_args: str) -> ToolResult:
             return await hub._call(server_name, tool_name, raw_args)
 
         tool = FunctionTool(
@@ -631,31 +633,54 @@ class McpHub:
         )
 
     # ---- calling ------------------------------------------------------------------------------
-    async def _call(self, server_name: str, tool_name: str, raw_args: str) -> str:
+    async def _call(self, server_name: str, tool_name: str, raw_args: str) -> ToolResult:
         st = self._states[server_name]
         cfg = st.config
         server = st.server
         if server is None or st.status != "connected":
-            return f"Error: the MCP server {server_name!r} is not connected right now."
+            return ToolResult(
+                f"Error: the MCP server {server_name!r} is not connected right now.", error=True
+            )
         try:
             args = loads_json(raw_args) if raw_args and raw_args.strip() else {}
         except ValueError:
-            return "Error: the arguments were not valid JSON."
+            return ToolResult("Error: the arguments were not valid JSON.", error=True)
         if not isinstance(args, dict):
-            return "Error: the arguments must be a JSON object."
+            return ToolResult("Error: the arguments must be a JSON object.", error=True)
         try:
             result = await asyncio.wait_for(server.call_tool(tool_name, args), cfg.call_timeout_s)
         except TimeoutError:
             st.suspect = True
-            return (
+            return ToolResult(
                 f"Error: {server_name}/{tool_name} did not answer within {cfg.call_timeout_s:g} "
-                "seconds. It may have partly run; check the current state before trying again."
+                "seconds. It may have partly run; check the current state before trying again.",
+                error=True,
+            )
+        except MCPError as exc:
+            st.suspect = True
+            # JSON-RPC errors are authored by the server. Preserve a bounded useful explanation,
+            # but give it the same trust boundary as a regular MCP result, even though it failed.
+            text = describe_error(exc, cfg.call_timeout_s)
+            if cfg.taints:
+                text = wrap_untrusted(text, f"mcp:{server_name}")
+            return ToolResult(
+                f"Error: the server {server_name}/{tool_name} reported a protocol error:\n{text}",
+                error=True,
+                untrusted=cfg.taints,
             )
         except Exception as exc:
             st.suspect = True
-            return (
-                f"Error: the call to {server_name}/{tool_name} failed "
-                f"({describe_error(exc, cfg.call_timeout_s)})."
+            # Other SDK/transport exceptions may include response bodies too. Keep arbitrary
+            # exception text in the owner-facing diagnostics, never in an untainted model result.
+            log.warning(
+                "MCP call %s/%s failed: %s",
+                server_name,
+                tool_name,
+                redact(describe_error(exc, cfg.call_timeout_s), known_secret_values(self._environ)),
+            )
+            return ToolResult(
+                f"Error: the call to {server_name}/{tool_name} failed ({type(exc).__name__}).",
+                error=True,
             )
         room = max(500, self.runtime.tool_output_chars - 800)
         rendered = render_result(result, room=room)
@@ -663,8 +688,12 @@ class McpHub:
         if cfg.taints:
             text = wrap_untrusted(text, f"mcp:{server_name}")
         if rendered.is_error:
-            # The call itself completed (and what came back is outside content), so this is not
-            # an "Error..." result: the guard would treat that as a call that did not run.
-            return f"The tool {server_name}/{tool_name} reported a failure:\n{text}"
-        # A result that begins with the word "Error" must not be mistaken for a failed call.
-        return f"Result: {text}" if text.startswith("Error") else text
+            return ToolResult(
+                f"The tool {server_name}/{tool_name} reported a failure:\n{text}",
+                error=True,
+                untrusted=cfg.taints,
+            )
+        # Keep the established readable prefix for string-only callers; the guard uses metadata.
+        return ToolResult(
+            f"Result: {text}" if text.startswith("Error") else text, untrusted=cfg.taints
+        )
