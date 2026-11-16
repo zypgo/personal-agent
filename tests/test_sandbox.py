@@ -256,7 +256,10 @@ def test_an_odd_user_temp_directory_is_never_pasted_into_the_profile(monkeypatch
 
 
 def test_no_sandbox_needs_an_explicit_acknowledgement(paths):
-    refused, why = select_sandbox(paths, SandboxConfig(backend="none"))
+    # The setting itself is refused (see test_config); a config that got here some other way is
+    # still not given an unprotected shell.
+    unacknowledged = SandboxConfig.model_construct(backend="none", i_understand_no_sandbox=False)
+    refused, why = select_sandbox(paths, unacknowledged)
     assert refused is None and "i_understand_no_sandbox" in why
     chosen, _ = select_sandbox(paths, SandboxConfig(backend="none", i_understand_no_sandbox=True))
     assert isinstance(chosen, NoSandbox) and "NONE" in chosen.describe()

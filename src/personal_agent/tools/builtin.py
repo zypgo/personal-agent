@@ -16,15 +16,20 @@ from personal_agent.core.events import Trust
 from personal_agent.core.timers import Timer, TimerError
 from personal_agent.harness.runctx import RunContext
 from personal_agent.memory.store import Actor
+from personal_agent.security.sanitize import clipped
 from personal_agent.tools.base import (
     ALL_PROFILES,
     DREAM,
     FULL,
     SCHEDULED,
+    UNTRUSTED,
     Category,
     ToolDef,
     ToolRegistry,
 )
+
+REVIEW_PROMPT_CHARS = 600
+"""How much of a new wake-up's prompt the owner is shown to approve it."""
 
 MEMORY_DESCRIPTION = """\
 Your persistent memory: a small file system under /memories that survives between conversations \
@@ -135,6 +140,13 @@ async def send_message_tool(
     if len(body) > MAX_MESSAGE_CHARS:
         return f"Error: the message is {len(body)} characters; the limit is {MAX_MESSAGE_CHARS}. Shorten it."
     edits = [e.model_dump(exclude_none=True) for e in after_sent or []]
+    if edits and rc.profile == UNTRUSTED:
+        # A run woken by outside content has no memory tool, so that nothing it was told can be
+        # planted in notes the owner's own runs read back. This is the same door, not another.
+        return (
+            "Error: this run was started by content the owner did not write, so it cannot change "
+            "memory, and after_sent is memory edits. Send the message without after_sent."
+        )
     for edit in edits:
         problem = rc.app.memory.check_command(edit, actor=Actor.AGENT)
         if problem:
@@ -282,6 +294,27 @@ async def schedule_tool(
     return f"Scheduled. {_describe(rc, timer)}{note}"
 
 
+def _detail_schedule(args: dict[str, Any]) -> str:
+    return " ".join(
+        str(args[k])
+        for k in ("action", "name", "cron", "at", "delay_minutes")
+        if args.get(k) is not None
+    )
+
+
+def _review_schedule(args: dict[str, Any]) -> str:
+    """What the owner reads before a wake-up is created: when, and above all what it will be told
+    to do. The prompt is the whole of a recurring job's authority, so it is shown, not left out."""
+    when = _detail_schedule(args)
+    prompt = str(args.get("prompt") or "").strip()
+    if args.get("action") != "create" or not prompt:
+        return when
+    where = " | in this conversation" if args.get("session") == "here" else ""
+    return (
+        f"{when}{where} | prompt ({len(prompt)} characters): {clipped(prompt, REVIEW_PROMPT_CHARS)}"
+    )
+
+
 def _schedule_category(_rc: RunContext, args: dict[str, Any]) -> Category:
     """Listing and cancelling are harmless, a one-off reminder is light, a recurring job is a standing
     authorization and is treated like any other action that changes the world."""
@@ -326,11 +359,8 @@ def register_builtin(registry: ToolRegistry, config: Config | None = None) -> No
             profiles=frozenset({FULL, SCHEDULED}),
             category_for=_schedule_category,
             validate=_validate_schedule,
-            detail=lambda a: " ".join(
-                str(a[k])
-                for k in ("action", "name", "cron", "at", "delay_minutes")
-                if a.get(k) is not None
-            ),
+            detail=_detail_schedule,
+            review=_review_schedule,
         )
     )
     register_history(registry)

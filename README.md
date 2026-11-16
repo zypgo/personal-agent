@@ -24,6 +24,7 @@
 | 5 | 对着 Anthropic 的 always-on 文章补齐记忆：每次唤醒一段新对话（带着任务进度索引与"已经告诉过你什么"）、压缩、`search_history`、每夜"做梦"整理记忆（可撤销、有花费上限） | ✅ |
 | 6 | 评测（`pa eval`：场景文件、先验证判分本身、再用真实模型多次试验）、launchd 常驻服务（`pa service`）、加固与最终验证 | ✅ |
 | 7 | 系统性优化：整个包在 mypy strict 下；属性测试与模糊测试；崩溃一致性（在每一次落盘之后把进程杀掉，再看会不会少答、多答、重复动手）与真实进程的端到端；CLI 按主题拆开、延迟加载；数据的生命周期（`pa db`、`[retention]`、每天一次的整理） | ✅ |
+| 8 | 一次全新的代码复盘与修复（每条结论先核实、先写会失败的测试再修）：审批看到的就是批准的（不被截断、不被改写、带上载荷）、读过外部内容后请求头也带不走数据、安全读文件、`deny` 看得见链式命令里的每一条、run 进行中租约不会被收走、跨站重定向只带白名单里的头、Python 3.11 真的能跑 | ✅ |
 
 ## 快速开始
 
@@ -168,6 +169,7 @@ uv run pa db vacuum                    # 把删掉的空间还给磁盘（要先
 ```bash
 uv sync --all-extras          # Python 3.13 + 全部依赖
 scripts/check.sh              # 提交前要过的一关：格式、lint、类型（mypy strict）、全部离线测试、网页脚本测试；--fast 不跑测试
+scripts/check.sh --python 3.11   # 在声明的最低 Python 版本上跑整套测试（私有环境，不动 .venv）
 uv run pytest                 # 测试（不需要 API key，模型由脚本化的 ScriptedModel 代替；没有关掉的文件或连接——有就是测试失败）
 HYPOTHESIS_PROFILE=ci uv run pytest tests -n 4          # 属性测试用固定的随机用例，红了可以重现（scripts/check.sh 用的就是这个）
 HYPOTHESIS_PROFILE=thorough uv run pytest tests -n 4    # 同样的属性，多跑很多组随机用例
@@ -183,5 +185,5 @@ scripts/fetch_references.sh   # 重新拉取只读参考项目到 references/
 ## 安全约定
 
 - 密钥只放 `.env`（已 git-ignore），**不要贴进聊天或提交**。
-- 个人数据（记忆、会话、数据库）默认在 `~/.personal-agent`，不在仓库内。
+- 个人数据（记忆、会话、数据库）默认在 `~/.personal-agent`，不在仓库内；数据库与 `.env` 只有你自己读得到（`pa init` 会把已有的收紧，`pa doctor` 会提醒）。
 - 遥测与 OpenAI 托管 tracing 默认关闭。

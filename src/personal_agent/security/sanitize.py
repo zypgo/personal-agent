@@ -76,6 +76,25 @@ def hides_text(text: str) -> bool:
     return strip_invisible(text, formatting=True) != text.replace("\r\n", "\n")
 
 
+def clipped(text: str, limit: int) -> str:
+    """`text` cut to `limit` characters, and saying so: whatever is not shown is never silently
+    missing, because a person who approves what they can see is approving all of it."""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]} ...[+{len(text) - limit} more characters]"
+
+
+LINE_BREAK_MARK = " ↵ "
+
+
+def one_line(text: str) -> str:
+    """`text` on a single line, each line break shown as a mark. A text that is read as one line
+    cannot then start a second one that looks like something else (a fake `#3 shell: ls` under the
+    real request)."""
+    flat = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ")
+    return LINE_BREAK_MARK.join(flat.split("\n"))
+
+
 def fenced(tag: str, text: str) -> str:
     """`text` between <tag> lines, with nothing inside able to close the fence early.
 

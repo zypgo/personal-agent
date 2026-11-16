@@ -27,6 +27,7 @@ from personal_agent.channels.pairing import PAIRING_TTL_S
 from personal_agent.channels.telegram.api import NotSent, TelegramApi, TelegramApiError
 from personal_agent.channels.telegram.render import Piece, render
 from personal_agent.core.outbox import OutMessage
+from personal_agent.core.sessions import DEFAULT_SESSION
 
 if TYPE_CHECKING:
     from personal_agent.app import App
@@ -61,8 +62,10 @@ class PartialDelivery(Exception):
     "not delivered": sending the whole message again would repeat the pieces that arrived."""
 
 
-def approval_markup(ids: list[int]) -> dict[str, Any]:
-    """Buttons under an approval request: one pair per request, and "all" when there are several."""
+def approval_markup(ids: list[int], *, all_button: bool = True) -> dict[str, Any]:
+    """Buttons under an approval request: one pair per request, and "all" when there are several
+    (and `all_button`: "all" is what is waiting in the owner's own conversation, which is not what
+    a timer's run or a webhook asked about)."""
     rows = [
         [
             {"text": f"✅ Approve #{i}", "callback_data": f"ap:{i}:y"},
@@ -70,7 +73,7 @@ def approval_markup(ids: list[int]) -> dict[str, Any]:
         ]
         for i in ids[:6]
     ]
-    if len(ids) > 1:
+    if len(ids) > 1 and all_button:
         rows.append(
             [
                 {"text": "✅ Approve all", "callback_data": "ap:all:y"},
@@ -143,7 +146,9 @@ class TelegramChannel:
         chat = self._chat_for(message)
         pieces = render(message.text)
         ids = [int(i) for i in message.payload.get("approval_ids") or []]
-        markup = approval_markup(ids) if message.kind == "approval_request" and ids else None
+        markup = None
+        if message.kind == "approval_request" and ids:
+            markup = approval_markup(ids, all_button=message.session_key == DEFAULT_SESSION)
         silent = message.urgency == "low"
         for index, piece in enumerate(pieces):
             last = index == len(pieces) - 1
@@ -432,7 +437,9 @@ class TelegramChannel:
             with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
                 await self.api.answer_callback(callback_id)
             return
-        answer = ingress.commands.decide(parts[2] == "y", [parts[1]], self.name)
+        answer = ingress.commands.decide(
+            parts[2] == "y", [parts[1]], self.name, ingress.session_key
+        )
         with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
             await self.api.answer_callback(callback_id, answer.splitlines()[0] if answer else "")
         message = callback.get("message") or {}

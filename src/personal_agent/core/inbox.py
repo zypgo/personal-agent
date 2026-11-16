@@ -6,16 +6,24 @@ Guarantees:
 - **One run per session at a time**: a session with an unexpired lease is never claimed again,
   and a session's events are claimed in order (an earlier event waiting out a retry backoff
   holds back the later ones).
+- **One trust level per batch**: events of one session are batched only while they come from the
+  same kind of source, so text from outside never rides along in the run of the owner's message
+  (and the owner's message is not held to the untrusted profile because of it).
 - **Crash recovery**: a worker that dies leaves an expiring lease; the events become claimable
   again (at once, if the process that restarts holds the engine lock: see `release_leases`).
   Every claim counts as an attempt, so an event that crashes workers repeatedly becomes `dead`
   instead of looping forever (poison pill). Environmental failures (network, rate limit) do not
   count against the event.
+- **A live run keeps its lease**: leases are timed by the wall clock, which jumps when a laptop
+  sleeps. A lease whose holder is a worker of this process that is still running (`holding`) is
+  never taken over, so the same message cannot run twice at once.
 """
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
+from collections.abc import Iterator
 from typing import Any
 
 from personal_agent.clock import Clock, SystemClock
@@ -60,6 +68,25 @@ class Inbox:
         self.max_attempts = max_attempts
         self.max_age_s = max_age_s
         self._dead: list[Event] = []
+        self._held: set[str] = set()
+
+    @contextlib.contextmanager
+    def holding(self, batch: Batch) -> Iterator[None]:
+        """Keep every other worker off `batch` for as long as its run is alive in this process.
+
+        A lease that ran out normally means the worker died. But the clock it runs on also jumps
+        when a laptop sleeps, and a run that is only waiting for a slow tool would look dead and
+        be started a second time (a charge made twice). Leases of a process that is gone are held
+        by nobody here, so they still expire.
+        """
+        self._held.add(batch.owner)
+        try:
+            yield
+        finally:
+            self._held.discard(batch.owner)
+
+    def _held_json(self) -> str:
+        return dumps(sorted(self._held))
 
     # ---- producers --------------------------------------------------------------------
     def add(self, event: NewEvent) -> AddResult:
@@ -89,12 +116,13 @@ class Inbox:
             return AddResult(id=int(row["id"]), duplicate=True)
 
     # ---- consumers --------------------------------------------------------------------
-    @staticmethod
-    def _claimable(row: sqlite3.Row, now: float) -> bool:
+    def _claimable(self, row: sqlite3.Row, now: float) -> bool:
         if row["status"] == "pending":
             return bool(row["available_at"] <= now)
         if row["status"] == "leased":
-            return bool((row["lease_expires_at"] or 0) <= now)
+            return (
+                bool((row["lease_expires_at"] or 0) <= now) and row["lease_owner"] not in self._held
+            )
         return False
 
     def has_ready(self, session_key: str | None = None) -> bool:
@@ -102,11 +130,12 @@ class Inbox:
         do not take the database write lock every second)."""
         now = self.clock.now()
         row = self.db.one(
-            """SELECT 1 FROM events
-               WHERE ((status = 'pending' AND available_at <= :now)
-                      OR (status = 'leased' AND lease_expires_at <= :now))
-                 AND (:session IS NULL OR session_key = :session) LIMIT 1""",
-            {"now": now, "session": session_key},
+            """SELECT 1 FROM events e
+               WHERE ((e.status = 'pending' AND e.available_at <= :now)
+                      OR (e.status = 'leased' AND e.lease_expires_at <= :now
+                          AND COALESCE(e.lease_owner, '') NOT IN (SELECT value FROM json_each(:held))))
+                 AND (:session IS NULL OR e.session_key = :session) LIMIT 1""",
+            {"now": now, "session": session_key, "held": self._held_json()},
         )
         return row is not None
 
@@ -130,7 +159,8 @@ class Inbox:
         max_batch: int = 20,
         lease_s: float | None = None,
     ) -> Batch | None:
-        """Claim the next ready batch (all ready events of one session), or None."""
+        """Claim the next ready batch, or None: the ready events of one session, in order, up to the
+        first one that comes from a different kind of source (see "One trust level per batch")."""
         now = self.clock.now()
         lease = self.lease_s if lease_s is None else lease_s
         with self.db.tx():
@@ -139,16 +169,19 @@ class Inbox:
                 """
                 SELECT e.session_key FROM events e
                 WHERE ((e.status = 'pending' AND e.available_at <= :now)
-                       OR (e.status = 'leased' AND e.lease_expires_at <= :now))
+                       OR (e.status = 'leased' AND e.lease_expires_at <= :now
+                           AND COALESCE(e.lease_owner, '') NOT IN (SELECT value FROM json_each(:held))))
                   AND (:session IS NULL OR e.session_key = :session)
                   AND NOT EXISTS (
                       SELECT 1 FROM events o
                       WHERE o.session_key = e.session_key
-                        AND ((o.status = 'leased' AND o.lease_expires_at > :now)
+                        AND ((o.status = 'leased'
+                              AND (o.lease_expires_at > :now
+                                   OR COALESCE(o.lease_owner, '') IN (SELECT value FROM json_each(:held))))
                              OR (o.status = 'pending' AND o.available_at > :now AND o.id < e.id)))
                 ORDER BY e.id LIMIT 1
                 """,
-                {"now": now, "session": session_key},
+                {"now": now, "session": session_key, "held": self._held_json()},
             )
             if first is None:
                 return None
@@ -161,6 +194,8 @@ class Inbox:
             for row in rows:
                 if not self._claimable(row, now):
                     break  # keep per-session order: do not skip over a waiting event
+                if taken and row["trust"] != taken[0]["trust"]:
+                    break  # the next batch: outside text does not ride along with the owner's
                 taken.append(row)
                 if len(taken) >= max_batch:
                     break
@@ -194,6 +229,8 @@ class Inbox:
             {"now": now, "max_attempts": self.max_attempts, "oldest": now - self.max_age_s},
         )
         for row in stale:
+            if row["status"] == "leased" and row["lease_owner"] in self._held:
+                continue  # its run is alive here: a long sleep did not kill it
             reason = (
                 "exceeded max attempts"
                 if row["attempts"] >= self.max_attempts

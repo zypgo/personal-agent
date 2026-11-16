@@ -97,6 +97,35 @@ class Paths:
             except OSError:
                 pass
 
+    @property
+    def private_files(self) -> list[Path]:
+        """What holds the owner's secrets and conversations: the key file, and the database with
+        the write-ahead log SQLite keeps beside it."""
+        beside = [self.db_file.with_name(self.db_file.name + suffix) for suffix in ("-wal", "-shm")]
+        return [self.env_file, self.db_file, *beside]
+
+    def exposed_files(self) -> list[Path]:
+        """The private files that other users can read."""
+        found = []
+        for path in self.private_files:
+            try:
+                if stat.S_IMODE(path.stat().st_mode) & 0o077:
+                    found.append(path)
+            except OSError:
+                continue  # not there (yet)
+        return found
+
+    def tighten(self) -> list[Path]:
+        """Make the private files readable by their owner only. Returns the ones that were not."""
+        changed = []
+        for path in self.exposed_files():
+            try:
+                path.chmod(0o600)
+            except OSError:
+                continue
+            changed.append(path)
+        return changed
+
     def env_file_warnings(self) -> list[str]:
         """Human-readable problems with the `.env` file permissions (empty if fine)."""
         if not self.env_file.exists():

@@ -17,7 +17,6 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, NoReturn
 
 import typer
-from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
@@ -25,6 +24,7 @@ from personal_agent.config import ConfigError, load_env
 from personal_agent.db import DatabaseTooNew
 from personal_agent.logs import setup_logging
 from personal_agent.paths import Paths
+from personal_agent.terminal import SafeConsole
 
 if TYPE_CHECKING:
     from personal_agent.app import App
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 FAILED = 1
 USAGE = 2
 
-console = Console()
+console = SafeConsole()
 
 
 def say(text: str = "") -> None:

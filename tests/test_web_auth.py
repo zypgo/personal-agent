@@ -209,9 +209,9 @@ def test_old_dead_rows_are_forgotten(auth, clock, db):
     found = paired(auth)
     auth.revoke(found.session.id)
     clock.advance(KEEP_DEAD_S + 1)
-    auth.purge()
+    auth.invite()  # making a link tidies up what has been dead for a while
     assert db.scalar("SELECT COUNT(*) FROM web_sessions") == 0
-    assert db.scalar("SELECT COUNT(*) FROM web_invites") == 0
+    assert db.scalar("SELECT COUNT(*) FROM web_invites") == 1  # only the new one
 
 
 # ---- what a browser says about itself -----------------------------------------------------------

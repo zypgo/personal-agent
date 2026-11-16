@@ -6,16 +6,19 @@ sandboxed shell may write, so what the shell produced can be read back here. Pat
 also allowed inside the skills directory, which holds instructions and scripts the owner installed.
 
 These tools run in our own process, not in the sandbox. That is why they are strict: no `~`, no
-paths outside the roots, no binary files, size limits, writes by replacing a file atomically (a
-symlink swapped in at the last moment is replaced, not followed).
+paths outside the roots, no binary files, size limits, and no way past a check by changing the
+folder afterwards: a file is reached one folder at a time without following links (`safefs`), only
+ordinary files are opened, and writes replace the file atomically (a link swapped in at the last
+moment is replaced, not followed). Each call runs in a thread, so a slow disk never holds up the
+agent's other work.
 """
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import itertools
 import os
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,6 +26,8 @@ from typing import TYPE_CHECKING, Any
 from agents import RunContextWrapper, function_tool
 
 from personal_agent.harness.runctx import RunContext
+from personal_agent.security.sanitize import clipped
+from personal_agent.tools import safefs
 from personal_agent.tools.base import FULL, SCHEDULED, Category, ToolDef, ToolRegistry
 
 if TYPE_CHECKING:
@@ -33,6 +38,8 @@ READ_DEFAULT_LINES = 500
 READ_SCAN_MAX_BYTES = 50_000_000
 """Files bigger than this are not read at all: paging through them would stall the agent."""
 DIFF_MAX_LINES = 30
+REVIEW_CONTENT_CHARS = 500
+"""How much of what a write puts into a file the owner is shown to approve it."""
 
 LIST_DESCRIPTION = """\
 List files and directories in your workspace (or in an installed skill's folder).
@@ -108,6 +115,38 @@ def _human(size: int) -> str:
     return f"{size} B"
 
 
+def _anchor(app: App, path: Path) -> tuple[Path, tuple[str, ...]]:
+    """The root a resolved path lies in and the names below it: what `safefs` needs to reach the
+    file one folder at a time, without following a link that appears after the check."""
+    for root in _roots(app):
+        if _inside(path, root):
+            return root, path.relative_to(root).parts
+    raise FileProblem(f"{path} is outside the workspace and the skills folder.")
+
+
+def _changed(path: str) -> FileProblem:
+    return FileProblem(
+        f"{path} changed while it was being opened (a link appeared there); try again."
+    )
+
+
+def _open_file(app: App, path: Path, *, missing: str) -> tuple[int, os.stat_result]:
+    """An open descriptor for the ordinary file at `path`, or the FileProblem that says why not.
+    `missing` is the message for a file that is not there (`{path}` stands for its name)."""
+    root, names = _anchor(app, path)
+    shown = _show(app, path)
+    try:
+        return safefs.open_regular(root, names)
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise FileProblem(missing.format(path=shown)) from exc
+    except IsADirectoryError as exc:
+        raise FileProblem(f"{shown} is a folder; use list_files.") from exc
+    except safefs.NotRegular as exc:
+        raise FileProblem(f"{shown} is not an ordinary file (a pipe or a device).") from exc
+    except safefs.Changed as exc:
+        raise _changed(shown) from exc
+
+
 # ---- list ------------------------------------------------------------------------------------------
 def _list(app: App, path: Path, depth: int) -> str:
     if not path.exists():
@@ -154,16 +193,8 @@ def _list(app: App, path: Path, depth: int) -> str:
 
 # ---- read ------------------------------------------------------------------------------------------
 def _read(app: App, path: Path, start_line: int, num_lines: int) -> str:
-    if not path.exists():
-        raise FileProblem(f"{_show(app, path)} does not exist.")
-    if path.is_dir():
-        raise FileProblem(f"{_show(app, path)} is a folder; use list_files.")
-    size = path.stat().st_size
-    if size > READ_SCAN_MAX_BYTES:
-        raise FileProblem(f"{_show(app, path)} is {_human(size)}, too large to read here.")
-    with path.open("rb") as handle:
-        if b"\0" in handle.read(8192):
-            raise FileProblem(f"{_show(app, path)} looks like a binary file ({_human(size)}).")
+    shown = _show(app, path)
+    fd, info = _open_file(app, path, missing="{path} does not exist.")
     start = max(1, start_line)
     count = max(1, min(num_lines, 5000))
     budget = max(200, app.config.runtime.tool_output_chars - 600)  # room for the footer
@@ -172,7 +203,11 @@ def _read(app: App, path: Path, start_line: int, num_lines: int) -> str:
     total = 0
     last = start - 1
     cut_by_size = False
-    with path.open("r", encoding="utf-8", errors="replace", newline=None) as handle:
+    with os.fdopen(fd, "r", encoding="utf-8", errors="replace", newline=None) as handle:
+        if info.st_size > READ_SCAN_MAX_BYTES:
+            raise FileProblem(f"{shown} is {_human(info.st_size)}, too large to read here.")
+        if b"\0" in os.pread(handle.fileno(), 8192, 0):
+            raise FileProblem(f"{shown} looks like a binary file ({_human(info.st_size)}).")
         for number, line in enumerate(handle, start=1):
             total = number
             if number < start or number >= start + count or cut_by_size:
@@ -187,9 +222,9 @@ def _read(app: App, path: Path, start_line: int, num_lines: int) -> str:
             used += len(line)
             last = number
     if total == 0:
-        return f"{_show(app, path)} is empty."
+        return f"{shown} is empty."
     if start > total:
-        raise FileProblem(f"{_show(app, path)} has only {total} lines.")
+        raise FileProblem(f"{shown} has only {total} lines.")
     text = "".join(out)
     if text and not text.endswith("\n"):
         text += "\n"
@@ -199,18 +234,17 @@ def _read(app: App, path: Path, start_line: int, num_lines: int) -> str:
 
 
 # ---- write and edit --------------------------------------------------------------------------------
-def _write_atomic(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+def _write_atomic(app: App, path: Path, data: bytes) -> None:
+    """Replace the file at `path` with `data` in one step, making its folders if need be."""
+    root, names = _anchor(app, path)
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-        mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
-        os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+        safefs.replace(root, names, data)
+    except IsADirectoryError as exc:
+        raise FileProblem(f"{_show(app, path)} is a folder.") from exc
+    except safefs.Changed as exc:
+        raise _changed(_show(app, path)) from exc
+    except NotADirectoryError as exc:
+        raise FileProblem(f"a part of {_show(app, path)} is a file, not a folder.") from exc
 
 
 def _write(app: App, path: Path, content: str) -> str:
@@ -221,26 +255,31 @@ def _write(app: App, path: Path, content: str) -> str:
     if path.is_dir():
         raise FileProblem(f"{_show(app, path)} is a folder.")
     existed = path.exists()
-    _write_atomic(path, data)
+    _write_atomic(app, path, data)
     verb = "Replaced" if existed else "Created"
     lines = content.count("\n") + (0 if content.endswith("\n") or not content else 1)
     return f"{verb} {_show(app, path)} ({len(data)} bytes, {lines} lines)."
 
 
 def _edit(app: App, path: Path, old: str, new: str, replace_all: bool) -> str:
-    if not path.is_file():
-        raise FileProblem(f"{_show(app, path)} does not exist; use write_file to create it.")
-    if not old:
-        raise FileProblem("old_text is empty; to create or replace a whole file use write_file.")
-    if old == new:
-        raise FileProblem("old_text and new_text are identical; nothing to change.")
-    try:
-        with path.open(
-            "r", encoding="utf-8", newline=""
-        ) as handle:  # keep line endings as they are
+    fd, info = _open_file(app, path, missing="{path} does not exist; use write_file to create it.")
+    with os.fdopen(
+        fd, "r", encoding="utf-8", newline=""
+    ) as handle:  # keep line endings as they are
+        if not old:
+            raise FileProblem(
+                "old_text is empty; to create or replace a whole file use write_file."
+            )
+        if old == new:
+            raise FileProblem("old_text and new_text are identical; nothing to change.")
+        if info.st_size > READ_SCAN_MAX_BYTES:
+            raise FileProblem(
+                f"{_show(app, path)} is {_human(info.st_size)}, too large to edit here."
+            )
+        try:
             before = handle.read()
-    except UnicodeDecodeError as exc:
-        raise FileProblem(f"{_show(app, path)} is not valid UTF-8 text.") from exc
+        except UnicodeDecodeError as exc:
+            raise FileProblem(f"{_show(app, path)} is not valid UTF-8 text.") from exc
     if "\r\n" in before and "\r\n" not in old:  # read_file shows Windows line endings as \n
         old, new = old.replace("\n", "\r\n"), new.replace("\n", "\r\n")
     count = before.count(old)
@@ -258,7 +297,7 @@ def _edit(app: App, path: Path, old: str, new: str, replace_all: bool) -> str:
     limit = app.config.tools.file_max_bytes
     if len(after.encode("utf-8")) > limit:
         raise FileProblem(f"the result would be over the {limit} byte limit.")
-    _write_atomic(path, after.encode("utf-8"))
+    _write_atomic(app, path, after.encode("utf-8"))
     diff = list(
         itertools.islice(
             difflib.unified_diff(
@@ -275,13 +314,31 @@ def _edit(app: App, path: Path, old: str, new: str, replace_all: bool) -> str:
 
 
 # ---- tools -----------------------------------------------------------------------------------------
+# Every tool does its file work in a thread (`asyncio.to_thread`): a slow disk or a huge folder must
+# not stop the agent's other runs, which share this event loop.
+def _list_request(app: App, path: str, depth: int) -> str:
+    return _list(app, resolve_path(app, path, write=False), depth)
+
+
+def _read_request(app: App, path: str, start_line: int, num_lines: int) -> str:
+    return _read(app, resolve_path(app, path, write=False), start_line, num_lines)
+
+
+def _write_request(app: App, path: str, content: str) -> str:
+    return _write(app, resolve_path(app, path, write=True), content)
+
+
+def _edit_request(app: App, path: str, old: str, new: str, replace_all: bool) -> str:
+    return _edit(app, resolve_path(app, path, write=True), old, new, replace_all)
+
+
 @function_tool(name_override="list_files", description_override=LIST_DESCRIPTION)
 async def list_files_tool(
     ctx: RunContextWrapper[RunContext], path: str = ".", depth: int = 1
 ) -> str:
     app = ctx.context.app
     try:
-        return _list(app, resolve_path(app, path, write=False), max(1, min(depth, 4)))
+        return await asyncio.to_thread(_list_request, app, path, max(1, min(depth, 4)))
     except FileProblem as exc:
         return f"Error: {exc}"
 
@@ -295,7 +352,7 @@ async def read_file_tool(
 ) -> str:
     app = ctx.context.app
     try:
-        return _read(app, resolve_path(app, path, write=False), start_line, num_lines)
+        return await asyncio.to_thread(_read_request, app, path, start_line, num_lines)
     except FileProblem as exc:
         return f"Error: {exc}"
     except OSError as exc:
@@ -306,7 +363,7 @@ async def read_file_tool(
 async def write_file_tool(ctx: RunContextWrapper[RunContext], path: str, content: str) -> str:
     app = ctx.context.app
     try:
-        return _write(app, resolve_path(app, path, write=True), content)
+        return await asyncio.to_thread(_write_request, app, path, content)
     except FileProblem as exc:
         return f"Error: {exc}"
     except OSError as exc:
@@ -323,7 +380,7 @@ async def edit_file_tool(
 ) -> str:
     app = ctx.context.app
     try:
-        return _edit(app, resolve_path(app, path, write=True), old_text, new_text, replace_all)
+        return await asyncio.to_thread(_edit_request, app, path, old_text, new_text, replace_all)
     except FileProblem as exc:
         return f"Error: {exc}"
     except OSError as exc:
@@ -345,14 +402,31 @@ def _path_detail(args: dict[str, Any]) -> str:
     return str(args.get("path", ""))
 
 
+def _review_write(args: dict[str, Any]) -> str:
+    """The path and what goes into it: a write the owner approves should be the write they read."""
+    content = str(args.get("content", ""))
+    shown = clipped(content, REVIEW_CONTENT_CHARS)
+    return f"{_path_detail(args)} | {len(content)} characters: {shown}"
+
+
+def _review_edit(args: dict[str, Any]) -> str:
+    old, new = str(args.get("old_text", "")), str(args.get("new_text", ""))
+    every = " (every occurrence)" if args.get("replace_all") else ""
+    return (
+        f"{_path_detail(args)} | replace{every} ({len(old)} characters): "
+        f"{clipped(old, REVIEW_CONTENT_CHARS // 2)} | with ({len(new)} characters): "
+        f"{clipped(new, REVIEW_CONTENT_CHARS // 2)}"
+    )
+
+
 def register_files(registry: ToolRegistry) -> None:
     # Not offered to untrusted runs (woken by content nobody vetted) or to memory maintenance.
     profiles = frozenset({FULL, SCHEDULED})
-    for name, category, tool, write in (
-        ("list_files", Category.READ, list_files_tool, False),
-        ("read_file", Category.READ, read_file_tool, False),
-        ("write_file", Category.WRITE, write_file_tool, True),
-        ("edit_file", Category.WRITE, edit_file_tool, True),
+    for name, category, tool, write, review in (
+        ("list_files", Category.READ, list_files_tool, False, None),
+        ("read_file", Category.READ, read_file_tool, False, None),
+        ("write_file", Category.WRITE, write_file_tool, True, _review_write),
+        ("edit_file", Category.WRITE, edit_file_tool, True, _review_edit),
     ):
         registry.register(
             ToolDef(
@@ -361,6 +435,7 @@ def register_files(registry: ToolRegistry) -> None:
                 tool=tool,
                 profiles=profiles,
                 detail=_path_detail,
+                review=review,
                 validate=_path_check(write),
             )
         )

@@ -106,3 +106,12 @@ def test_a_long_unbroken_piece_of_what_was_typed_is_hidden_even_if_it_has_no_kno
 def test_a_sentence_is_not_a_credential_however_long():
     sentence = "hello world, this is a long sentence"
     assert hide_credentials(f"got {sentence!r}", sentence) == f"got {sentence!r}"
+
+
+def test_a_credential_at_the_bottom_of_a_very_deep_document_is_still_found():
+    """A file of nothing but brackets must be refused in words, not with a RecursionError (the
+    walk over what was typed is a loop, so no depth can overflow it)."""
+    deep: object = BLOB
+    for _ in range(50_000):
+        deep = {"inside": [deep]}
+    assert hide_credentials(f"got {BLOB}!", deep) == f"got {HIDDEN}!"

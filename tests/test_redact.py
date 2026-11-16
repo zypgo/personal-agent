@@ -1,5 +1,6 @@
 import pytest
 
+from personal_agent.security import redact as redact_module
 from personal_agent.security.redact import (
     find_secrets,
     injection_hints,
@@ -60,6 +61,17 @@ def test_known_secret_values_by_env_name():
     assert values == sorted(
         values, key=len, reverse=True
     )  # longest first, so overlaps redact fully
+
+
+def test_a_variable_the_owner_declared_secret_is_cut_out_however_short(monkeypatch):
+    """A PIN is four digits. Only a guess from a name needs a longer value: `KEYBOARD=us` is not a
+    secret, and `us` would be cut out of every sentence."""
+    monkeypatch.setattr(redact_module, "_EXTRA_SECRET_ENV", {"DOOR_PIN"})  # it is process-wide
+    env = {"DOOR_PIN": "4821", "KEYBOARD_LAYOUT": "us", "WIFI_PIN": "9913", "TOO_SHORT": "ab"}
+    assert known_secret_values(env) == ["4821"]  # WIFI_PIN is not declared, nor does it look secret
+    assert redact("the code is 4821.", known_secret_values(env)) == "the code is [REDACTED]."
+    monkeypatch.setattr(redact_module, "_EXTRA_SECRET_ENV", {"DOOR_PIN", "TOO_SHORT"})
+    assert known_secret_values(env) == ["4821"]  # but not so short that it would wreck every text
 
 
 @pytest.mark.parametrize(

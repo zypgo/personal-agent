@@ -57,13 +57,16 @@ class Event:
 
 @dataclass
 class Batch:
-    """Events of one session claimed together under a lease."""
+    """Events of one session claimed together under a lease, all of one trust level."""
 
     session_key: str
     owner: str
     events: list[Event]
     lease_expires_at: float
     ids: list[int] = field(init=False)
+    lost: bool = field(default=False, init=False)
+    """Set by the worker when the lease was lost while the run was going: the events are
+    somebody else's now, and this batch must not be settled."""
 
     def __post_init__(self) -> None:
         self.ids = [e.id for e in self.events]

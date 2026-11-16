@@ -6,12 +6,18 @@ touching the network is simply never given a network tool.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
 from agents import FunctionTool
+
+from personal_agent.security.sanitize import clipped, strip_invisible
+
+DETAIL_CHARS = 400
+"""The most of a call's `detail` that rules and the audit log see. A tool whose detail can be
+longer says so itself (`...[+N more characters]`), and `detail_of` does it for the rest."""
 
 
 class Category(StrEnum):
@@ -46,6 +52,15 @@ class ToolDef:
     source: str = "builtin"
     detail: Callable[[dict[str, Any]], str] | None = None
     """Short summary of one call for `tool:detail` rules and the audit log (a command, a host)."""
+    review: Callable[[dict[str, Any]], str] | None = None
+    """What the owner reads when asked to approve a call: everything the call would send, write or
+    run, not only its `detail`. A tool whose approval hangs on something its short detail leaves
+    out (the body of a request, the content of a file, the prompt of a recurring job) says it here;
+    without one the owner is shown the detail."""
+    views: Callable[[dict[str, Any]], Sequence[str]] | None = None
+    """Further texts that `deny` and `always_ask` rules are tried on, besides the detail: for a
+    shell line, each command inside it. A rule written for `rm -rf *` then also catches
+    `cd build && rm -rf .`, which the detail alone (one text for the whole line) would not."""
     category_for: Callable[[Any, dict[str, Any]], Category] | None = None
     """Called with (run context, arguments): lets one tool change category by what it is asked to
     do (a reminder is lighter than a recurring job) or by what the run has already seen."""
@@ -110,12 +125,32 @@ class ToolDef:
         return seconds if seconds > 0 else None
 
     def detail_of(self, args: dict[str, Any]) -> str:
+        """The short summary for rules and the audit log: invisible characters removed, and cut
+        with a note when it is long."""
         if self.detail is None:
             return ""
         try:
-            return str(self.detail(args))[:300]
+            return clipped(strip_invisible(str(self.detail(args)), formatting=True), DETAIL_CHARS)
         except Exception:
             return ""
+
+    def review_of(self, args: dict[str, Any]) -> str:
+        """What the owner is shown to approve this call (see `review`), or "" for the detail."""
+        if self.review is None:
+            return ""
+        try:
+            return strip_invisible(str(self.review(args)), formatting=True)
+        except Exception:
+            return ""
+
+    def views_of(self, args: dict[str, Any]) -> tuple[str, ...]:
+        """The further texts a `deny` or `always_ask` rule is tried on (see `views`)."""
+        if self.views is None:
+            return ()
+        try:
+            return tuple(strip_invisible(str(v), formatting=True) for v in self.views(args))
+        except Exception:
+            return ()
 
 
 @dataclass

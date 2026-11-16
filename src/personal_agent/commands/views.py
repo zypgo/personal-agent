@@ -12,6 +12,7 @@ from rich.markup import escape
 
 from personal_agent.clock import format_local
 from personal_agent.commands.common import ago, console, say, span, table
+from personal_agent.core.approvals import plain
 from personal_agent.presence import daemon_state
 
 if TYPE_CHECKING:
@@ -102,7 +103,7 @@ def show_approvals(app: App, *, include_decided: bool) -> None:
             f"#{item.id}",
             item.status,
             item.tool,
-            escape(item.summary[:80]),
+            escape(plain(item.summary)),
             item.session_key,
             ago(item.created_at, now),
             f"in {span(item.expires_at - now)}" if item.status == "pending" else "-",

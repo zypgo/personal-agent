@@ -276,11 +276,9 @@ class WebAuth:
         return cur.rowcount
 
     # ---- housekeeping -----------------------------------------------------------------
-    def purge(self) -> None:
-        with self.db.tx():
-            self._purge(self.clock.now())
-
     def _purge(self, now: float) -> None:
+        """Forget what has been dead for a while. Done whenever a link is made (the daily upkeep,
+        maintenance.py, does the same by the owner's retention settings)."""
         old = now - KEEP_DEAD_S
         self.db.execute(
             "DELETE FROM web_invites WHERE expires_at < ? OR (used_at IS NOT NULL AND used_at < ?)",

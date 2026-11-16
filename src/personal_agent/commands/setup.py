@@ -34,15 +34,19 @@ def init() -> None:
         paths.config_file.write_text(DEFAULT_CONFIG_TOML, encoding="utf-8")
         created.append(str(paths.config_file))
     if not paths.env_file.exists():
-        paths.env_file.write_text(DEFAULT_ENV, encoding="utf-8")
-        paths.env_file.chmod(0o600)
+        fd = os.open(paths.env_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:  # private before the first byte
+            handle.write(DEFAULT_ENV)
         created.append(str(paths.env_file))
     with opened():  # creates the database and the memory templates, and loads .env
         pass
+    tightened = paths.tighten()  # files from an earlier version, or made under another umask
     starter = install_bundled(paths)
     say(f"[green]Ready.[/green] Home: {escape(str(paths.home))}")
     for item in created:
         say(f"  created {escape(item)}")
+    for path in tightened:
+        say(f"  made {escape(path.name)} private: other users could read it")
     if starter:
         say(f"  added starter skills: {', '.join(starter)} (see `pa skills`)")
     if not os.environ.get("OPENAI_API_KEY"):

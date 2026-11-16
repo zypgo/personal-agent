@@ -112,6 +112,18 @@ class Site:
                 elif path == "/slow":
                     time.sleep(2)
                     self._answer(200, b"late", "text/plain")
+                elif path == "/trickle":  # a body that never stalls long enough to time out
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", "100000")
+                    self.end_headers()
+                    try:
+                        for _ in range(100_000):
+                            self.wfile.write(b"x")
+                            self.wfile.flush()
+                            time.sleep(0.05)
+                    except OSError:  # the client gave up, as it should
+                        pass
                 elif path == "/echo":
                     self._answer(
                         200,

@@ -21,13 +21,14 @@ from typing import TYPE_CHECKING, Any
 from agents import FunctionTool, RunContextWrapper
 from agents.tool_context import ToolContext
 
+from personal_agent.core.budget import BudgetExceeded
 from personal_agent.core.sessions import INTERRUPTED_RESULT
 from personal_agent.harness.runctx import RunContext
 from personal_agent.parsing import loads_json
 from personal_agent.security.audit import safe_args
 from personal_agent.security.policy import Decision, ToolCall, Verdict
 from personal_agent.security.redact import known_secret_values, redact
-from personal_agent.security.sanitize import scrub_surrogates
+from personal_agent.security.sanitize import clipped, one_line, scrub_surrogates, strip_invisible
 from personal_agent.tools.base import ToolDef
 
 if TYPE_CHECKING:
@@ -39,7 +40,8 @@ DENIED_TEXT = (
     "Denied: {reason}. Do not try to work around this. Tell the owner what you could not do."
 )
 NOT_APPROVED_TEXT = "Denied: this action needs the owner's approval, which has not been given."
-SUMMARY_CHARS = 300
+SUMMARY_CHARS = 1200
+"""The most of one request the owner is shown. A call that is longer says so, in its last words."""
 
 
 def parse_args(raw: Any) -> dict[str, Any]:
@@ -53,10 +55,18 @@ def parse_args(raw: Any) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def summarize(tool: ToolDef, args: dict[str, Any]) -> str:
-    """One line the owner reads when asked to approve a call."""
-    text = tool.detail_of(args) or safe_args(args)
-    return redact(text, known_secret_values(os.environ))[:SUMMARY_CHARS]
+def summarize(tool: ToolDef | None, args: dict[str, Any]) -> str:
+    """What the owner reads when asked to approve a call: one line, and what they would approve.
+
+    Approval is only worth something if the person sees what the call will do, so this is the one
+    place the text is made, and it is made to be read, not to be obeyed: characters that hide or
+    reorder text (a right-to-left override shows the end of a command before its start) and
+    terminal control codes are removed, secrets are masked, a line break becomes a visible mark
+    (so the text cannot start a line that looks like another request), and a call that is too long
+    says how much is not shown."""
+    text = (tool.review_of(args) or tool.detail_of(args) if tool else "") or safe_args(args)
+    text = redact(strip_invisible(text, formatting=True), known_secret_values(os.environ))
+    return clipped(one_line(text), SUMMARY_CHARS)
 
 
 class ToolGuard:
@@ -96,6 +106,7 @@ class ToolGuard:
             tool=tool.name,
             category=tool.category_of(rc, args),
             detail=tool.detail_of(args),
+            views=tool.views_of(args),
             profile=rc.profile,
             tainted=rc.tainted,
             allowed_profiles=tool.profiles,
@@ -145,6 +156,10 @@ class ToolGuard:
 
     async def _review(self, call: ToolCall, args: dict[str, Any], rc: RunContext) -> Decision:
         app = self.app
+        try:  # the reviewer is a model call like any other, and costs like one
+            app.budget.check_run(rc.run_id, rc.cost_cap_usd)
+        except BudgetExceeded:
+            return Decision(Verdict.ASK, "guardian", "the budget is used up, so the owner decides")
         review = await app.guardian.review(call, safe_args(args), owner_request=rc.owner_request)
         if review.cost_usd:
             app.runs.add_usage(

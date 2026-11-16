@@ -40,7 +40,7 @@ def rig(make_app):
 def queue(app, text="hello", **kw):
     kw.setdefault("channel", "telegram")
     kw.setdefault("recipient", "7")
-    message_id = app.outbox.enqueue(session_key="main", text=text, **kw)
+    message_id = app.outbox.enqueue(session_key=kw.pop("session", "main"), text=text, **kw)
     return app.outbox.get(message_id)
 
 
@@ -214,6 +214,25 @@ def test_several_requests_get_buttons_each_and_one_for_all():
     rows = approval_markup([3, 4])["inline_keyboard"]
     data = [[b["callback_data"] for b in row] for row in rows]
     assert data == [["ap:3:y", "ap:3:n"], ["ap:4:y", "ap:4:n"], ["ap:all:y", "ap:all:n"]]
+
+
+def test_there_is_no_all_button_where_all_would_not_cover_the_requests():
+    """`all` is what waits in the owner's own conversation: not a timer's or a webhook's."""
+    rows = approval_markup([3, 4], all_button=False)["inline_keyboard"]
+    assert [[b["callback_data"] for b in row] for row in rows] == [
+        ["ap:3:y", "ap:3:n"],
+        ["ap:4:y", "ap:4:n"],
+    ]
+
+
+async def test_a_requests_of_a_timer_run_get_no_all_button(rig):
+    app, channel, fake, _ = rig
+    message = queue(
+        app, "two", kind="approval_request", extra={"approval_ids": [3, 4]}, session="timer:brief"
+    )
+    await channel.send(message)
+    keyboard = fake.sent()[-1]["reply_markup"]["inline_keyboard"]
+    assert "ap:all:y" not in [b["callback_data"] for row in keyboard for b in row]
 
 
 def test_a_single_request_has_no_all_button_and_a_flood_is_capped():

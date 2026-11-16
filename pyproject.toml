@@ -59,6 +59,13 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/personal_agent"]
 
+[tool.hatch.build.targets.sdist]
+# A list of what belongs to the project, not of what does not. `references/` holds clones of
+# other people's projects (see its README): study material, whose `.env.example` files used to
+# end up in the archive because `.gitignore` re-includes that name and hatch lets it win over an
+# `exclude`.
+include = ["/src", "/tests", "/docs", "/scripts", "/README.md", "/uv.lock", "/.env.example"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

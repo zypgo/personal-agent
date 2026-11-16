@@ -131,6 +131,19 @@ def _kill_group(proc: asyncio.subprocess.Process) -> None:
         proc.kill()
 
 
+async def _exited(proc: asyncio.subprocess.Process) -> None:
+    """Return once the process itself has ended, whether or not its output pipes are still open.
+
+    `proc.wait()` is not that before Python 3.12: it also waits for the pipes to close, so a
+    command that leaves a background job behind (`(sleep 60 &); echo started`) would be waited
+    for until the timeout. The exit status is known as soon as the child is reaped, so ask for it.
+    """
+    pause = 0.001
+    while proc.returncode is None:
+        await asyncio.sleep(pause)
+        pause = min(pause * 2, 0.05)
+
+
 async def run_process(
     argv: list[str],
     *,
@@ -161,13 +174,13 @@ async def run_process(
     ]
     timed_out = False
     try:
-        await asyncio.wait_for(proc.wait(), timeout_s)
+        await asyncio.wait_for(_exited(proc), timeout_s)
     except TimeoutError:
         timed_out = True
         if on_timeout is not None:
             await on_timeout()
         _kill_group(proc)
-        await proc.wait()
+        await _exited(proc)
     except BaseException:
         _kill_group(proc)
         for reader in readers:

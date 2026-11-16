@@ -285,6 +285,17 @@ class SandboxConfig(_Section):
     extra_write: list[str] = []
     """Extra directories commands may write. Think twice before adding anything here."""
 
+    @model_validator(mode="after")
+    def _no_sandbox_must_be_acknowledged(self) -> SandboxConfig:
+        """Said at once, where the setting is: left to the choice of a sandbox it would only show
+        as a shell tool that is never offered, with nothing pointing at the setting."""
+        if self.backend == "none" and not self.i_understand_no_sandbox:
+            raise ValueError(
+                'sandbox.backend = "none" runs every command as you, with all your files and '
+                "network; set sandbox.i_understand_no_sandbox = true to confirm"
+            )
+        return self
+
 
 class NetConfig(_Section):
     allow_private: list[str] = []
@@ -292,6 +303,10 @@ class NetConfig(_Section):
     (for example "homeassistant.local" or "192.168.1.0/24"). Everything private is blocked by
     default; cloud metadata addresses stay blocked even if listed here."""
     timeout_s: float = Field(20.0, gt=0)
+    """The longest any one wait may take: connecting, or the next piece of the answer."""
+    deadline_s: float = Field(60.0, gt=0)
+    """The longest a whole request may take, redirects and download included. `timeout_s` alone
+    cannot stop a server that sends one byte every few seconds."""
     max_response_bytes: int = Field(2_000_000, ge=10_000)
     max_redirects: int = Field(5, ge=0, le=10)
     user_agent: str = "personal-agent/0.1"
@@ -875,7 +890,7 @@ min_interval_s = 300             # shortest allowed gap between firings of a rec
 max_timers = 50
 
 [sandbox]
-backend = "auto"                 # auto | seatbelt | docker | none  (shell is off if none works)
+backend = "auto"                 # auto | seatbelt | docker | none  (none also needs i_understand_no_sandbox = true; the shell is off if nothing works)
 # image = "python:3.13-slim"     # docker backend: `docker pull` it yourself
 # extra_read = ["~/.local/share/uv"]   # more directories commands may read (never write)
 
@@ -944,7 +959,8 @@ transcribe_model = "gpt-transcribe"
 
 # [net]
 # allow_private = ["homeassistant.local", "192.168.1.0/24"]   # your own network is blocked unless listed
-# timeout_s = 20
+# timeout_s = 20                 # the longest any one wait may take
+# deadline_s = 60                # the longest a whole request may take, redirects and download included
 # max_response_bytes = 2000000
 # max_redirects = 5
 

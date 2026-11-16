@@ -35,6 +35,28 @@ def test_init_creates_a_private_home_and_is_safe_to_repeat(home):
     ).read_text() == "Reply in Chinese."  # never overwritten
 
 
+def test_init_makes_the_files_of_an_earlier_run_private_and_says_so(home):
+    invoke("init")
+    for name in (".env", "state.db"):
+        (home / name).chmod(0o644)
+    again = invoke("init")
+    assert again.exit_code == 0, again.output
+    for name in (".env", "state.db"):
+        assert (home / name).stat().st_mode & 0o077 == 0, name
+        assert f"made {name} private" in again.output
+    assert "made" not in invoke("init").output  # and nothing to say the next time
+
+
+def test_doctor_warns_about_a_database_other_users_can_read(home, monkeypatch):
+    invoke("init")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    (home / "state.db").chmod(0o644)
+    result = invoke("doctor")
+    line = next(line for line in result.output.splitlines() if "database" in line)
+    assert line.startswith("warn") and "state.db" in line and "can be read by other users" in line
+    assert result.exit_code == 0  # a warning, not a failure
+
+
 def test_doctor_fails_without_a_key_and_says_where_to_put_it(home):
     invoke("init")
     result = invoke("doctor")

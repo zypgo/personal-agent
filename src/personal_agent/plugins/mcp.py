@@ -90,7 +90,9 @@ ServerFactory = Callable[[McpServerConfig, Settings], MCPServer]
 async def _streams_with_log(params: Any, log_path: Path) -> AsyncIterator[Any]:
     """The program's own messages (stderr) go to a private log file, not over the chat."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # Appending, so that `logs.trim_logs` can cut a long log down without the program that writes to
+    # it carrying on at the old length (which would leave a hole of nothing before its next line).
+    descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_APPEND, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8", errors="replace") as errlog:
         async with stdio_client(params, errlog=errlog) as streams:
             yield streams
@@ -623,6 +625,7 @@ class McpHub:
             taints=cfg.taints,
             source=f"mcp:{cfg.name}",
             detail=lambda args: safe_args(args),
+            review=lambda args: safe_args(args),
             available=lambda _app: hub.unavailable(server_name),
             timeout=lambda _app, _args: cfg.call_timeout_s + 5,
         )

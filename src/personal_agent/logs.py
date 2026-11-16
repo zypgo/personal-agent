@@ -9,12 +9,19 @@ from __future__ import annotations
 import logging
 import os
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from personal_agent.paths import Paths
 from personal_agent.security.redact import known_secret_values, redact
 
 LOGGER_NAME = "personal_agent"
 _FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+OWN_LOG = "pa.log"
+"""The agent's own log. It rotates itself; the other files in the log directory do not."""
+CAP_BYTES = 5_000_000
+"""A log that nothing rotates is cut back once it is longer than this."""
+KEEP_BYTES = 1_000_000
+"""... to about this much of its end."""
 
 
 class RedactingFormatter(logging.Formatter):
@@ -33,7 +40,7 @@ def setup_logging(paths: Paths, *, console: bool = False, level: int = logging.I
     formatter = RedactingFormatter(_FORMAT)
     if not any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
         paths.logs_dir.mkdir(parents=True, exist_ok=True)
-        log_file = paths.logs_dir / "pa.log"
+        log_file = paths.logs_dir / OWN_LOG
         handler = RotatingFileHandler(log_file, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
         handler.setFormatter(formatter)
         logger.addHandler(handler)
@@ -45,3 +52,41 @@ def setup_logging(paths: Paths, *, console: bool = False, level: int = logging.I
         stream = logging.StreamHandler()
         stream.setFormatter(formatter)
         logger.addHandler(stream)
+
+
+def trim_logs(paths: Paths, *, cap: int = CAP_BYTES, keep: int = KEEP_BYTES) -> dict[str, int]:
+    """Cut every log that nothing rotates back to its end, and say how much was dropped, by file.
+
+    Those are what launchd keeps of the service's output (the same lines as `pa.log`, which would
+    otherwise be the only one of the two with a limit) and what each MCP server says on its error
+    stream. An agent that is meant to run for months must not fill the disk with them."""
+    dropped: dict[str, int] = {}
+    for path in sorted(paths.logs_dir.glob("*.log")):
+        if path.name != OWN_LOG:
+            lost = trim(path, cap=cap, keep=keep)
+            if lost:
+                dropped[path.name] = lost
+    return dropped
+
+
+def trim(path: Path, *, cap: int, keep: int) -> int:
+    """`path` cut to roughly its last `keep` bytes, from the start of a line, if it is longer than
+    `cap`; the number of bytes dropped.
+
+    Done in the file itself: whatever is writing to it (launchd, an MCP server) holds it open for
+    appending, and keeps appending to this file, which a rename or a new file would not be."""
+    try:
+        size = path.stat().st_size
+        if size <= cap:
+            return 0
+        with path.open("r+b") as handle:
+            handle.seek(size - keep)
+            tail = handle.read()
+            if b"\n" in tail:
+                tail = tail.split(b"\n", 1)[1]
+            handle.seek(0)
+            handle.write(tail)
+            handle.truncate()
+        return size - len(tail)
+    except OSError:
+        return 0  # a log that cannot be trimmed now is tried again later; it is not a failure

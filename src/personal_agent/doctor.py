@@ -147,6 +147,14 @@ def _database_check(paths: Paths) -> Check:
             f"schema v{found.schema} is newer than this program (v{SCHEMA_VERSION})",
             "Upgrade personal-agent.",
         )
+    if exposed := [path for path in paths.exposed_files() if path != paths.env_file]:
+        names = ", ".join(path.name for path in exposed)
+        return Check(
+            "database",
+            "warn",
+            f"{names} can be read by other users",
+            f"Run: pa init (it makes them private), or chmod 600 on {names}",
+        )
     detail = f"schema v{found.schema}, {size(found.total_bytes)}"
     if (
         found.reclaimable_bytes >= EMPTY_SPACE_WARN_BYTES

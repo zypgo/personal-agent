@@ -67,6 +67,23 @@ def test_a_broken_config_is_always_a_config_error(paths, payload):
         load_config(paths)
 
 
+@pytest.mark.parametrize(
+    ("section", "needs"),
+    [
+        ("[sandbox]\nbackend = 'none'\n", "sandbox.i_understand_no_sandbox"),
+        ("[policy]\nmode = 'autonomous'\n", "policy.i_understand_autonomous_risk"),
+    ],
+    ids=["no-sandbox", "autonomous"],
+)
+def test_a_setting_that_removes_a_protection_must_say_so_where_it_is_set(paths, section, needs):
+    paths.config_file.write_text(section)
+    with pytest.raises(ConfigError, match=needs):
+        load_config(paths)
+
+    paths.config_file.write_text(section + needs.split(".")[1] + " = true\n")
+    assert load_config(paths) is not None
+
+
 # ---- .env ------------------------------------------------------------------------------------
 def test_env_values_are_loaded_but_never_override_the_real_environment(paths, monkeypatch):
     paths.env_file.write_text(

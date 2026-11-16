@@ -50,6 +50,13 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> 
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_home(monkeypatch):
+    """The home a person exports in their shell is theirs, not a test's: with it set, a test of
+    "the default home" would look at (and a careless one write into) the real one."""
+    monkeypatch.delenv("PA_HOME", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_test_changes_the_real_launchd(monkeypatch, tmp_path):
     """A test may look at launchd but never change it, and never write into the real
     `~/Library/LaunchAgents`: whatever code a test reaches by mistake (a refactor, or a mutation

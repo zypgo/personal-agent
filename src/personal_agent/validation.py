@@ -50,15 +50,20 @@ def _looks_like_credential(text: str) -> bool:
 
 
 def _texts(value: Any) -> Iterator[str]:
-    """Every piece of text somebody typed into `value`, however deeply it is nested."""
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, BaseModel):
-        yield from _texts(value.model_dump())
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            yield from _texts(key)
-            yield from _texts(item)
-    elif isinstance(value, (list, tuple, set, frozenset)):
-        for item in value:
-            yield from _texts(item)
+    """Every piece of text somebody typed into `value`, however deeply it is nested.
+
+    A loop over a stack, not a recursion: a file that is nothing but brackets must end in a
+    message about the file, not in a `RecursionError`."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            yield item
+        elif isinstance(item, BaseModel):
+            pending.append(item.model_dump())
+        elif isinstance(item, dict):
+            for key, inner in item.items():
+                pending.append(inner)
+                pending.append(key)
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            pending.extend(item)

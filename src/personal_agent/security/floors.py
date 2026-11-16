@@ -176,11 +176,11 @@ WRAPPERS = frozenset(
 SHELL_NAMES = frozenset(["sh", "bash", "zsh", "dash", "ksh", "fish"])
 
 
-def normalize(command: str) -> str:
-    """The command as it will behave, not as it is written: lowercased, quotes and backslashes
-    removed, `${IFS}` turned into the space it stands for."""
-    text = command.lower().replace("\\\n", " ")
-    text = re.sub(r"\$\{?ifs\}?", " ", text)
+def normalize(command: str, *, fold: bool = True) -> str:
+    """The command as it will behave, not as it is written: lowercased (unless `fold` is false),
+    quotes and backslashes removed, `${IFS}` turned into the space it stands for."""
+    text = (command.lower() if fold else command).replace("\\\n", " ")
+    text = re.sub(r"(?i)\$\{?ifs\}?", " ", text)
     text = re.sub(r"[\\'\"]", "", text)
     return re.sub(r"[ \t\r\f\v]+", " ", text).strip()
 
@@ -212,6 +212,25 @@ def command_positions(words: list[str]) -> list[int]:
             expect = wrapped
         elif shell and _SHELL_C.fullmatch(word):
             expect, wrapped, shell = True, False, False
+    return found
+
+
+def simple_commands(command: str) -> list[str]:
+    """Every program a shell line runs, each with its arguments, as text. `cd x && env A=1 rm -rf y
+    | tee z` gives `cd x`, `env A=1 rm -rf y`, `rm -rf y` and `tee z`; `sh -c 'git push'` gives
+    `git push` too, and `/bin/rm -rf y` is also given as `rm -rf y`. Quotes and backslashes are taken
+    away as `normalize` does, but the case stays: a rule someone wrote for `git push` is case-sensitive.
+
+    This is what a rule *about commands* needs to be tried on. It reads the text, as floors do, so
+    a command built at run time is not in it: rules are a convenience over the sandbox, not a
+    replacement for it."""
+    text = normalize(command, fold=False)
+    found: list[str] = []
+    for words in _segments(text):
+        for i in command_positions([w.lower() for w in words]):
+            found.append(" ".join(words[i:]))
+            if "/" in words[i]:  # `/bin/rm -rf y` is `rm -rf y`
+                found.append(" ".join([_base(words[i]), *words[i + 1 :]]))
     return found
 
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import signal
 
 import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
@@ -82,6 +84,82 @@ def test_the_agents_secrets_are_not_reachable_even_by_absolute_path(app):
     for target in (app.paths.env_file, app.paths.db_file, app.paths.memory_dir):
         with pytest.raises(FileProblem):
             resolve_path(app, str(target), write=False)
+
+
+# ---- a folder changed after the check --------------------------------------------------------------
+@pytest.fixture
+def outside(tmp_path):
+    folder = tmp_path / "outside"
+    folder.mkdir()
+    (folder / "secret.txt").write_text("OUTSIDE-SECRET")
+    return folder
+
+
+def swap_for_a_link(ws, name, target):
+    """What a command running in the sandbox at the same moment could do inside the workspace."""
+    path = ws / name
+    shutil.rmtree(path) if path.is_dir() and not path.is_symlink() else path.unlink()
+    path.symlink_to(target)
+
+
+def test_a_folder_swapped_for_a_link_after_the_check_is_not_followed_when_reading(app, ws, outside):
+    put(ws, "d/secret.txt", "inside")
+    real = resolve_path(app, "d/secret.txt", write=False)  # checked while d was a folder
+    swap_for_a_link(ws, "d", outside)  # ... and swapped before the file is opened
+    with pytest.raises(FileProblem, match="changed while it was being opened"):
+        files._read(app, real, 1, 10)
+
+
+def test_a_file_swapped_for_a_link_after_the_check_is_not_followed_either(app, ws, outside):
+    put(ws, "f.txt", "inside")
+    real = resolve_path(app, "f.txt", write=False)
+    swap_for_a_link(ws, "f.txt", outside / "secret.txt")
+    with pytest.raises(FileProblem, match="changed while it was being opened"):
+        files._read(app, real, 1, 10)
+    with pytest.raises(FileProblem, match="changed while it was being opened"):
+        files._edit(app, real, "OUTSIDE", "x", False)
+    assert (outside / "secret.txt").read_text() == "OUTSIDE-SECRET"
+
+
+def test_a_folder_swapped_for_a_link_after_the_check_is_not_written_through(app, ws, outside):
+    put(ws, "d/a.txt", "inside")
+    real = resolve_path(app, "d/a.txt", write=True)
+    swap_for_a_link(ws, "d", outside)
+    with pytest.raises(FileProblem, match="changed while it was being opened"):
+        files._write(app, real, "overwritten")
+    with pytest.raises(FileProblem, match="changed while it was being opened"):
+        files._edit(app, real, "a", "b", False)
+    assert sorted(p.name for p in outside.iterdir()) == ["secret.txt"]  # nothing made or changed
+    assert (outside / "secret.txt").read_text() == "OUTSIDE-SECRET"
+
+
+def test_a_pipe_in_the_workspace_is_refused_and_not_waited_for(app, ws):
+    os.mkfifo(ws / "pipe")
+
+    def too_slow(*_):
+        raise AssertionError("opening a pipe waited for a writer that never comes")
+
+    previous = signal.signal(signal.SIGALRM, too_slow)
+    signal.alarm(5)
+    try:
+        with pytest.raises(FileProblem, match="not an ordinary file"):
+            read(app, "pipe")
+        with pytest.raises(FileProblem, match="not an ordinary file"):
+            files._edit(app, resolve_path(app, "pipe", write=True), "a", "b", False)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+async def test_reading_a_pipe_inside_a_run_gives_the_model_an_error_and_the_run_goes_on(make_app):
+    model = ScriptedModel(
+        [[function_call("read_file", {"path": "pipe"}, call_id="r1")], [assistant_message("ok")]]
+    )
+    app = make_app(model)
+    os.mkfifo(app.paths.workspace_dir / "pipe")
+    [result] = await run(app)
+    assert result.outcome.status == "completed"
+    assert outputs(app)["r1"].startswith("Error:") and "not an ordinary file" in outputs(app)["r1"]
 
 
 # ---- listing --------------------------------------------------------------------------------------
@@ -233,11 +311,13 @@ def test_writing_through_an_alias_inside_the_workspace_changes_the_real_file(app
     assert target.read_text() == "through the link" and (ws / "alias").is_symlink()
 
 
-def test_a_link_swapped_in_at_the_last_moment_is_replaced_not_followed(ws, tmp_path):
+def test_a_link_swapped_in_at_the_last_moment_is_replaced_not_followed(app, ws, tmp_path):
     outside = tmp_path / "outside.txt"
     outside.write_text("untouched")
     (ws / "x.txt").symlink_to(outside)
-    files._write_atomic(ws / "x.txt", b"new data")  # what happens if a link appears after the check
+    files._write_atomic(
+        app, ws / "x.txt", b"new data"
+    )  # what happens if a link appears after the check
     assert outside.read_text() == "untouched"
     assert not (ws / "x.txt").is_symlink() and (ws / "x.txt").read_text() == "new data"
 
@@ -311,7 +391,7 @@ async def test_reading_needs_no_approval_and_writing_asks_in_supervised_mode(mak
     ws = app.paths.workspace_dir
     assert result.outcome.status == "awaiting_approval" and not (ws / "n.txt").exists()
     [pending] = app.approvals.pending()
-    assert pending.tool == "write_file" and pending.summary == "n.txt"
+    assert pending.tool == "write_file" and pending.summary == "n.txt | 2 characters: hi"
 
 
 async def test_an_allow_rule_lets_writes_through_and_the_model_gets_the_result(make_app):

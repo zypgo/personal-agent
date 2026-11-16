@@ -22,7 +22,14 @@ from rich.panel import Panel
 from personal_agent.channels.cli import CliChannel
 from personal_agent.commands import views
 from personal_agent.commands.common import console, echo, say, warn
-from personal_agent.core.approvals import choose_approvals, split_targets
+from personal_agent.core.approvals import (
+    APPROVED,
+    DENIED,
+    NOTHING_WAITING,
+    choose_approvals,
+    elsewhere,
+    split_targets,
+)
 from personal_agent.core.dispatcher import Dispatcher
 from personal_agent.core.events import Kind, NewEvent
 from personal_agent.daemon import Engine
@@ -102,32 +109,50 @@ def ask_once(app: App, text: str, session_key: str) -> bool:
 
 # ---- approvals ---------------------------------------------------------------------------
 def answer_approvals(
-    engine: Engine, approve: bool, targets: list[str], note: str | None, run: RunTurn
-) -> None:
-    """Record the owner's answer, then let the paused runs continue (here, or in the service)."""
+    engine: Engine,
+    approve: bool,
+    targets: list[str],
+    note: str | None,
+    run: RunTurn,
+    *,
+    session_key: str | None = None,
+) -> bool:
+    """Record the owner's answer, then let the paused runs continue (here, or in the service).
+
+    `session_key` is the conversation `all` refers to (none: everything waiting). False if
+    something that was asked for did not happen: no such request, one that was already answered
+    or has expired, or an unclear request. That nothing was waiting is not a failure."""
     app = engine.app
-    ids, problem = choose_approvals(app.approvals.pending(), targets)
+    ids, problem = choose_approvals(app.approvals.pending(), targets, session_key=session_key)
     if problem:
-        colour = "dim" if ids is None and "Nothing" in problem else "yellow"
+        colour = "dim" if problem == NOTHING_WAITING else "yellow"
         say(f"[{colour}]{escape(problem)}[/{colour}]")
     if ids is None:
-        return
+        return problem == NOTHING_WAITING
     resume: list[str] = []
+    done = True
+    wanted = APPROVED if approve else DENIED
     for approval_id in ids:
         result = app.approvals.decide(approval_id, approve, by="owner:cli", note=note)
         colour = "green" if result.changed else "yellow"
         say(f"[{colour}]{escape(result.message)}[/{colour}]")
+        # Said twice is still said; an unknown, expired or contradicted request is not done.
+        done = done and (result.approval is not None and result.approval.status == wanted)
         if result.resume_queued and result.approval is not None:
             resume.append(result.approval.session_key)
-    for session_key in dict.fromkeys(resume):
-        run(turn(engine, session_key))
+    if "all" in targets and (left := app.approvals.pending()):
+        say(f"[yellow]Still waiting elsewhere: {escape(elsewhere(left))}.[/yellow]")
+    for resumed_session in dict.fromkeys(resume):
+        run(turn(engine, resumed_session))
+    return done
 
 
-def decide(app: App, approve: bool, words: list[str], note: str | None) -> None:
-    """`pa approve` and `pa deny`: `words` are request numbers, `all`, and maybe a reason."""
+def decide(app: App, approve: bool, words: list[str], note: str | None) -> bool:
+    """`pa approve` and `pa deny`: `words` are request numbers, `all`, and maybe a reason. False
+    if something that was asked for did not happen (the exit status says so)."""
     targets, trailing = split_targets(words)
     with Engine.acquire(app) as engine:
-        answer_approvals(engine, approve, targets, note or trailing, asyncio.run)
+        return answer_approvals(engine, approve, targets, note or trailing, asyncio.run)
 
 
 def _remind_of_approvals(app: App) -> None:
@@ -241,7 +266,7 @@ def _slash(engine: Engine, line: str, session_key: str, run: RunTurn) -> bool:
         views.show_approvals(app, include_decided=False)
     elif command in ("/approve", "/deny"):
         targets, note = split_targets(words[1:])
-        answer_approvals(engine, command == "/approve", targets, note, run)
+        answer_approvals(engine, command == "/approve", targets, note, run, session_key=session_key)
     else:
         say(f"[yellow]Unknown command {escape(command)}.[/yellow] Try /help.")
     return True

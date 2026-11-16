@@ -58,7 +58,6 @@ from personal_agent.harness.models import cache_key_for, model_settings, shares_
 from personal_agent.harness.pricing import cost_usd
 from personal_agent.harness.runctx import Origin, RunContext
 from personal_agent.memory.store import PreferencesUnavailable
-from personal_agent.security.audit import safe_args
 from personal_agent.tools.guard import ToolGuard, parse_args, summarize
 from personal_agent.tools.skills import shell_dir
 from personal_agent.tools.urls import find_urls
@@ -503,9 +502,7 @@ class Harness:
             name, call_id, raw = _call_info(item)
             tool = app.tools.get(name)
             args = parse_args(raw)
-            calls.append(
-                PendingCall(call_id, name, summarize(tool, args) if tool else safe_args(args)[:300])
-            )
+            calls.append(PendingCall(call_id, name, summarize(tool, args)))
         with app.db.tx():
             approvals = app.approvals.create(ctx.run_id, ctx.session_key, calls)
             app.approvals.save_run(ctx.run_id, ctx.session_key, state, ctx.to_meta())

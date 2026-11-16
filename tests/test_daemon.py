@@ -243,6 +243,22 @@ async def test_the_daemon_removes_old_records_once_a_day(make_app, clock, monkey
         assert app.janitor.last().at > first.at and daemon.stats.rows_pruned == 2
 
 
+async def test_the_daemon_cuts_back_the_logs_nothing_else_rotates(make_app, clock, monkeypatch):
+    monkeypatch.setattr(daemon_module, "UPKEEP_CHECK_S", 0.05)
+    monkeypatch.setattr(daemon_module, "LOG_CHECK_S", 3600.0)
+    monkeypatch.setattr(
+        daemon_module, "trim_logs", lambda paths: calls.append(1) or {"service.err.log": 1}
+    )
+    calls: list[int] = []
+    app = make_app(ScriptedModel([]), config=cfg())
+    async with running(app):
+        await eventually(lambda: len(calls) == 1, what="the first look at the logs")
+        await asyncio.sleep(0.3)  # the same hour: not again
+        assert len(calls) == 1
+        clock.advance(3601)
+        await eventually(lambda: len(calls) == 2, what="the next hour's look")
+
+
 async def test_with_the_upkeep_switched_off_the_daemon_keeps_everything(
     make_app, clock, monkeypatch
 ):

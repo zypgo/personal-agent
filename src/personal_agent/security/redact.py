@@ -99,14 +99,27 @@ def find_secrets(text: str) -> list[SecretMatch]:
     return sorted(found, key=lambda s: s.start)
 
 
+DECLARED_MIN_LENGTH = 4
+"""The shortest value of a variable the owner declared secret that is still cut out of text."""
+
+
 def known_secret_values(env: Mapping[str, str] | None = None, *, min_length: int = 8) -> list[str]:
-    """Values of environment variables that look like secrets (by name)."""
+    """Values of the environment variables that are secret: the ones whose names look like it, and
+    the ones the owner declared (see `register_secret_envs`).
+
+    A guess from a name needs a longer value: `KEYBOARD=us` is not a secret, and `us` would be cut
+    out of every sentence. A declared one is a secret whatever its length (a PIN is four digits),
+    down to `DECLARED_MIN_LENGTH`."""
     source = os.environ if env is None else env
-    values = {
-        v
-        for k, v in source.items()
-        if v and len(v) >= min_length and (_SECRET_ENV_NAME.search(k) or k in _EXTRA_SECRET_ENV)
-    }
+    values = set()
+    for name, value in source.items():
+        if not value:
+            continue
+        if name in _EXTRA_SECRET_ENV:
+            if len(value) >= DECLARED_MIN_LENGTH:
+                values.add(value)
+        elif len(value) >= min_length and _SECRET_ENV_NAME.search(name):
+            values.add(value)
     return sorted(values, key=len, reverse=True)  # replace longer values first
 
 

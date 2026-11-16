@@ -39,7 +39,12 @@ Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 MAX_ADDRESSES = 4
 """Addresses tried per name; every answer is still judged."""
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
-CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie", "x-api-key"})
+KEPT_ACROSS_SITES = frozenset(
+    {"accept", "accept-language", "accept-charset", "cache-control", "pragma"}
+)
+"""The only headers a request keeps when a redirect leads to another site. What is listed is what
+is known to be harmless, not what is known to be secret: `private-token` and `x-auth-token` are
+credentials too, and so is any name nobody has thought of yet."""
 
 
 class Blocked(Exception):
@@ -328,8 +333,38 @@ async def fetch(
     policy: NetPolicy | None = None,
 ) -> Fetched:
     """One request plus its redirects, all through the gate. Raises Blocked, or httpx errors for
-    network failures. The body is read only up to `max_bytes`."""
-    policy = policy or NetPolicy.from_config(cfg)
+    network failures. The body is read only up to `max_bytes`, and the whole thing must be over
+    within `cfg.deadline_s`."""
+    try:
+        async with asyncio.timeout(cfg.deadline_s) as scope:
+            return await _follow(
+                cfg,
+                method,
+                url,
+                headers,
+                content,
+                max_bytes,
+                on_hop,
+                policy or NetPolicy.from_config(cfg),
+            )
+    except TimeoutError as exc:
+        if not scope.expired():
+            raise
+        raise httpx.ReadTimeout(
+            f"the answer was not complete within {cfg.deadline_s:g} seconds"
+        ) from exc
+
+
+async def _follow(
+    cfg: NetConfig,
+    method: str,
+    url: str,
+    headers: dict[str, str] | None,
+    content: bytes | None,
+    max_bytes: int | None,
+    on_hop: Hop | None,
+    policy: NetPolicy,
+) -> Fetched:
     limit = max_bytes or cfg.max_response_bytes
     current = check_url(url)
     previous: httpx.URL | None = None
@@ -339,6 +374,9 @@ async def fetch(
     base_headers = {
         "user-agent": cfg.user_agent,
         "accept": "text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.5",
+        # Compressed answers are unpacked before they are measured, so a small download can
+        # become a very large one. Asking for the plain text keeps honest servers from doing it.
+        "accept-encoding": "identity",
     }
     async with httpx.AsyncClient(
         transport=GuardedTransport(policy), timeout=timeout, follow_redirects=False, trust_env=False
@@ -359,12 +397,12 @@ async def fetch(
                                 "the site redirected a request that carries data to another "
                                 "address, which was not followed"
                             )
-                        # Credentials belong to the site they were meant for, not to wherever
-                        # it sends us.
+                        # What was written for one site is not for wherever it sends us: a
+                        # header may be a credential whatever it is called.
                         headers = {
                             k: v
                             for k, v in (headers or {}).items()
-                            if k.lower() not in CREDENTIAL_HEADERS
+                            if k.lower() in KEPT_ACROSS_SITES
                         }
                     previous, current = current, target
                     if response.status_code in (301, 302, 303) and verb not in ("GET", "HEAD"):

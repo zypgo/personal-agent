@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from personal_agent.app import App
     from personal_agent.security.policy import Decision
 
-PROFILES = ("full", "scheduled", "untrusted", "dream")
 MAX_KNOWN_URLS = 4000
 
 

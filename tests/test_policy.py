@@ -15,8 +15,9 @@ def call(
     profile=FULL,
     tainted=False,
     allowed=ALL_PROFILES,
+    views=(),
 ):
-    return ToolCall(tool, category, detail, profile, tainted, frozenset(allowed))
+    return ToolCall(tool, category, detail, profile, tainted, frozenset(allowed), tuple(views))
 
 
 def policy(**kw) -> Policy:
@@ -136,3 +137,23 @@ def test_autonomous_mode_needs_an_explicit_acknowledgement():
 )
 def test_rule_matching(rule, tool, detail, expected):
     assert matches(rule, tool, detail) is expected
+
+
+def test_rules_that_stop_a_call_are_tried_on_every_view_of_it():
+    chained = dict(
+        detail="[compound] cd b && rm -rf .", views=("cd b && rm -rf .", "cd b", "rm -rf .")
+    )
+    deny = policy(allow=["shell"], deny=["shell:rm -rf *"]).evaluate(call(**chained))
+    assert (deny.verdict, deny.layer) == (Verdict.DENY, "deny_rule")
+    ask = policy(mode="autonomous", always_ask=["shell:rm *"]).evaluate(call(**chained))
+    assert (ask.verdict, ask.layer) == (Verdict.ASK, "always_ask")
+
+
+def test_rules_that_let_a_call_through_are_tried_on_its_detail_alone():
+    """A rule for `git status*` must not be satisfied by one command inside a longer line."""
+    views = ("git status", "rm -rf ~")
+    detail = "[compound] git status; rm -rf ~"
+    assert verdict(policy(allow=["shell:git status*"]), detail=detail, views=views) is Verdict.ASK
+    assert verdict(policy(allow=["shell:git status*"]), detail="git status") is Verdict.ALLOW
+    tainted = policy(allow_when_tainted=["shell:git status*"])
+    assert verdict(tainted, detail=detail, views=views, tainted=True) is Verdict.ASK

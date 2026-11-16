@@ -149,6 +149,16 @@ def test_the_request_text_names_every_pending_call(approvals):
     assert "all" not in single
 
 
+def test_the_request_text_offers_all_only_where_all_would_cover_it(approvals):
+    """`all` is what waits in the conversation it is typed in. A request from a timer's run is not
+    in it, so that text names the numbers instead of promising something `all` would not do."""
+    elsewhere = suspend(approvals, run_id="r2", session="timer:brief", calls=("c1", "c2"))
+    text = request_text(elsewhere)
+    assert "/approve all" not in text
+    assert f"`/approve {elsewhere[0].id} {elsewhere[1].id}`" in text
+    assert f"`/deny {elsewhere[0].id} {elsewhere[1].id}`" in text
+
+
 # ---- audit ------------------------------------------------------------------------------
 def test_audit_redacts_arguments_and_fills_in_the_outcome(db, clock):
     audit = Audit(db, clock)

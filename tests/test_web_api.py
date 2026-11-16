@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import pytest
+from starlette.testclient import TestClient
 
 from personal_agent.channels.ingress import MAX_IMAGES, MAX_TEXT_CHARS
 from personal_agent.channels.transcribe import TranscriptionError
-from personal_agent.channels.web.api import PAIR_ATTEMPTS, Window, load_assets, sse
+from personal_agent.channels.web.api import PAIR_ATTEMPTS, Strikes, Window, load_assets, sse
 from personal_agent.config import AgentConfig, Config, MediaConfig
-from personal_agent.core.approvals import PendingCall
+from personal_agent.core.approvals import STORED_SUMMARY_CHARS, PendingCall
 from test_ingress import FakeTranscriber
 from web_fake import JPEG, ORIGIN, PNG, Web
 
@@ -117,7 +118,7 @@ def test_a_malformed_pairing_request_is_a_400(stranger, body):
     assert response.status_code == 400
 
 
-def test_guessing_is_slowed_for_everyone(stranger):
+def test_guessing_is_slowed_for_whoever_does_it(stranger):
     count, _ = PAIR_ATTEMPTS
     for _ in range(count):
         assert (
@@ -128,7 +129,7 @@ def test_guessing_is_slowed_for_everyone(stranger):
         )
     blocked = stranger.client.post("/api/pair", json={"code": "x"}, headers=stranger.write)
     assert blocked.status_code == 429 and int(blocked.headers["retry-after"]) >= 1
-    # Even the right code waits its turn: the limit is on attempts, not on being wrong.
+    # Even the right code waits its turn: for the one who has been failing.
     code = stranger.app.web_auth.invite().code
     assert (
         stranger.client.post("/api/pair", json={"code": code}, headers=stranger.write).status_code
@@ -141,11 +142,48 @@ def test_guessing_is_slowed_for_everyone(stranger):
     )
 
 
-def test_the_attempt_window_forgets(clock=None):
+def test_a_noisy_stranger_cannot_keep_the_owner_from_pairing(stranger):
+    """The limit is there to stop guessing, not to be a way of keeping the owner out."""
+    count, _ = PAIR_ATTEMPTS
+    for _ in range(count * 3):
+        stranger.client.post("/api/pair", json={"code": "x"}, headers=stranger.write)
+    assert (
+        stranger.client.post("/api/pair", json={"code": "x"}, headers=stranger.write).status_code
+        == 429
+    )
+    owner = TestClient(
+        stranger.client.app, base_url=stranger.origin, client=("192.0.2.7", 50000)
+    )  # another address: the owner's phone
+    code = stranger.app.web_auth.invite().code
+    assert owner.post("/api/pair", json={"code": code}, headers=stranger.write).status_code == 200
+
+
+def test_a_right_code_is_not_counted_against_anyone(stranger):
+    count, _ = PAIR_ATTEMPTS
+    for _ in range(count + 3):
+        code = stranger.app.web_auth.invite().code
+        response = stranger.client.post("/api/pair", json={"code": code}, headers=stranger.write)
+        assert response.status_code == 200  # being right never uses up the allowance
+        stranger.client.cookies.clear()
+
+
+def test_the_attempt_window_forgets():
     window = Window(2, 10.0)
     assert window.hit(0.0) is None and window.hit(1.0) is None
     assert window.hit(2.0) == pytest.approx(8.0)
+    assert window.blocked(2.0) == pytest.approx(8.0) and window.blocked(2.0) is not None
     assert window.hit(10.5) is None
+
+
+def test_failures_are_counted_per_source_and_only_so_many_sources_are_remembered():
+    strikes = Strikes(2, 10.0, remember=3)
+    strikes.fail("a", 0.0)
+    strikes.fail("a", 1.0)
+    assert strikes.wait("a", 2.0) == pytest.approx(8.0) and strikes.wait("b", 2.0) is None
+    for source in ("b", "c", "d", "e"):  # more sources than are remembered
+        strikes.fail(source, 3.0)
+    assert strikes.wait("b", 3.0) is None  # one strike of two: not held
+    assert len(strikes._windows) <= 3
 
 
 def test_signing_out_ends_that_session_and_clears_the_cookie(web):
@@ -427,10 +465,17 @@ def test_waiting_approvals_are_listed(web):
     assert (shown["id"], shown["tool"], shown["status"]) == (approval.id, "shell", "pending")
 
 
-def test_a_long_summary_is_cut(web):
+def test_a_long_summary_is_cut_and_says_so(web):
     ask(web, summary="x" * 5000)
     [shown] = web.client.get("/api/approvals").json()["pending"]
-    assert len(shown["summary"]) == 800
+    assert shown["summary"].startswith("x" * STORED_SUMMARY_CHARS)
+    assert shown["summary"].endswith(f"...[+{5000 - STORED_SUMMARY_CHARS} more characters]")
+
+
+def test_a_summary_is_shown_on_one_line_without_anything_that_hides_text(web):
+    ask(web, summary="ls\n#9 shell: rm -rf ~\u202e")
+    [shown] = web.client.get("/api/approvals").json()["pending"]
+    assert shown["summary"] == "ls ↵ #9 shell: rm -rf ~"
 
 
 def test_approving_lets_the_paused_work_continue(web):

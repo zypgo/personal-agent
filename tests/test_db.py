@@ -1,3 +1,4 @@
+import os
 import sqlite3
 
 import pytest
@@ -23,6 +24,30 @@ def test_wal_enabled_for_file_databases(tmp_path):
     db = open_database(tmp_path / "state.db")
     assert db.scalar("PRAGMA journal_mode") == "wal"
     db.close()
+
+
+def test_a_new_database_and_its_log_are_private_whatever_the_umask(tmp_path):
+    """Everything the agent was told and did is in this file; SQLite would make it with the
+    process's umask (readable by the group) and give the write-ahead log the same permissions."""
+    before = os.umask(0o022)
+    try:
+        db = open_database(tmp_path / "state.db")
+        names = ["state.db", "state.db-wal", "state.db-shm"]
+        found = [name for name in names if (tmp_path / name).exists()]
+        assert {"state.db", "state.db-wal"} <= set(found)
+        for name in found:
+            assert (tmp_path / name).stat().st_mode & 0o077 == 0, name
+        db.close()
+    finally:
+        os.umask(before)
+
+
+def test_an_existing_database_keeps_the_permissions_it_has(tmp_path):
+    path = tmp_path / "state.db"
+    open_database(path).close()
+    path.chmod(0o640)
+    open_database(path).close()
+    assert path.stat().st_mode & 0o777 == 0o640  # `pa init` tightens it, opening does not
 
 
 def test_refuses_newer_schema(tmp_path):

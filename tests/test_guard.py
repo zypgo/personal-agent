@@ -8,7 +8,7 @@ import json
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
 
 from helpers import owner_message, usage, webhook
-from personal_agent.config import Config, PolicyConfig, RuntimeConfig
+from personal_agent.config import BudgetConfig, Config, PolicyConfig, RuntimeConfig
 from personal_agent.tools.base import FULL
 from tooling import FILE_TOOLS, WEB_TOOLS, Spy, drain, install
 
@@ -232,6 +232,28 @@ async def test_a_broken_reviewer_never_lets_an_action_through(make_app):
     spy = install(app, Spy())
     [result] = await ask(app)
     assert result.outcome.status == "awaiting_approval" and spy.ran() == []
+
+
+async def test_the_reviewer_is_not_asked_once_the_run_has_spent_its_budget(make_app):
+    """It is a model call like any other. With nothing left to spend the owner decides, which is
+    where the reviewer sends everything it is unsure about anyway."""
+    model = ScriptedModel(
+        [
+            ModelStep(output=GIT_PUSH, usage=usage(1000, 100)),  # costs 0.003: the whole allowance
+            verdict("approve", "must never be asked"),
+        ]
+    )
+    app = make_app(
+        model,
+        config=Config(policy=PolicyConfig(mode="auto"), budget=BudgetConfig(per_run_usd=0.003)),
+    )
+    spy = install(app, Spy())
+    [result] = await ask(app, "please push")
+
+    assert result.outcome.status == "awaiting_approval" and spy.ran() == []
+    assert len(model.calls) == 1  # the reviewer was not called
+    [row] = app.audit.recent()
+    assert (row.verdict, row.layer) == ("ask", "guardian") and "budget" in row.reason
 
 
 async def test_auto_mode_does_not_consult_the_reviewer_for_harmless_calls(make_app):

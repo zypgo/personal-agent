@@ -24,6 +24,7 @@ from personal_agent.config import (
     SecretConfig,
     ToolsConfig,
 )
+from personal_agent.tools.base import Category
 from tooling import drain, outputs
 
 TOKEN = "ghp_" + "Zx9Y8w7V" * 4
@@ -312,7 +313,11 @@ async def test_a_post_asks_the_owner_and_nothing_is_sent_until_they_agree(make_a
 
     assert first.outcome.status == "awaiting_approval" and site.seen == []
     [approval] = app.approvals.pending()
-    assert (approval.tool, approval.summary) == ("http_request", f"POST {site.base}/echo")
+    assert (approval.tool, approval.summary) == (
+        "http_request",
+        f"POST {site.base}/echo | headers: Content-Type: application/json"
+        ' | body (18 characters): {"hello": "world"}',
+    )  # what would be sent is what the owner reads, not only where
     [row] = app.audit.recent()
     assert (row.category, row.verdict, row.layer) == ("net_write", "ask", "mode")
 
@@ -486,6 +491,122 @@ async def test_the_owner_can_refuse_it(make_app, site):
     await drain(app)
     assert site.paths() == ["/injection"]
     assert "owner declined this action" in outputs(app)["c2"]
+
+
+async def test_a_header_to_an_address_the_run_has_seen_is_a_way_out_too(make_app, site):
+    """The address is one the run read; the page's owner reads the headers of the request."""
+    page = f"{site.base}/injection"
+    notes = [{"name": "x-notes", "value": "THE-OWNERS-PRIVATE-NOTES"}]
+    model = ScriptedModel(
+        [
+            [fetch("c1", page)],
+            [req("c2", page, method="GET", headers=notes)],
+            [assistant_message("done")],
+        ]
+    )
+    app = make_app(model, config=cfg())
+    [result] = await run(app, f"summarize {page}")
+
+    assert result.outcome.status == "awaiting_approval"
+    assert [seen.headers.get("x-notes") for seen in site.seen] == [None]  # only the page was read
+    [approval] = app.approvals.pending()
+    assert "THE-OWNERS-PRIVATE-NOTES" in approval.summary  # the owner sees what would leave
+    row = audit_for(app, "http_request")[-1]
+    assert (row.category, row.verdict, row.layer, row.tainted) == (
+        "net_write",
+        "ask",
+        "taint",
+        True,
+    )
+
+
+async def test_a_body_on_a_read_method_is_a_way_out_too(make_app, site):
+    page = f"{site.base}/injection"
+    model = ScriptedModel(
+        [
+            [fetch("c1", page)],
+            [req("c2", page, method="OPTIONS", body="THE-OWNERS-PRIVATE-NOTES")],
+            [assistant_message("done")],
+        ]
+    )
+    app = make_app(model, config=cfg())
+    [result] = await run(app, f"summarize {page}")
+    assert result.outcome.status == "awaiting_approval"
+    assert site.paths() == ["/injection"]
+
+
+class _Run:
+    """What `_category` asks of a run."""
+
+    def __init__(self, *, tainted: bool, known: bool = True) -> None:
+        self.tainted, self._known = tainted, known
+
+    def knows_url(self, _url: str) -> bool:
+        return self._known
+
+
+@pytest.mark.parametrize(
+    ("args", "tainted", "known", "category"),
+    [
+        ({"url": "https://a.example/x"}, True, True, Category.READ),
+        ({"url": "https://a.example/x", "headers": []}, True, True, Category.READ),
+        (
+            {"url": "https://a.example/x", "headers": [{"name": "X", "value": "notes"}]},
+            True,
+            True,
+            Category.NET_WRITE,
+        ),
+        (
+            {"url": "https://a.example/x", "headers": [{"name": "Accept", "value": "text/html"}]},
+            True,
+            True,
+            Category.NET_WRITE,
+        ),
+        (
+            {"url": "https://a.example/x", "method": "OPTIONS", "body": "notes"},
+            True,
+            True,
+            Category.NET_WRITE,
+        ),
+        # a secret placeholder is not the model's to fill: the broker only sends it to listed hosts
+        (
+            {
+                "url": "https://a.example/x",
+                "headers": [{"name": "Authorization", "value": "Bearer {{secret:gh}}"}],
+            },
+            True,
+            True,
+            Category.READ,
+        ),
+        (
+            {
+                "url": "https://a.example/x",
+                "headers": [
+                    {"name": "X", "value": "notes"},
+                    {"name": "Authorization", "value": "{{secret:gh}}"},
+                ],
+            },
+            True,
+            True,
+            Category.NET_WRITE,
+        ),
+        # an address not seen is a way out whatever else it carries; nothing is a way out before reading
+        ({"url": "https://a.example/x"}, True, False, Category.NET_WRITE),
+        (
+            {"url": "https://a.example/x", "headers": [{"name": "X", "value": "notes"}]},
+            False,
+            True,
+            Category.READ,
+        ),
+        ({"url": "https://a.example/x", "method": "POST"}, False, True, Category.NET_WRITE),
+    ],
+)
+def test_what_a_request_carries_counts_once_the_run_has_read_outside_content(
+    args, tainted, known, category
+):
+    from personal_agent.tools.web import _category
+
+    assert _category(_Run(tainted=tainted, known=known), args) is category
 
 
 async def test_the_same_host_is_no_excuse_the_whole_address_has_to_be_one_the_run_has_seen(

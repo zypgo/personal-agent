@@ -14,7 +14,10 @@ Layers, first match wins:
 
 Rules are glob patterns over the tool name, or `tool:detail` where "detail" is a short summary
 the tool provides (a shell command, a URL host, a file path). Unknown or odd input never makes
-a decision more permissive than the layers above.
+a decision more permissive than the layers above. Rules that stop a call (`deny`, `always_ask`)
+are tried on every view a tool offers of it, for a shell line each command inside it; rules that
+let a call through (`allow`, `allow_when_tainted`) only on its detail, which marks a chained or
+very long command so that no narrow rule fits it.
 """
 
 from __future__ import annotations
@@ -58,6 +61,8 @@ class ToolCall:
     profile: str
     tainted: bool
     allowed_profiles: frozenset[str]
+    views: tuple[str, ...] = ()
+    """Further texts `deny` and `always_ask` rules are also tried on (`ToolDef.views`)."""
 
 
 def matches(rule: str, tool: str, detail: str) -> bool:
@@ -82,13 +87,17 @@ class Policy:
                 return True
         return self.cfg.mode == "read_only" and category not in HARMLESS and not can_vary
 
-    def _hit(self, rules: list[str], call: ToolCall) -> str | None:
-        return next((r for r in rules if matches(r, call.tool, call.detail)), None)
+    def _hit(self, rules: list[str], call: ToolCall, *, wide: bool = False) -> str | None:
+        """The first rule that fits the call. `wide` also tries the call's further views: only
+        rules that stop things use it, so that a rule which only ever lets things through
+        (`allow`) is still tried on the detail alone."""
+        texts = (call.detail, *call.views) if wide else (call.detail,)
+        return next((r for r in rules if any(matches(r, call.tool, t) for t in texts)), None)
 
     def evaluate(self, call: ToolCall) -> Decision:
         cfg = self.cfg
 
-        if rule := self._hit(cfg.deny, call):
+        if rule := self._hit(cfg.deny, call, wide=True):
             return Decision(Verdict.DENY, "deny_rule", f"blocked by your rule {rule!r}")
 
         if call.profile not in call.allowed_profiles:
@@ -99,7 +108,7 @@ class Policy:
         if cfg.mode == "read_only" and call.category not in HARMLESS:
             return Decision(Verdict.DENY, "read_only", "the agent is in read-only mode")
 
-        if rule := self._hit(cfg.always_ask, call):
+        if rule := self._hit(cfg.always_ask, call, wide=True):
             return Decision(Verdict.ASK, "always_ask", f"your rule {rule!r} always asks")
 
         if call.tainted and call.category in ESCALATE_WHEN_TAINTED and cfg.mode != "autonomous":

@@ -33,7 +33,7 @@ from starlette.routing import Route
 from personal_agent.channels.commands import ChatCommands
 from personal_agent.channels.ingress import MAX_IMAGES, Ingress, Upload
 from personal_agent.channels.web.security import Guard
-from personal_agent.core.approvals import Approval
+from personal_agent.core.approvals import Approval, plain
 from personal_agent.core.transcript import Turn
 
 if TYPE_CHECKING:
@@ -51,8 +51,12 @@ PING_S = 15.0
 network does not decide it is dead (and so a closed page is noticed)."""
 SESSION_CHECK_S = 30.0
 PAIR_ATTEMPTS = (10, 60.0)
-"""At most this many pairing attempts per this many seconds, from anyone. The codes cannot be
-guessed; this only keeps a noisy stranger from making work."""
+"""At most this many failed pairing attempts per this many seconds from one address, and then it
+waits. The codes cannot be guessed; this only keeps a noisy stranger from making work, so it must
+not be a way to keep the owner out: other addresses are not counted with it, and a right code from
+an address that has not failed is never held up."""
+PAIR_SOURCES = 1000
+"""How many addresses with recent failures are remembered."""
 HISTORY_MAX = 100
 _CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
 
@@ -130,21 +134,58 @@ class Window:
         self.seconds = seconds
         self._hits: deque[float] = deque()
 
-    def hit(self, now: float) -> float | None:
-        """None if this hit is allowed (and counted), else how long until one would be."""
+    def blocked(self, now: float) -> float | None:
+        """How long until a hit would be allowed, or None if one would be. Counts nothing."""
         while self._hits and self._hits[0] <= now - self.seconds:
             self._hits.popleft()
         if len(self._hits) >= self.count:
             return self._hits[0] + self.seconds - now
-        self._hits.append(now)
         return None
+
+    def hit(self, now: float) -> float | None:
+        """None if this hit is allowed (and counted), else how long until one would be."""
+        wait = self.blocked(now)
+        if wait is None:
+            self._hits.append(now)
+        return wait
+
+
+class Strikes:
+    """Failed attempts counted per source: `count` in any `seconds`, then that source waits."""
+
+    def __init__(self, count: int, seconds: float, *, remember: int = PAIR_SOURCES) -> None:
+        self.count = count
+        self.seconds = seconds
+        self.remember = remember
+        self._windows: dict[str, Window] = {}
+
+    def wait(self, source: str, now: float) -> float | None:
+        """How long until `source` may try again, or None if it may now."""
+        window = self._windows.get(source)
+        return window.blocked(now) if window is not None else None
+
+    def fail(self, source: str, now: float) -> None:
+        window = self._windows.get(source)
+        if window is None:
+            if len(self._windows) >= self.remember:
+                self._forget(now)
+            window = self._windows[source] = Window(self.count, self.seconds)
+        window.hit(now)
+
+    def _forget(self, now: float) -> None:
+        """Make room: drop the sources that have nothing recent against them, and if there are
+        none, the one that has been here longest."""
+        for source in [s for s, w in self._windows.items() if w.blocked(now) is None]:
+            del self._windows[source]
+        if len(self._windows) >= self.remember:
+            del self._windows[next(iter(self._windows))]
 
 
 def approval_json(approval: Approval) -> dict[str, Any]:
     return {
         "id": approval.id,
         "tool": approval.tool,
-        "summary": approval.summary[:800],
+        "summary": plain(approval.summary),
         "status": approval.status,
         "created_at": approval.created_at,
         "expires_at": approval.expires_at,
@@ -168,7 +209,7 @@ class WebApi:
         self.wake = wake
         self.auth = app.web_auth
         self.assets, self.version = load_assets(agent=app.config.agent.name)
-        self._pairing = Window(*PAIR_ATTEMPTS)
+        self._pairing = Strikes(*PAIR_ATTEMPTS)
 
     # ---- who is asking -----------------------------------------------------------------
     def _token(self, request: Request) -> str:
@@ -208,7 +249,9 @@ class WebApi:
 
     # ---- signing in -------------------------------------------------------------------
     async def pair(self, request: Request) -> Response:
-        wait = self._pairing.hit(self.app.clock.now())
+        now = self.app.clock.now()
+        source = request.client.host if request.client else ""
+        wait = self._pairing.wait(source, now)
         if wait is not None:
             return JSONResponse(
                 {"error": "Too many attempts. Wait a moment."},
@@ -218,12 +261,15 @@ class WebApi:
         try:
             body = await request.json()
         except ValueError:
+            self._pairing.fail(source, now)
             raise HTTPException(400, "That was not a pairing request.") from None
         code = body.get("code") if isinstance(body, dict) else None
         if not isinstance(code, str):
+            self._pairing.fail(source, now)
             raise HTTPException(400, "That was not a pairing request.")
         found = self.auth.redeem(code, agent=request.headers.get("user-agent", ""))
         if found is None:
+            self._pairing.fail(source, now)
             raise HTTPException(
                 403,
                 "This pairing link has expired or was already used. "

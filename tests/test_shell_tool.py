@@ -12,7 +12,7 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from helpers import owner_message
 from personal_agent.config import Config, PolicyConfig, SandboxConfig
 from personal_agent.security.sandbox import ExecResult, Probe, SandboxProvider
-from personal_agent.tools.shell import command_detail, format_result
+from personal_agent.tools.shell import command_detail, command_views, format_result
 from tooling import drain, outputs
 
 
@@ -179,6 +179,68 @@ async def test_a_deny_rule_is_written_against_the_marked_command(make_app):
     app = make_app(model, config=config, sandbox=SandboxProvider.fixed(box))
     await run(app)
     assert box.commands == [] and outputs(app)["c1"].startswith("Denied: blocked by your rule")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf build",
+        "ls; rm -rf build",
+        "cd build && rm -rf .",
+        "true | rm -rf build",
+        "rm -rf build; echo done",
+        "sh -c 'rm -rf build'",
+        "env A=1 /bin/rm -rf build",
+        "echo $(rm -rf build)",
+        "echo " + "z" * 300 + "; rm -rf build",  # longer than a rule is shown: the end still counts
+        "echo " + "z" * 3_000 + " && rm -rf build",
+    ],
+)
+async def test_a_deny_rule_for_a_command_stops_it_wherever_in_the_line_it_stands(make_app, command):
+    box = FakeSandbox()
+    model = ScriptedModel([[sh(command)], [assistant_message("ok")]])
+    app = make_app(
+        model,
+        config=policy(allow=["shell"], deny=["shell:rm -rf *"]),
+        sandbox=SandboxProvider.fixed(box),
+    )
+    await run(app)
+    assert box.commands == [] and outputs(app)["c1"].startswith("Denied: blocked by your rule")
+
+
+async def test_a_deny_rule_does_not_stop_commands_that_only_look_a_little_like_it(make_app):
+    box = FakeSandbox()
+    model = ScriptedModel([[sh("ls build"), sh("echo hello", "c2")], [assistant_message("ok")]])
+    app = make_app(
+        model,
+        config=policy(allow=["shell"], deny=["shell:rm -rf *"]),
+        sandbox=SandboxProvider.fixed(box),
+    )
+    await run(app)
+    assert box.commands == ["ls build", "echo hello"]
+
+
+async def test_an_always_ask_rule_sees_a_command_inside_a_line_too(make_app):
+    box = FakeSandbox()
+    model = ScriptedModel([[sh("cd repo && git push origin main")], [assistant_message("ok")]])
+    config = Config(
+        policy=PolicyConfig(
+            mode="autonomous", i_understand_autonomous_risk=True, always_ask=["shell:git push*"]
+        )
+    )
+    app = make_app(model, config=config, sandbox=SandboxProvider.fixed(box))
+    [result] = await run(app)
+    assert result.outcome.status == "awaiting_approval" and box.commands == []
+
+
+def test_rules_that_let_a_command_through_still_see_only_its_marked_detail():
+    long = "git status " + "x" * 400
+    assert command_detail({"command": long}).startswith("[compound] ")
+    assert command_views({"command": "cd a && git push"}) == [
+        "cd a && git push",
+        "cd a",
+        "git push",
+    ]
 
 
 # ---- floors -----------------------------------------------------------------------------------------

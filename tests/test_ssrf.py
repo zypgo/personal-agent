@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import socket
+import time
 
 import httpx
 import pytest
@@ -308,17 +309,21 @@ AUTH = {
     "Cookie": "session=1",
     "X-Api-Key": "k",
     "Proxy-Authorization": "Basic x",
-    "X-Custom": "kept",
+    "Private-Token": "glpat-1",  # credentials need not have a famous name
+    "X-Auth-Token": "t",
+    "X-Notes": "the owner's private notes",
+    "Accept-Language": "de",
 }
 
 
-async def test_credentials_do_not_follow_a_redirect_to_another_site(site, other_site):
+async def test_only_harmless_headers_follow_a_redirect_to_another_site(site, other_site):
     url = f"{site.base}/redirect?to={other_site.base}/echo"
     result = await fetch(LOCAL, "GET", url, headers=AUTH)
     arrived = json.loads(result.body)["headers"]
-    assert not {"authorization", "cookie", "x-api-key", "proxy-authorization"} & arrived.keys()
-    assert arrived["x-custom"] == "kept"
-    assert site.seen[0].headers["authorization"] == "Bearer abc"  # the first site did get them
+    assert arrived["accept-language"] == "de"  # what is known to be harmless is kept
+    named = {name.lower() for name in AUTH} - {"accept-language"}
+    assert not named & arrived.keys(), "a header written for one site reached another"
+    assert site.seen[0].headers["x-notes"] == AUTH["X-Notes"]  # the first site did get them
 
 
 async def test_credentials_stay_on_a_redirect_within_the_same_site(site):
@@ -390,6 +395,20 @@ async def test_slow_servers_time_out(site):
         )
 
 
+async def test_a_server_that_dribbles_out_its_answer_is_cut_off_at_the_deadline(site):
+    """No single wait is long (a byte comes every 50 ms), so only a limit on the whole can end it."""
+    config = NetConfig(allow_private=["127.0.0.1"], timeout_s=5, deadline_s=0.5)
+    started = time.monotonic()
+    with pytest.raises(httpx.TimeoutException, match=r"not complete within 0\.5 seconds"):
+        await fetch(config, "GET", f"{site.base}/trickle")
+    assert time.monotonic() - started < 3
+
+
+async def test_a_request_asks_for_the_answer_uncompressed(site):
+    result = await fetch(LOCAL, "GET", f"{site.base}/echo")
+    assert json.loads(result.body)["headers"]["accept-encoding"] == "identity"
+
+
 async def test_an_unreachable_port_is_a_network_error_not_a_crash(site):
     dead = site.port
     site.stop()
@@ -436,5 +455,8 @@ async def test_a_plain_client_would_have_reached_it(site):
         assert (await client.get(f"{site.base}/text")).status_code == 200
 
 
-def test_the_module_exposes_what_the_rest_of_the_code_relies_on():
-    assert {"authorization", "cookie", "x-api-key"} <= ssrf.CREDENTIAL_HEADERS
+def test_what_a_redirect_keeps_is_a_short_list_of_harmless_headers():
+    assert {"accept", "accept-language"} <= ssrf.KEPT_ACROSS_SITES
+    assert (
+        not {"authorization", "cookie", "x-api-key", "proxy-authorization"} & ssrf.KEPT_ACROSS_SITES
+    )

@@ -21,7 +21,9 @@ from typing import Any
 from personal_agent.clock import Clock, SystemClock
 from personal_agent.core.events import Kind, NewEvent, Trust
 from personal_agent.core.inbox import Inbox
+from personal_agent.core.sessions import DEFAULT_SESSION
 from personal_agent.db import Database, dumps, loads
+from personal_agent.security.sanitize import clipped, one_line, strip_invisible
 
 PENDING, APPROVED, DENIED, EXPIRED, SUPERSEDED = (
     "pending",
@@ -30,6 +32,11 @@ PENDING, APPROVED, DENIED, EXPIRED, SUPERSEDED = (
     "expired",
     "superseded",
 )
+
+STORED_SUMMARY_CHARS = 2000
+"""The most of one request that is kept and shown. `guard.summarize` stops sooner (and says so);
+this is the limit for any other way of opening a request, so that none of them can show the owner
+only the start of something long without telling them."""
 
 DENIED_MESSAGE = (
     "The owner declined this action. Do not retry it; ask them how they would like to proceed."
@@ -134,7 +141,7 @@ class Approvals:
                         session_key,
                         call.call_id,
                         call.tool,
-                        call.summary,
+                        clipped(plain(call.summary), STORED_SUMMARY_CHARS),
                         now,
                         now + self.timeout_s,
                     ),
@@ -307,20 +314,38 @@ class Approvals:
             self.db.execute("DELETE FROM run_states WHERE run_id = ?", (run_id,))
 
 
+def plain(summary: str) -> str:
+    """A summary as it may be stored and shown: on one line, with nothing in it that hides or
+    reorders text or acts on a terminal. It was made so already (`guard.summarize`); doing it
+    again here costs nothing and means that no way of creating a request can do otherwise."""
+    return one_line(strip_invisible(summary, formatting=True))
+
+
+def listing(approvals: Sequence[Approval]) -> str:
+    """The requests as a block of code, one line each, whole.
+
+    A code block shows text as it is, in every place a message can end up (a terminal, a phone's
+    chat, the web page): nothing in a summary can turn into a link or a heading, or look like a line
+    of the message around it. Each line begins with `#id tool:`, so no line of it can be the one
+    that ends the block."""
+    lines = [f"#{a.id} {a.tool}: {plain(a.summary)}" for a in approvals]
+    return "```\n" + "\n".join(lines) + "\n```"
+
+
 def request_text(approvals: Sequence[Approval]) -> str:
-    """The message that asks the owner. Plain text so every channel can show it."""
-    lines = ["I need your approval before I continue:"]
-    for a in approvals:
-        lines.append(f"  #{a.id}  {a.tool}: {a.summary}")
-    ids = " ".join(f"#{a.id}" for a in approvals)
+    """The message that asks the owner: what is to be approved, whole, then how to answer."""
+    ids = " ".join(str(a.id) for a in approvals)
     first = approvals[0].id
-    lines.append("")
+    lines = ["I need your approval before I continue:", "", listing(approvals), ""]
     lines.append(
         f"Reply `/approve {first}` or `/deny {first}`"
         + (" (and likewise for the others)." if len(approvals) > 1 else ".")
     )
     if len(approvals) > 1:
-        lines.append(f"Or answer all at once: `/approve all` / `/deny all` ({ids}).")
+        # `all` means what is waiting in the conversation it is typed in; these may be from
+        # another one (a timer's run, a webhook's), so the numbers are named.
+        everything = "all" if all(a.session_key == DEFAULT_SESSION for a in approvals) else ids
+        lines.append(f"Or answer them together: `/approve {everything}` / `/deny {everything}`.")
     return "\n".join(lines)
 
 
@@ -339,23 +364,43 @@ def split_targets(words: Sequence[str]) -> tuple[list[str], str | None]:
     return targets, None
 
 
+NOTHING_WAITING = "Nothing is waiting for your answer."
+
+
+def elsewhere(pending: Sequence[Approval], *, skip: Sequence[int] = ()) -> str:
+    """The waiting requests that are not part of an answer, as the owner can name them."""
+    return ", ".join(
+        f"#{a.id} ({clipped(plain(a.session_key), 40)})" for a in pending if a.id not in skip
+    )
+
+
 def choose_approvals(
-    pending: Sequence[Approval], targets: Sequence[str]
+    pending: Sequence[Approval], targets: Sequence[str], *, session_key: str | None = None
 ) -> tuple[list[int] | None, str | None]:
     """Which requests an owner's `/approve` or `/deny` means.
 
     Returns (ids, None), or (None, a sentence saying why it is not clear). A number is passed on
     even when that request is no longer waiting (a button pressed on an old message): `decide`
-    then says what became of it, which is more use than "nothing is waiting"."""
+    then says what became of it, which is more use than "nothing is waiting".
+
+    `all` is what is waiting in the conversation it is said in (`session_key`), not whatever else
+    the agent has asked about meanwhile: a request raised by a timer's run or by a webhook is
+    answered by naming it. Said where there is no conversation (the command line) it is all."""
     if "all" in targets:
-        if not pending:
-            return None, "Nothing is waiting for your answer."
-        return [a.id for a in pending], None
+        here = [a for a in pending if session_key in (None, a.session_key)]
+        if here:
+            return [a.id for a in here], None
+        if pending:
+            return None, (
+                "Nothing is waiting in this conversation. Waiting elsewhere: "
+                f"{elsewhere(pending)}. Name one to answer it."
+            )
+        return None, NOTHING_WAITING
     named = [int(m.group(1)) for t in targets if (m := _APPROVAL_ID.match(t))]
     if named:
         return named, None
     if not pending:
-        return None, "Nothing is waiting for your answer."
+        return None, NOTHING_WAITING
     if len(pending) == 1:
         return [pending[0].id], None
     ids = ", ".join(f"#{a.id}" for a in pending)

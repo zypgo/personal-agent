@@ -84,13 +84,33 @@ def test_with_several_waiting_the_owner_must_say_which(wired):
 
 def test_answering_twice_or_a_wrong_number_changes_nothing(wired):
     app, spy, _ = suspended(wired, [[push()], [assistant_message("ok")]])
-    assert "There is no approval #99" in invoke("approve", "99").output
+    wrong = invoke("approve", "99")
+    assert "There is no approval #99" in wrong.output
+    assert wrong.exit_code == 1  # a script must be able to tell that nothing was approved
     assert app.approvals.pending()  # still waiting
 
     invoke("approve", "1")
     again = invoke("approve", "1")
     assert "Approval #1 is already approved" in again.output
+    assert again.exit_code == 0  # what was asked for is the case
+    contradicted = invoke("deny", "1")
+    assert "already approved" in contradicted.output and contradicted.exit_code == 1
     assert spy.ran("shell") == ["git push origin main"]  # ran once
+
+
+def test_saying_yes_when_nothing_is_waiting_is_not_an_error(wired):
+    wired(ScriptedModel([]))
+    result = invoke("approve")
+    assert "Nothing is waiting" in result.output and result.exit_code == 0
+
+
+def test_an_unclear_answer_is_an_error_for_a_script(wired):
+    app, _, _ = suspended(
+        wired, [[push("c1", "git push a"), push("c2", "git push b")], [assistant_message("Done.")]]
+    )
+    vague = invoke("approve")
+    assert "Several actions are waiting" in vague.output and vague.exit_code == 1
+    assert len(app.approvals.pending()) == 2
 
 
 def test_pa_approvals_all_includes_answered_requests(wired):

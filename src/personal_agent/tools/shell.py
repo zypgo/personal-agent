@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING, Any
 from agents import RunContextWrapper, function_tool
 
 from personal_agent.harness.runctx import RunContext
-from personal_agent.security.floors import check_command
+from personal_agent.security.floors import check_command, simple_commands
 from personal_agent.security.sandbox import ExecResult
+from personal_agent.security.sanitize import clipped
 from personal_agent.tools.base import FULL, SCHEDULED, Category, ToolDef, ToolRegistry
 
 if TYPE_CHECKING:
@@ -31,7 +32,9 @@ and write results to files. Background processes are stopped when the command en
 - Common tools (git, python3, grep, sed, awk, tar, jq when installed) are available; check with \
 `which` before relying on anything else."""
 
-DETAIL_CHARS = 260
+RULE_CHARS = 260
+"""How much of a command an `allow` rule is shown: a longer one is marked `[compound]` as well,
+so that no rule written for its first words fits it."""
 COMPOUND = re.compile(r"[;&|<>`\n]|\$[({]")
 """Anything that can chain, redirect or substitute: such a command is not what a rule written for
 its first word (`shell:git status*`) was meant to allow."""
@@ -39,15 +42,34 @@ EXTRA_SECONDS = 15.0
 """How long the tool wrapper waits beyond the command's own timeout, so the sandbox can clean up."""
 
 
+def _command(args: dict[str, Any]) -> str:
+    return str(args.get("command", "")).strip()
+
+
 def command_detail(args: dict[str, Any]) -> str:
-    """The command as rules and the owner see it: marked `[compound]` when it chains or redirects,
-    and never silently cut."""
-    command = str(args.get("command", "")).strip()
+    """The command as `allow` rules and the audit log see it: marked `[compound]` when it chains
+    or redirects, and never silently cut."""
+    command = _command(args)
     compound = bool(COMPOUND.search(command))
-    if len(command) > DETAIL_CHARS:
+    if len(command) > RULE_CHARS:
         compound = True
-        command = f"{command[:DETAIL_CHARS]} ...[+{len(command) - DETAIL_CHARS} more characters]"
+        command = clipped(command, RULE_CHARS)
     return ("[compound] " if compound else "") + command
+
+
+def command_review(args: dict[str, Any]) -> str:
+    """The command as the owner reads it before approving: all of it (the one place that decides
+    how much is too much is `guard.summarize`), with the same `[compound]` mark."""
+    command = _command(args)
+    return ("[compound] " if COMPOUND.search(command) else "") + command
+
+
+def command_views(args: dict[str, Any]) -> list[str]:
+    """What `deny` and `always_ask` rules are tried on besides the detail: the whole command, and
+    each command inside it. A rule like `shell:rm -rf *` then also stops `cd build && rm -rf .`
+    and a command so long that its detail was cut before the part the rule is about."""
+    command = _command(args)
+    return [command, *simple_commands(command)]
 
 
 def requested_timeout(app: App, args: dict[str, Any]) -> float:
@@ -115,6 +137,8 @@ def register_shell(registry: ToolRegistry) -> None:
             tool=shell_tool,
             profiles=frozenset({FULL, SCHEDULED}),
             detail=command_detail,
+            review=command_review,
+            views=command_views,
             validate=_validate,
             floor=_floor,
             available=_available,

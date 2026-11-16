@@ -81,10 +81,14 @@ class Dispatcher:
                     outbox.mark_maybe_sent(message.id, f"unknown outcome: {exc}")
                     report.unknown.append(message.id)
             else:
-                outbox.mark_sent(message.id)
+                # One unit: a message the database calls sent has its memory commits applied and
+                # its place in the history, and a crash in between leaves it as it was (not sent),
+                # never "sent" with its bookmark lost.
+                with self.app.db.tx():
+                    outbox.mark_sent(message.id)
+                    self._record(message)
+                    self._commit(message)
                 report.sent.append(message.id)
-                self._record(message)
-                self._commit(message)
         return report
 
     def _record(self, message: OutMessage) -> None:
@@ -119,8 +123,26 @@ class Dispatcher:
         return RETRY_BACKOFF_S[min(max(attempts, 1) - 1, len(RETRY_BACKOFF_S) - 1)]
 
     def _commit(self, message: OutMessage) -> None:
-        """Apply the memory commands the agent attached to this message, now that it is delivered."""
+        """Apply the memory commands the agent attached to this message, now that it is delivered.
+        Never raises: the message is delivered whatever becomes of its bookmarks."""
+        if not message.on_sent:
+            return
+        if self._from_untrusted_run(message):
+            # `send_message` refuses these now; a message queued before that, or by anything else,
+            # is not allowed to write memory on behalf of a run the owner's words did not start.
+            log.warning("on_sent commits of message %s skipped: untrusted run", message.id)
+            return
         for command in message.on_sent:
-            result = self.app.memory.execute(command, actor=Actor.AGENT, run_id=message.run_id)
+            try:
+                result = self.app.memory.execute(command, actor=Actor.AGENT, run_id=message.run_id)
+            except Exception:
+                log.warning("on_sent commit for message %s failed", message.id, exc_info=True)
+                continue
             if result.startswith(_FAILURE_PREFIXES):
                 log.warning("on_sent commit for message %s failed: %s", message.id, result)
+
+    def _from_untrusted_run(self, message: OutMessage) -> bool:
+        from personal_agent.tools.base import UNTRUSTED  # the model SDK; only needed when running
+
+        run = self.app.runs.get(message.run_id) if message.run_id else None
+        return run is not None and run.profile == UNTRUSTED

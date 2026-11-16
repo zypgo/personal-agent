@@ -13,7 +13,13 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from personal_agent.clock import format_local
-from personal_agent.core.approvals import choose_approvals, split_targets
+from personal_agent.core.approvals import (
+    NOTHING_WAITING,
+    choose_approvals,
+    elsewhere,
+    listing,
+    split_targets,
+)
 
 if TYPE_CHECKING:
     from personal_agent.app import App
@@ -66,30 +72,33 @@ class ChatCommands:
         if name == "approvals":
             return self.approvals()
         if name in ("approve", "deny"):
-            return self.decide(name == "approve", args, channel)
+            return self.decide(name == "approve", args, channel, session_key)
         return f"Unknown command /{name}. Try /help."
 
     # ---- the commands ---------------------------------------------------------------
     def approvals(self) -> str:
         waiting = self.app.approvals.pending()
         if not waiting:
-            return "Nothing is waiting for your answer."
+            return NOTHING_WAITING
         now = self.app.clock.now()
-        lines = ["Waiting for your answer:"]
-        for item in waiting:
-            lines.append(
-                f"#{item.id}  {item.tool}: {item.summary[:200]} (expires in {_span(item.expires_at - now)})"
-            )
-        lines.append("")
-        lines.append("/approve N or /deny N (or `all`).")
-        return "\n".join(lines)
+        expiry = ", ".join(f"#{a.id} in {_span(a.expires_at - now)}" for a in waiting)
+        return "\n".join(
+            [
+                "Waiting for your answer:",
+                "",
+                listing(waiting),
+                "",
+                f"They expire: {expiry}.",
+                "/approve N or /deny N (or `all`).",
+            ]
+        )
 
-    def decide(self, approve: bool, args: list[str], channel: str) -> str:
+    def decide(self, approve: bool, args: list[str], channel: str, session_key: str) -> str:
         app = self.app
         targets, note = split_targets(args)
-        ids, problem = choose_approvals(app.approvals.pending(), targets)
+        ids, problem = choose_approvals(app.approvals.pending(), targets, session_key=session_key)
         if ids is None:
-            return problem or "Nothing is waiting for your answer."
+            return problem or NOTHING_WAITING
         lines: list[str] = []
         resumed = False
         for approval_id in ids:
@@ -98,6 +107,8 @@ class ChatCommands:
             resumed = resumed or result.resume_queued
         if resumed:
             self.wake()  # the paused work continues now
+        if "all" in targets and (left := app.approvals.pending()):
+            lines.append(f"Still waiting elsewhere: {elsewhere(left)}. Name one to answer it.")
         return "\n".join(lines)
 
     def status(self) -> str:

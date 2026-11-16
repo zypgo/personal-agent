@@ -78,4 +78,5 @@ def _answer(approve: bool, words: list[str], note: str | None) -> None:
     from personal_agent.commands.conversation import decide
 
     with opened() as agent:
-        decide(agent, approve, words, note)
+        if not decide(agent, approve, words, note):
+            raise typer.Exit(1)

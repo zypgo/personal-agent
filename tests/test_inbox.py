@@ -38,10 +38,29 @@ def test_claim_batches_one_session_in_order(inbox):
 
 
 def test_trust_is_carried_and_batch_reports_it(inbox):
-    inbox.add(msg("from owner"))
     inbox.add(msg("from outside", trust=Trust.UNTRUSTED))
-    batch = inbox.claim("w")
-    assert not batch.trusted
+    assert not inbox.claim("w").trusted
+
+
+def test_a_batch_has_one_trust_level_and_keeps_the_order(inbox):
+    """Text from outside must not ride along in the run of the owner's message, and the owner's
+    message must not be held to the untrusted profile because something else was waiting."""
+    inbox.add(msg("first"))
+    inbox.add(msg("from outside", trust=Trust.UNTRUSTED))
+    inbox.add(msg("third"))
+    inbox.add(msg("fourth"))
+
+    first = inbox.claim("w")
+    assert first.trusted and [e.text for e in first.events] == ["first"]
+    assert inbox.claim("w2") is None  # one run per session at a time, whatever the trust
+    inbox.complete(first)
+
+    second = inbox.claim("w")
+    assert not second.trusted and [e.text for e in second.events] == ["from outside"]
+    inbox.complete(second)
+
+    third = inbox.claim("w")
+    assert third.trusted and [e.text for e in third.events] == ["third", "fourth"]
 
 
 def test_expired_lease_makes_events_claimable_again_and_counts_attempt(inbox, clock):
@@ -52,6 +71,34 @@ def test_expired_lease_makes_events_claimable_again_and_counts_attempt(inbox, cl
     second = inbox.claim("w2")
     assert second.ids == [event_id]
     assert second.events[0].attempts == 2  # the crashed claim counted
+
+
+def test_a_lease_held_by_a_live_run_is_not_taken_over_when_the_clock_jumps(inbox, clock):
+    """A laptop that slept past the lease did not stop the run that was waiting for a tool."""
+    first = inbox.add(msg("charge the card once")).id
+    batch = inbox.claim("w1")
+    with inbox.holding(batch):
+        clock.advance(1_000)  # far past the 60 s lease
+        assert not inbox.has_ready()
+        assert inbox.claim("w2") is None
+        inbox.add(msg("and this"))  # later events of the session wait for the run too
+        assert inbox.claim("w2") is None
+        assert inbox.counts()["dead"] == 0
+    # once the run is gone (the worker died), the lease runs out as it always did
+    taken = inbox.claim("w2")
+    assert taken is not None and taken.ids[0] == first
+
+
+def test_a_live_run_is_not_declared_dead_for_having_used_its_attempts(db, clock):
+    inbox = Inbox(db, clock, lease_s=60, max_attempts=1, max_age_s=3600)
+    inbox.add(msg())
+    batch = inbox.claim("w1")  # the one allowed attempt
+    with inbox.holding(batch):
+        clock.advance(120)
+        assert inbox.claim("w2") is None
+        assert inbox.counts() == {"pending": 0, "leased": 1, "done": 0, "dead": 0}
+    assert inbox.claim("w2") is None  # not running any more: now it is poison
+    assert inbox.counts()["dead"] == 1
 
 
 def test_poison_event_dies_after_max_attempts(inbox, clock):

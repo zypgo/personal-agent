@@ -110,7 +110,9 @@ async def test_a_recurring_job_is_a_standing_authorization_and_waits_for_the_own
     assert result.outcome.status == "awaiting_approval"
     assert app.timers.get("brief") is None  # nothing exists until the owner agrees
     [approval] = app.approvals.pending()
-    assert approval.summary == "create brief 0 8 * * *"
+    assert approval.summary == (
+        "create brief 0 8 * * * | prompt (23 characters): Send the morning brief."
+    )  # the prompt is the whole of what a recurring job may do: the owner reads it
 
     app.approvals.decide(approval.id, True, by="owner")
     await drain(app)

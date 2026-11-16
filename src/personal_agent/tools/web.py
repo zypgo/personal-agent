@@ -29,6 +29,7 @@ from personal_agent.harness.instructions import wrap_untrusted
 from personal_agent.harness.runctx import RunContext
 from personal_agent.parsing import loads_json
 from personal_agent.security.broker import PLACEHOLDER, SecretProblem
+from personal_agent.security.sanitize import clipped
 from personal_agent.security.ssrf import Blocked, Fetched, check_url, fetch, origin_of
 from personal_agent.tools.base import FULL, SCHEDULED, Category, ToolDef, ToolRegistry
 from personal_agent.tools.htmltext import html_to_text
@@ -65,6 +66,11 @@ HEADER_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+")
 LOCAL_NAMES = frozenset({"localhost", "localhost.localdomain", "ip6-localhost"})
 SHOWN_HEADERS = ("content-type", "location", "retry-after", "x-ratelimit-remaining", "link")
 TEXT_TYPES = ("text/", "application/json", "application/xml", "application/javascript")
+DETAIL_URL_CHARS = 260
+"""How much of an address `tool:detail` rules and the audit log are shown (and told if it is more)."""
+REVIEW_URL_CHARS = 600
+REVIEW_PART_CHARS = 400
+"""How much of an address, of the headers and of the body the owner is shown to approve a request."""
 
 
 class HeaderPair(BaseModel):
@@ -78,13 +84,6 @@ def _host(url: str) -> str:
         return (urlsplit((url or "").strip()).hostname or "").lower().rstrip(".")
     except ValueError:
         return ""
-
-
-def _bounded(text: str, limit: int = 260) -> str:
-    """Text for rules and the owner's approval message: never silently cut."""
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit]} ...[+{len(text) - limit} more characters]"
 
 
 def _budget(app: App, asked: int) -> int:
@@ -155,7 +154,7 @@ def _plain_type(response: Fetched) -> str:
 def _shown_url(asked: str, response: Fetched) -> str:
     """The address to show: what the model wrote (secret placeholders included, never their
     values) unless redirects led somewhere else."""
-    return _bounded(response.url if response.redirects else asked, 300)
+    return clipped(response.url if response.redirects else asked, 300)
 
 
 def _cut(text: str, cap: int) -> str:
@@ -173,13 +172,6 @@ def _check_literal_host(app: App, host: str) -> str | None:
     except ValueError:
         return None
     return app.net.check(host, ip)
-
-
-def _secret_names(app: App, args: dict[str, Any]) -> set[str]:
-    texts = [str(args.get("url", "")), args.get("body")]
-    for pair in args.get("headers") or []:
-        texts.append(str((pair or {}).get("value", "")))
-    return app.secrets.used_in(*texts)
 
 
 def _validate(rc: RunContext, args: dict[str, Any]) -> str | None:
@@ -237,23 +229,79 @@ def _check_secrets(app: App, args: dict[str, Any], url: str) -> set[str]:
     return names
 
 
+def _carries_only_its_address(args: dict[str, Any]) -> bool:
+    """Whether a request says nothing but where it goes. A body or a header is text the model can
+    fill with anything it has seen, and the address gate judges only the address: `GET <a page it
+    read>` with `X-Notes: <the owner's notes>` is a request to an address it has legitimately
+    seen, and the page's owner reads the header. So a header counts only when it holds a secret
+    placeholder: the model does not choose what that stands for, and it is only ever sent to the
+    hosts the owner listed for it."""
+    if args.get("body"):
+        return False
+    return all(
+        PLACEHOLDER.search(str((pair or {}).get("value", ""))) for pair in args.get("headers") or []
+    )
+
+
 def _category(rc: RunContext, args: dict[str, Any]) -> Category:
-    """Reading is light, changing is not. And once the run has read outside content, an address it
-    has not legitimately seen counts as an action that sends something out (see `tools/urls.py`)."""
+    """Reading is light, changing is not. And once the run has read outside content, a request that
+    could carry something out (an address it has not legitimately seen, see `tools/urls.py`, or
+    anything the model wrote into the request besides the address) counts as sending."""
     if str(args.get("method", "GET")).upper() not in READ_METHODS:
         return Category.NET_WRITE
-    if rc.tainted and not rc.knows_url(str(args.get("url", ""))):
+    if rc.tainted and not (
+        rc.knows_url(str(args.get("url", ""))) and _carries_only_its_address(args)
+    ):
         return Category.NET_WRITE
     return Category.READ
 
 
 def _detail_fetch(args: dict[str, Any]) -> str:
-    return _bounded(str(args.get("url", "")).strip())
+    return clipped(str(args.get("url", "")).strip(), DETAIL_URL_CHARS)
 
 
 def _detail_request(args: dict[str, Any]) -> str:
     method = str(args.get("method", "GET")).upper()
-    return _bounded(f"{method} {str(args.get('url', '')).strip()}")
+    return clipped(f"{method} {str(args.get('url', '')).strip()}", DETAIL_URL_CHARS)
+
+
+def _address(url: object) -> str:
+    """An address as the owner reads it, and where it really goes. A host name written with letters
+    outside a-z can look like another (some Cyrillic letters are drawn exactly like Latin ones),
+    so it is followed by the name the network will use, which cannot."""
+    text = str(url or "").strip()
+    shown = clipped(text, REVIEW_URL_CHARS)
+    host = _host(text)
+    if host.isascii():
+        return shown
+    try:
+        real = host.encode("idna").decode("ascii")
+    except UnicodeError:
+        real = "not a valid host name"
+    return f"{shown} (host: {real})"
+
+
+def _review_fetch(args: dict[str, Any]) -> str:
+    """The address as the owner reads it: in a tainted run it is the one thing that can carry data."""
+    return _address(args.get("url"))
+
+
+def _review_request(args: dict[str, Any]) -> str:
+    """The request as the owner reads it: where it goes, and what it carries in its headers and its
+    body. Each part has its own room, so a long body cannot push the address out of view."""
+    method = str(args.get("method", "GET")).upper()
+    parts = [f"{method} {_address(args.get('url'))}"]
+    headers = [
+        f"{str((pair or {}).get('name', '')).strip()}: {(pair or {}).get('value', '')}"
+        for pair in args.get("headers") or []
+    ]
+    if headers:
+        parts.append("headers: " + clipped("; ".join(headers), REVIEW_PART_CHARS))
+    body = args.get("body")
+    if body:
+        text = str(body)
+        parts.append(f"body ({len(text)} characters): " + clipped(text, REVIEW_PART_CHARS))
+    return " | ".join(parts)
 
 
 # ---- doing the request -----------------------------------------------------------------------------------
@@ -306,26 +354,26 @@ async def web_fetch_tool(
     except (Blocked, SecretProblem) as exc:
         return f"Error: {_one_line(str(exc))}"
     except httpx.HTTPError as exc:
-        return f"Error: could not fetch {_bounded(url, 200)}: {_describe(exc)}"
+        return f"Error: could not fetch {clipped(url, 200)}: {_describe(exc)}"
     rc.know_urls([url, response.url, *response.redirects])
     source = "web:" + _host(response.url)
     if response.status >= 400:
         # No part of the page is shown: an error result does not mark the run as having read
         # outside content, so nothing a server wrote may reach the model through it.
         # (`http_request` is for APIs whose error bodies matter; its results always taint.)
-        return f"Error: the server answered HTTP {response.status} for {_bounded(url, 200)}"
+        return f"Error: the server answered HTTP {response.status} for {clipped(url, 200)}"
     text = _readable(response)
     if text is None:
         return (
-            f"Error: {_bounded(url, 200)} is {_plain_type(response)} ({len(response.body)} bytes), "
+            f"Error: {clipped(url, 200)} is {_plain_type(response)} ({len(response.body)} bytes), "
             "which cannot be read as text."
         )
     shown = _cut(text, cap)
     rc.know_urls(find_urls(shown))  # the links the model can actually see
     note = " (longer than the download limit; the end is missing)" if response.truncated else ""
-    redirected = f"\nRedirected to: {_bounded(response.url, 300)}" if response.redirects else ""
+    redirected = f"\nRedirected to: {clipped(response.url, 300)}" if response.redirects else ""
     header = (
-        f"URL: {_bounded(url, 300)}{redirected}\nStatus: {response.status}\n"
+        f"URL: {clipped(url, 300)}{redirected}\nStatus: {response.status}\n"
         f"Content-Type: {response.content_type or '?'}{note}\n"
     )
     return header + wrap_untrusted(shown, source)
@@ -387,6 +435,7 @@ def register_web(registry: ToolRegistry, config: Config) -> None:
                 profiles=profiles,
                 taints=True,
                 detail=_detail_fetch,
+                review=_review_fetch,
                 category_for=_category,
                 validate=_validate,
             )
@@ -402,6 +451,7 @@ def register_web(registry: ToolRegistry, config: Config) -> None:
                 profiles=profiles,
                 taints=True,
                 detail=_detail_request,
+                review=_review_request,
                 category_for=_category,
                 validate=_validate,
             )
@@ -472,7 +522,7 @@ def record_hosted_search(app: App, rc: RunContext, response: Any) -> int:
             layer="hosted",
             reason="OpenAI runs this tool; it cannot be asked about first",
             args={"action": kind, "query": what},
-            detail=f"{kind}: {what}"[:300],
+            detail=clipped(f"{kind}: {what}", 300),
             outcome="ok",
             tainted=True,
         )

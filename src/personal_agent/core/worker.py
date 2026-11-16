@@ -27,6 +27,16 @@ log = logging.getLogger(__name__)
 
 OnFailure = Literal["retry", "drop"]
 
+MIN_HEARTBEAT_S = 1.0
+"""The lease is extended every third of its length, but never more often than this."""
+
+
+def dropped_text(event: Event, count: int) -> str:
+    """What the owner is told when events from a source (a webhook, a timer) were given up on."""
+    if count == 1:
+        return f"An event from '{event.source}' ({event.kind}) failed repeatedly and was dropped."
+    return f"{count} events from '{event.source}' have failed repeatedly and been dropped today."
+
 
 @dataclass
 class WorkResult:
@@ -56,12 +66,19 @@ class Worker:
         self._tell_owner_about_dead(app.inbox.take_dead())
         if batch is None:
             return None
+        with app.inbox.holding(batch):  # nothing awaits between the claim and here
+            return await self._process(batch, on_failure)
 
-        beat = asyncio.create_task(self._keep_lease(batch))
+    async def _process(self, batch: Batch, on_failure: OnFailure) -> WorkResult:
+        app = self.app
+        run = asyncio.create_task(self._run(batch))
+        beat = asyncio.create_task(self._keep_lease(batch, run))
         try:
-            with app.live.working(batch.session_key, channel=self._asked_on(batch)):
-                outcome = await self.harness.run(batch)
+            outcome = await run
         except asyncio.CancelledError:
+            this = asyncio.current_task()
+            if batch.lost and not (this and this.cancelling()):
+                return WorkResult(batch)  # stopped on purpose: the events are somebody else's now
             app.inbox.release(batch)
             raise
         except Exception as exc:
@@ -84,6 +101,10 @@ class Worker:
         app.inbox.complete(batch)
         return WorkResult(batch, outcome=outcome)
 
+    async def _run(self, batch: Batch) -> RunOutcome:
+        with self.app.live.working(batch.session_key, channel=self._asked_on(batch)):
+            return await self.harness.run(batch)
+
     @staticmethod
     def _asked_on(batch: Batch) -> str | None:
         """The channel the owner wrote on, if this batch is an answer to something they said."""
@@ -92,13 +113,19 @@ class Worker:
                 return event.source
         return None
 
-    async def _keep_lease(self, batch: Batch) -> None:
-        """Extend the lease while the run is alive so a slow run is not mistaken for a crash."""
-        interval = max(self.app.inbox.lease_s / 3, 1.0)
+    async def _keep_lease(self, batch: Batch, run: asyncio.Task[RunOutcome]) -> None:
+        """Extend the lease while the run is alive so a slow run is not mistaken for a crash.
+
+        If the lease is lost anyway (the events were dropped or taken over), stop the run: they
+        are somebody else's now, and a second run of the same message would repeat its effects.
+        """
+        interval = max(self.app.inbox.lease_s / 3, MIN_HEARTBEAT_S)
         while True:
             await asyncio.sleep(interval)
             if not self.app.inbox.heartbeat(batch):
-                log.warning("lost the lease on events %s while still running", batch.ids)
+                log.warning("lost the lease on events %s: stopping the run", batch.ids)
+                batch.lost = True
+                run.cancel()
                 return
 
     # ---- telling the owner -----------------------------------------------------------
@@ -170,13 +197,26 @@ class Worker:
             elif is_dream(event):
                 Dreamer(app).gave_up()  # tidying memory is not worth a message until it goes on
             else:
+                count = self._dropped_today(event.source, day)
+                if count & (count - 1):
+                    continue  # told at 1, 2, 4, 8 ...: a source gone bad is not a stream of messages
                 self._notice(
                     channel=app.notify_channel(),
                     recipient=None,
                     session_key=event.session_key,
-                    text=f"An event from '{event.source}' ({event.kind}) failed repeatedly and was dropped.",
-                    dedupe=f"dead:{event.source}:{day}",
+                    text=dropped_text(event, count),
+                    dedupe=f"dead:{event.source}:{day}:{count}",
                 )
+
+    def _dropped_today(self, source: str, day: int) -> int:
+        """How many events from `source` were given up on today, this one included. One row per
+        source, started afresh each day, so what is kept does not grow."""
+        db = self.app.db
+        key = f"dropped:{source}"
+        saved_day, _, saved = (db.kv_get(key) or "").partition(" ")
+        count = int(saved) + 1 if saved_day == str(day) and saved.isdigit() else 1
+        db.kv_set(key, f"{day} {count}", now=self.app.clock.now())
+        return count
 
     def _abandon_resume(self, event: Event) -> None:
         """A suspended run that cannot be resumed after repeated attempts: give up on it, tell

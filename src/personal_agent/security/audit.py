@@ -16,8 +16,11 @@ from typing import Any
 from personal_agent.clock import Clock, SystemClock
 from personal_agent.db import Database
 from personal_agent.security.redact import known_secret_values, redact
+from personal_agent.security.sanitize import clipped
 
 MAX_ARGS_CHARS = 1500
+DETAIL_CHARS = 500
+"""A call's detail as stored; the tool layer already keeps it shorter and marks what it cut."""
 
 
 @dataclass(frozen=True)
@@ -111,7 +114,7 @@ class Audit:
                     layer,
                     reason,
                     safe_args(args),
-                    redact(detail, known_secret_values(os.environ))[:300],
+                    clipped(redact(detail, known_secret_values(os.environ)), DETAIL_CHARS),
                     outcome,
                     int(tainted),
                 ),

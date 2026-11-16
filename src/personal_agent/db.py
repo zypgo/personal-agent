@@ -361,11 +361,25 @@ class DatabaseTooNew(RuntimeError):
 CHECKPOINT_MODES = ("PASSIVE", "FULL", "RESTART", "TRUNCATE")
 
 
+def _create_private(path: str) -> None:
+    """Make an empty file readable by its owner only, unless there is one already.
+
+    SQLite would create it with the process's umask (usually readable by the whole group), and
+    copies the permissions of the database to its write-ahead log. Everything the agent has been
+    told and has done is in here."""
+    try:
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except OSError:  # there already, or cannot be made: SQLite says what is wrong
+        pass
+
+
 class Database:
     def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5_000) -> None:
         self.path = str(path)
         self._lock = threading.RLock()
         self._depth = 0
+        if self.path != ":memory:":
+            _create_private(self.path)
         self._conn = sqlite3.connect(
             self.path,
             isolation_level=None,  # autocommit; transactions are explicit
