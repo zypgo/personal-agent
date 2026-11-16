@@ -353,7 +353,11 @@ async def test_the_pass_has_the_memory_and_search_tools_and_nothing_else(make_ap
     app = make_app(model, config=config())
     chatter(app)
     await night(app, clock)
-    assert {t.name for t in model.calls[0].tools} == {"memory", "search_history"}
+    assert {t.name for t in model.calls[0].tools} == {
+        "memory",
+        "search_history",
+        "search_tool_history",
+    }
 
 
 async def test_the_pass_reads_the_digest_and_works_to_the_dream_instructions(make_app, clock):
@@ -727,7 +731,9 @@ def test_a_rename_is_undone_by_renaming_back(make_app):
     assert memory.read_text("/memories/state/z.md") is None
 
 
-def test_a_change_that_cannot_be_undone_does_not_stop_the_others(make_app, monkeypatch):
+def test_a_failed_restore_is_explicit_and_does_not_commit_a_partial_undo(make_app, monkeypatch):
+    from personal_agent.memory.store import MemoryRestoreError
+
     app = make_app()
     memory = app.memory
     memory.write_text("/memories/state/a.md", "one", actor=Actor.USER)
@@ -742,8 +748,9 @@ def test_a_change_that_cannot_be_undone_does_not_stop_the_others(make_app, monke
         return real(path, text, **kw)
 
     monkeypatch.setattr(memory, "write_text", refuse_b)
-    assert memory.revert_run("r1") == ["/memories/state/a.md"]
-    assert memory.read_text("/memories/state/a.md") == "one"
+    with pytest.raises(MemoryRestoreError, match="Could not restore"):
+        memory.revert_run("r1")
+    assert memory.read_text("/memories/state/a.md") == "two"
     assert memory.read_text("/memories/state/b.md") == "bzz"
 
 
@@ -825,12 +832,12 @@ def test_the_cursor_only_moves_forward(make_app):
     assert d.cursor() == 50
 
 
-def test_a_pass_that_did_not_finish_moves_nothing_and_counts_as_a_bad_night(make_app):
+def test_a_failed_pass_counts_as_a_bad_night_but_waiting_for_approval_does_not(make_app):
     app = make_app(config=config())
     d = dreamer(app)
     d.finished(dream_batch(to_id=20), outcome("failed"))
     d.finished(dream_batch(to_id=20), outcome("awaiting_approval"))
-    assert d.cursor() == 0 and app.db.kv_get(FAILURES) == "2"
+    assert d.cursor() == 0 and app.db.kv_get(FAILURES) == "1"
 
 
 def test_only_a_dream_event_is_bookkept(make_app):

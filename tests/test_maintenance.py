@@ -44,8 +44,9 @@ WINDOW_RULES = {
         "pairings",
         "web_invites",
         "web_sessions",
+        "ingress_receipts",
     },
-    "runs": {"runs", "spend"},
+    "runs": {"runs", "spend", "usage_events"},
     "audit": {"audit"},
     "memory_history": {"memory_history"},
 }
@@ -128,6 +129,19 @@ def test_a_row_exactly_as_old_as_the_window_stays_and_one_second_older_goes(db, 
     tidy_up(db, clock).prune()
     assert rowids(db, "events") == {on_edge}
     assert older not in rowids(db, "events")
+
+
+def test_an_old_dead_event_stays_until_its_terminal_notice_is_durable(db, clock):
+    event_id = insert(db, "events", "dead", clock.now() - OLD)
+    db.execute(
+        "INSERT INTO dead_event_notices(event_id,created_at) VALUES (?,?)",
+        (event_id, clock.now() - OLD),
+    )
+    tidy_up(db, clock).prune()
+    assert event_id in rowids(db, "events")
+    db.execute("DELETE FROM dead_event_notices WHERE event_id=?", (event_id,))
+    tidy_up(db, clock).prune()
+    assert event_id not in rowids(db, "events")
 
 
 def test_the_newest_version_of_every_memory_file_stays_however_old(db, clock):

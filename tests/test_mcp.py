@@ -519,7 +519,7 @@ async def test_a_server_that_will_not_start_is_skipped_and_retried_later(build, 
     await app.mcp.prepare()
     assert names(app) == [] and fake.connects == 1
     [note] = app.mcp.notes()
-    assert "'fake' is not available (RuntimeError: boom)" in note
+    assert "'fake' is not available" in note and "boom" not in note
 
     clock.advance(29)
     await app.mcp.prepare()
@@ -552,7 +552,8 @@ async def test_a_server_that_connects_but_cannot_list_tools_is_closed_again(buil
     app = build(config(server(connect_timeout_s=3)), fake)
     await app.mcp.prepare()
     assert names(app) == [] and fake.cleanups == 1
-    assert "did not answer within 3 seconds" in app.mcp.notes()[0]
+    assert "not available" in app.mcp.notes()[0]
+    assert "did not answer within 3 seconds" in app.mcp.report("fake").error
 
 
 async def test_a_connection_that_dies_while_in_use_is_noticed_on_the_next_run(build, clock):
@@ -590,7 +591,8 @@ async def test_a_missing_environment_variable_is_reported_without_starting_anyth
     app = build(config(server(env={"TOKEN": "${PA_TEST_TOKEN}"})), fake)
     await app.mcp.prepare()
     assert fake.connects == 0 and names(app) == []
-    assert "PA_TEST_TOKEN is not set" in app.mcp.notes()[0]
+    assert "not available" in app.mcp.notes()[0]
+    assert "PA_TEST_TOKEN is not set" in app.mcp.report("fake").error
 
 
 async def test_variables_are_filled_in_for_the_server_and_nowhere_else(build, monkeypatch):
@@ -668,13 +670,13 @@ async def test_a_server_that_only_returns_the_owners_data_can_be_unfenced(build)
     assert (await app.mcp._call("fake", "list_notes", "{}")).startswith("Result: Error rate")
 
 
-async def test_a_failure_reported_by_the_server_is_data_not_a_failed_call(build):
+async def test_a_failure_reported_by_the_server_carries_both_error_and_untrusted_metadata(build):
     fake = FakeServer(tools=NOTES, answers={"add_note": answer("no such notebook", error=True)})
     app = build(config(server()), fake)
     await app.mcp.prepare()
     out = await app.mcp._call("fake", "add_note", "{}")
     assert out.startswith("The tool fake/add_note reported a failure:\n<untrusted")
-    assert not out.startswith("Error")  # the call completed; the guard must not count it as failed
+    assert out.error and out.untrusted
 
 
 @pytest.mark.parametrize("raw", ["not json", "[1, 2]", '"text"'])

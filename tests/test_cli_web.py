@@ -58,13 +58,13 @@ def test_the_overview_counts_browsers_and_waiting_links(ready):
 
 def test_the_overview_explains_how_to_reach_the_page_from_a_phone(ready):
     ready(enabled=True)
-    assert "tailscale serve" in flat(invoke("web").output)
+    assert "pa web connect --via tailscale" in flat(invoke("web").output)
 
 
 def test_with_a_public_address_the_overview_does_not_nag(ready):
     ready(enabled=True, public_url=PUBLIC)
     out = flat(invoke("web").output)
-    assert PUBLIC in out and "tailscale serve" not in out
+    assert PUBLIC in out and "pa web connect" not in out
 
 
 # ---- pairing ----------------------------------------------------------------------------------

@@ -898,6 +898,7 @@ async def test_a_taken_port_is_an_error_for_the_supervisor_to_report(make_app):
 
     taken = bind("127.0.0.1", 0)
     try:
+        taken.listen(1)
         app = make_app(
             config=Config(runtime=FAST, webhooks=WebhooksConfig(enabled=True, routes=ROUTES))
         )

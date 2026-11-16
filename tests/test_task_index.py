@@ -172,8 +172,8 @@ def test_a_folder_that_is_a_symlink_is_not_followed(make_app, tmp_path):
     assert index(app) == ""
 
 
-def test_only_the_top_of_a_file_is_read(make_app):
-    """The title and the status belong in the first few lines; a file is never read whole."""
+def test_only_the_top_of_a_file_is_used_for_task_labels(make_app):
+    """The title and status belong at the top; text deeper in a note cannot hide an open task."""
     app = make_app()
     task(app, "deep.md", "# Deep\n" + "x" * 5000 + "\nstatus: done\n")
     assert index(app) == "- tasks/deep.md: Deep"

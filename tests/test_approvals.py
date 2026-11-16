@@ -55,7 +55,8 @@ def test_approving_the_only_call_queues_the_resume_event_once(approvals, inbox):
     assert result.changed and result.resume_queued
     assert approvals.is_approved("r1", "c1")
     [event] = pending_events(inbox)
-    assert event.kind == Kind.APPROVAL_RESPONSE and event.payload == {"run_id": "r1"}
+    assert event.kind == Kind.APPROVAL_RESPONSE
+    assert event.payload == {"run_id": "r1", "generation": 1}
 
     again = approvals.decide(a.id, True, by="cli")
     assert not again.changed and "already approved" in again.message

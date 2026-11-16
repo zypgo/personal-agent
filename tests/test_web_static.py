@@ -74,9 +74,11 @@ def page_of(assets):
 # ---- everything it needs is there ---------------------------------------------------------------
 def test_the_page_is_made_of_exactly_the_expected_files(assets):
     assert sorted(assets[0]) == [
+        "activity.js",
         "api.js",
         "app.js",
         "apple-touch-icon.png",
+        "audio-metadata.js",
         "format.js",
         "icon-192.png",
         "icon-512.png",
@@ -367,7 +369,7 @@ def test_every_script_parses(name):
 @needs_node
 def test_the_scripts_own_tests_pass():
     result = subprocess.run(
-        ["node", "--test", "./tests/js/*.test.mjs"],
+        ["node", "--test", "--test-reporter=tap", "./tests/js/*.test.mjs"],
         cwd=ROOT,
         capture_output=True,
         text=True,

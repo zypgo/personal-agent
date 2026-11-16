@@ -849,6 +849,68 @@ async def test_a_secret_reaches_the_server_it_is_meant_for_and_nowhere_else(
     assert "{{secret:gh}}" in whole_record(app)  # what the model wrote is what was kept
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        {"name": "Authorization", "value": "Bearer {{secret:gh}} PRIVATE_NOTE_9427"},
+        {"name": "X-PRIVATE_NOTE_9427", "value": "{{secret:gh}}"},
+        {"name": "Private-Token", "value": "PRIVATE_NOTE_9427 {{secret:gh}}"},
+        {"name": "Authorization", "value": "Bearer {{SECRET:PRIVATE_NOTE_9427}}"},
+    ],
+)
+async def test_a_credential_cannot_hide_private_data_in_a_header(
+    make_app, site, names, monkeypatch, header
+):
+    """The presence of a credential does not approve arbitrary text in its name or value."""
+    monkeypatch.setenv("GH_TOKEN", TOKEN)
+    url = f"http://api.test:{site.port}/text"
+    model = ScriptedModel(
+        [[fetch("read", url)], [req("send", url, headers=[header])], [assistant_message("done")]]
+    )
+    app = make_app(model, config=secret_cfg())
+    [result] = await run(app)
+
+    assert result.outcome.status == "awaiting_approval"
+    assert len(site.seen) == 1  # only the first, unadorned page read reached the server
+    row = next(r for r in app.audit.recent() if r.call_id == "send")
+    assert (row.category, row.verdict, row.layer, row.tainted) == (
+        "net_write",
+        "ask",
+        "taint",
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        {"name": "Authorization", "value": "Bearer {{secret:gh}}"},
+        {"name": "authorization", "value": "Basic {{secret:gh}}"},
+        {"name": "X-API-Key", "value": "{{secret:gh}}"},
+    ],
+)
+async def test_a_fixed_credential_template_still_reads_a_known_api_without_asking(
+    make_app, site, names, monkeypatch, header
+):
+    monkeypatch.setenv("GH_TOKEN", TOKEN)
+    url = f"http://api.test:{site.port}/text"
+    model = ScriptedModel(
+        [
+            [fetch("read", url)],
+            [req("authenticated", url, headers=[header])],
+            [assistant_message("done")],
+        ]
+    )
+    app = make_app(model, config=secret_cfg())
+    [result] = await run(app)
+
+    assert result.outcome.status == "completed" and not app.approvals.pending()
+    assert len(site.seen) == 2
+    assert TOKEN in site.seen[1].headers[header["name"].lower()]
+    row = next(r for r in app.audit.recent() if r.call_id == "authenticated")
+    assert (row.category, row.verdict, row.tainted) == ("read", "allow", True)
+
+
 async def test_secrets_work_in_the_url_and_the_body_too(make_app, site, names, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", TOKEN)
     model = ScriptedModel(

@@ -14,6 +14,7 @@ from test_launchd import WAITING, FakeLaunchctl
 @pytest.fixture
 def where(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "somebody"))
+    monkeypatch.setattr(doctor.sys, "platform", "darwin")
     return tmp_path
 
 

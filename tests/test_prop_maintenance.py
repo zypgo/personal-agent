@@ -27,8 +27,10 @@ WINDOW = {
     "pairings": "records",
     "web_invites": "records",
     "web_sessions": "records",
+    "ingress_receipts": "records",
     "runs": "runs",
     "spend": "runs",
+    "usage_events": "runs",
     "audit": "audit",
     "memory_history": "memory_history",
 }

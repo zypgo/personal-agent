@@ -164,7 +164,23 @@ def test_static_checks_name_the_env_file_when_it_cannot_be_read(paths):
         ("config_file", ["service", "status"], 0),  # still says how the service is doing
     ],
 )
-def test_commands_say_what_is_wrong_with_the_file_not_show_a_traceback(paths, which, command, code):
+def test_commands_say_what_is_wrong_with_the_file_not_show_a_traceback(
+    paths, which, command, code, monkeypatch
+):
+    from personal_agent.commands import service
+    from personal_agent.launchd import ServiceManager
+    from test_launchd import FakeLaunchctl
+
+    monkeypatch.setattr(
+        service,
+        "manager_for",
+        lambda p: ServiceManager(
+            p,
+            platform="darwin",
+            launchctl=FakeLaunchctl(),
+            agents=p.home / "launchagents",
+        ),
+    )
     getattr(paths, which).write_bytes(GBK)
 
     result = invoke(*command)

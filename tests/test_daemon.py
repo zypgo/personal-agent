@@ -232,15 +232,17 @@ async def test_the_daemon_removes_old_records_once_a_day(make_app, clock, monkey
     app = make_app(ScriptedModel([]), config=cfg())
     insert(app.db, "events", "done", clock.now() - 400 * DAY, 1)
     async with running(app) as daemon:
-        await eventually(lambda: app.janitor.last(), what="the first upkeep")
+        # The background thread commits before the daemon receives its report and updates
+        # the counters. Wait for that completion, not an intermediate database observation.
+        await eventually(lambda: daemon.stats.rows_pruned == 1, what="the first upkeep")
         assert rowids(app.db, "events") == set() and daemon.stats.rows_pruned == 1
         first = app.janitor.last()
         insert(app.db, "events", "done", clock.now() - 400 * DAY, 2)
         await asyncio.sleep(0.3)  # the same day: left for tomorrow
         assert len(rowids(app.db, "events")) == 1 and app.janitor.last() == first
         clock.advance(EVERY_S + 1)
-        await eventually(lambda: rowids(app.db, "events") == set(), what="the next day's upkeep")
-        assert app.janitor.last().at > first.at and daemon.stats.rows_pruned == 2
+        await eventually(lambda: daemon.stats.rows_pruned == 2, what="the next day's upkeep")
+        assert rowids(app.db, "events") == set() and app.janitor.last().at > first.at
 
 
 async def test_the_daemon_cuts_back_the_logs_nothing_else_rotates(make_app, clock, monkeypatch):

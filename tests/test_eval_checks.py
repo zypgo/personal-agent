@@ -117,6 +117,28 @@ def only(*check: dict, **kw) -> Verdict:
 
 
 # ---- the implicit check of every step -----------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("先学简单家常菜。每周练习两次。", True),
+        ("先学家常菜。A long English explanation defeats the owner's language preference.", False),
+        ("先学炒蛋。再学切菜。然后煮汤。", False),
+        ("先学简单家常菜" * 30, False),
+        ("先学炒蛋\n再学切菜\n最后煮汤", False),
+        ("", False),
+    ],
+)
+def test_response_style_checks_language_share_length_and_sentence_count(text, expected):
+    check = {
+        "kind": "response_style",
+        "step": "one",
+        "min_han_share": 0.8,
+        "max_chars": 100,
+        "max_sentences": 2,
+    }
+    assert only(check, one=result("one", text)).ok is expected
+
+
 def test_each_step_must_end_as_it_is_allowed_to_and_is_checked_before_everything_else():
     sc = scenario({"kind": "max_messages", "limit": 9})
     found = judge(trial(sc))

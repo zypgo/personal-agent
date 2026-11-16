@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import ipaddress
 import json
 import socket
@@ -24,6 +25,56 @@ from personal_agent.security.ssrf import (
 
 LOCAL = NetConfig(allow_private=["127.0.0.1"])
 """The test servers listen on loopback, which is blocked unless listed."""
+
+
+class _Body(httpx.AsyncByteStream):
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.read = False
+
+    async def __aiter__(self):
+        self.read = True
+        yield self.data
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "GZip", "deflate", "br", "zstd", "identity, gzip"])
+async def test_compressed_responses_are_refused_before_decoding_or_reading(encoding):
+    # The compressed input is tiny; expanding it before applying the 1 KiB result cap used to
+    # allocate over 20 MiB. Never consuming the stream proves no decoder can do that allocation.
+    body = _Body(gzip.compress(b"x" * (8 * 1024 * 1024)))
+    response = httpx.Response(200, headers={"content-encoding": encoding}, stream=body)
+    try:
+        with pytest.raises(Blocked, match="compressed response"):
+            await ssrf._read_capped(response, 1024)
+        assert not body.read
+    finally:
+        await response.aclose()
+
+
+@pytest.mark.parametrize("encoding", [None, "identity", " Identity "])
+async def test_uncompressed_responses_are_still_capped(encoding):
+    body = _Body(b"x" * 2048)
+    headers = {} if encoding is None else {"content-encoding": encoding}
+    response = httpx.Response(200, headers=headers, stream=body)
+    try:
+        text, truncated = await ssrf._read_capped(response, 1024)
+        assert text == b"x" * 1024 and truncated and body.read
+    finally:
+        await response.aclose()
+
+
+@pytest.mark.parametrize(("method", "status"), [("HEAD", 200), ("GET", 204), ("GET", 304)])
+async def test_bodyless_responses_keep_encoding_metadata_without_decoding_it(
+    method, status, monkeypatch
+):
+    body = _Body(b"")
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(status, headers={"content-encoding": "gzip"}, stream=body)
+    )
+    monkeypatch.setattr(ssrf, "GuardedTransport", lambda policy: transport)
+    response = await fetch(NetConfig(), method, "https://example.test/resource")
+    assert response.body == b"" and not response.truncated and not body.read
+    assert response.headers["content-encoding"] == "gzip"
 
 
 def ip(text: str):

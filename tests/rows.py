@@ -48,6 +48,14 @@ ENDED: dict[str, dict[str, bool]] = {
         "completed-but-suspended": False,
     },
     "spend": {"charge": True},
+    "usage_events": {"charge": True},
+    "ingress_receipts": {
+        "done": True,
+        "rejected": True,
+        "uncertain": True,
+        "processing": False,
+        "ready": False,
+    },
     "audit": {"call": True},
     "memory_history": {"version": True},
 }
@@ -62,6 +70,8 @@ TABLE = {
     "web_sessions": "web_sessions",
     "runs": "runs",
     "spend": "spend",
+    "usage_events": "usage_events",
+    "ingress_receipts": "ingress_receipts",
     "audit": "audit",
     "memory_history": "memory_versions",
 }
@@ -160,6 +170,15 @@ def insert(
         )
     elif rule == "spend":
         cur = db.execute("INSERT INTO spend(at, kind, usd) VALUES (?, 'transcription', 0.01)", (t,))
+    elif rule == "usage_events":
+        cur = db.execute(
+            "INSERT INTO usage_events(run_id,at,cost_usd) VALUES (?,?,0.01)", (ident, t)
+        )
+    elif rule == "ingress_receipts":
+        cur = db.execute(
+            "INSERT INTO ingress_receipts(source,external_id,fingerprint,state,created_at,updated_at,lease_until) VALUES ('web',?,?,?, ?,?,?)",
+            (ident, ident, state, t - LIFETIME, t, t),
+        )
     elif rule == "audit":
         cur = db.execute(
             "INSERT INTO audit(ts, tool, verdict) VALUES (?, 'shell', 'allow')",

@@ -510,7 +510,7 @@ def test_a_decision_wakes_the_agent_so_the_work_resumes(web):
     )
     assert web.woken == before + 1
     [resume] = [e for e in web.events() if e["kind"] == "approval_response"]
-    assert resume["payload"] == {"run_id": "r1"} and resume["trust"] == "owner"
+    assert resume["payload"] == {"run_id": "r1", "generation": 1} and resume["trust"] == "owner"
 
 
 def test_a_decision_with_nothing_to_resume_does_not_wake_anyone(web):
