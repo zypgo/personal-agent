@@ -7,19 +7,22 @@ conversation each wake-up starts; see `Harness.starts_new_session`). Four rules:
 
 * Nothing is deleted. The session log keeps every item. A compaction appends one marker
   (`SessionStore.add_compaction`) and what the model is shown becomes [summary] + [recent items];
-  the full record stays in the log and `search_history` can find details the summary left out.
+  `search_history` retrieves human messages and `search_tool_history` retrieves original tool
+  results with their recorded source, even after compaction or a reset.
 * The cut is never inside an exchange. The part that is kept word for word starts at a message
   from the user, so a tool call is never separated from its result and the newest request is
   never summarised away.
 * The summary is data, not instructions. The model that writes it is told that tool results and
   quoted pages may contain text aimed at it; the summary is then shown fenced, labelled as the
   agent's own notes, with credentials removed.
-* A failure costs nothing. If the summary cannot be written, the original history stays as it was
+* A failed summary still costs what its model calls cost. If it cannot be written, history stays
+  as it was
   (the item window of `agent.history_items` is still the backstop) and the next attempt waits.
 """
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -28,7 +31,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from agents import Agent, RunConfig, Runner
+from agents import Agent, ModelResponse, RunConfig, RunContextWrapper, RunHooks, Runner
 from openai.types.shared import Reasoning
 
 from personal_agent.config import ContextConfig, ModelConfig
@@ -237,6 +240,7 @@ class Summary:
     cached_tokens: int = 0
     output_tokens: int = 0
     requests: int = 1
+    reasoning_tokens: int = 0
 
 
 class Summarizer(Protocol):
@@ -252,21 +256,92 @@ class SummaryRejected(Exception):
         self.spent = spent
 
 
+class _SummaryAccounting(RunHooks[Any]):
+    """Record a paid response before a retry, cancellation or SDK failure can lose it."""
+
+    def __init__(
+        self,
+        model: str,
+        on_usage: Callable[[Summary], None] | None,
+        before_attempt: Callable[[], None] | None,
+    ) -> None:
+        self.model = model
+        self.on_usage = on_usage
+        self.before_attempt = before_attempt
+        self.spent = Summary("", requests=0)
+
+    async def on_llm_start(
+        self,
+        context: RunContextWrapper[Any],
+        agent: Agent[Any],
+        system_prompt: str | None,
+        input_items: list[Any],
+    ) -> None:
+        if self.before_attempt is not None:
+            self.before_attempt()
+
+    async def on_llm_end(
+        self,
+        context: RunContextWrapper[Any],
+        agent: Agent[Any],
+        response: ModelResponse,
+    ) -> None:
+        usage = response.usage
+        details = getattr(usage, "input_tokens_details", None)
+        cached = getattr(details, "cached_tokens", 0) or 0
+        written = getattr(details, "cache_write_tokens", 0) or 0
+        reasoning = (
+            getattr(getattr(usage, "output_tokens_details", None), "reasoning_tokens", 0) or 0
+        )
+        current = Summary(
+            "",
+            cost_usd=cost_usd(
+                self.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cached_tokens=cached,
+                cache_write_tokens=written,
+            ),
+            input_tokens=usage.input_tokens,
+            cached_tokens=cached,
+            output_tokens=usage.output_tokens,
+            reasoning_tokens=reasoning,
+        )
+        if self.on_usage is not None:
+            self.on_usage(current)
+        self.spent = Summary(
+            "",
+            cost_usd=self.spent.cost_usd + current.cost_usd,
+            input_tokens=self.spent.input_tokens + current.input_tokens,
+            cached_tokens=self.spent.cached_tokens + current.cached_tokens,
+            output_tokens=self.spent.output_tokens + current.output_tokens,
+            requests=self.spent.requests + current.requests,
+            reasoning_tokens=self.spent.reasoning_tokens + current.reasoning_tokens,
+        )
+
+
 class LLMSummarizer:
     def __init__(self, factory: ModelFactory, model: ModelConfig, cfg: ContextConfig) -> None:
         self.factory = factory
         self.model = model
         self.cfg = cfg
 
-    async def summarize(self, previous: str | None, conversation: str) -> Summary:
+    async def summarize(
+        self,
+        previous: str | None,
+        conversation: str,
+        *,
+        on_usage: Callable[[Summary], None] | None = None,
+        before_attempt: Callable[[], None] | None = None,
+    ) -> Summary:
         name = self.cfg.model or self.model.fast
+        accounting = _SummaryAccounting(name, on_usage, before_attempt)
         parts = []
         if previous:
             parts.append(fenced("previous_summary", previous))
         parts.append(fenced("conversation", conversation))
         parts.append("Write the notes now.")
         prompt = "\n\n".join(parts)
-        total = Summary("", requests=0)
         # The second attempt has twice the room: a model that thinks at length may have used its
         # whole allowance before writing anything.
         for allowance in (self.cfg.summary_max_tokens, self.cfg.summary_max_tokens * 2):
@@ -286,29 +361,15 @@ class LLMSummarizer:
                 agent,
                 prompt,
                 max_turns=1,
+                hooks=accounting,
                 run_config=RunConfig(tracing_disabled=True, trace_include_sensitive_data=False),
             )
             usage = result.context_wrapper.usage
-            cached = getattr(getattr(usage, "input_tokens_details", None), "cached_tokens", 0) or 0
-            cost = cost_usd(
-                name,
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                cached_tokens=cached,
-            )
             text = str(result.final_output or "").strip()
             cut_off = usage.output_tokens >= allowance
-            total = Summary(
-                text if text and not cut_off else "",
-                total.cost_usd + cost,
-                total.input_tokens + usage.input_tokens,
-                total.cached_tokens + cached,
-                total.output_tokens + usage.output_tokens,
-                total.requests + 1,
-            )
-            if total.text:
-                return total
-        raise SummaryRejected(total)
+            if text and not cut_off:
+                return dataclasses.replace(accounting.spent, text=text)
+        raise SummaryRejected(accounting.spent)
 
 
 def clean_summary(text: str) -> str:
@@ -351,6 +412,7 @@ class Compactor:
             input_tokens=spent.input_tokens,
             cached_tokens=spent.cached_tokens,
             output_tokens=spent.output_tokens,
+            reasoning_tokens=spent.reasoning_tokens,
             cost_usd=spent.cost_usd,
         )
 
@@ -391,16 +453,27 @@ class Compactor:
         conversation = redact(
             render_conversation(head, result_chars=cfg.result_chars, max_chars=cfg.input_max_chars)
         )
+        accounted = isinstance(app.summarizer, LLMSummarizer)
         try:
-            summary = await app.summarizer.summarize(previous, conversation)
+            async with asyncio.timeout(cfg.timeout_s):
+                if isinstance(app.summarizer, LLMSummarizer):
+                    summary = await app.summarizer.summarize(
+                        previous,
+                        conversation,
+                        on_usage=lambda spent: self._record(run_id, spent),
+                        before_attempt=lambda: app.budget.check_run(run_id),
+                    )
+                else:
+                    summary = await app.summarizer.summarize(previous, conversation)
         except Exception as exc:
-            if isinstance(exc, SummaryRejected):
+            if isinstance(exc, SummaryRejected) and not accounted:
                 self._record(run_id, exc.spent)
             # Not even the exception text goes to the log: it can quote the conversation.
             log.warning("compaction of %s failed: %s", key, type(exc).__name__)
             self._try_later(key)
             return None
-        self._record(run_id, summary)
+        if not accounted:
+            self._record(run_id, summary)
         text = clean_summary(summary.text)
         if len(text) < MIN_SUMMARY_CHARS:
             log.warning("compaction of %s gave no usable summary", key)

@@ -8,8 +8,8 @@ pruning, noticing patterns. This is that process. The rules it runs under:
   here, deterministically, from the raw log (which keeps what `/new` and compaction hide), with
   what tools returned fenced as outside text. A quiet day, or one with nothing new, costs nothing:
   no digest means no model call.
-* It can only change the agent's own notes. The dream profile has the memory tool and
-  `search_history` and nothing else: no messages, no web, no files, no shell. The owner's
+* It can only change the agent's own notes. The dream profile has memory and the human/tool
+  history searches: no messages, no web, no files, no shell. The owner's
   preferences are read-only to it; a change it thinks they want becomes a proposal.
 * It can be undone. Every change is a row in `memory_versions` tagged with the run, and a pass
   that deletes more than it should (too many notes, or too large a share of them) is reverted as
@@ -23,14 +23,17 @@ pruning, noticing patterns. This is that process. The rules it runs under:
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from personal_agent.clock import to_local
 from personal_agent.core.events import Batch, Event, Kind, NewEvent
-from personal_agent.db import loads
+from personal_agent.db import dumps, loads
 from personal_agent.harness.compaction import render_item
 from personal_agent.harness.instructions import wrap_untrusted
+from personal_agent.memory.store import MemoryConflictError
 from personal_agent.security.sanitize import fenced
 
 if TYPE_CHECKING:
@@ -44,6 +47,7 @@ CURSOR = "dream:cursor"
 LAST_DAY = "dream:last_day"
 FAILURES = "dream:failures"
 PAUSED_UNTIL = "dream:paused_until"
+PENDING_PREFIX = "dream:pending:"
 
 PAGE = 200
 """Rows read from the log at a time, so that a huge backlog is never loaded at once."""
@@ -72,6 +76,13 @@ class Digest:
     """The last row of the log this one shows (the cursor moves here once the pass is done)."""
     items: int
     sessions: int
+
+
+@dataclass(frozen=True)
+class DreamReview:
+    run_id: str
+    reason: str
+    flagged_at: float
 
 
 def _wrap(text: str) -> str:
@@ -217,14 +228,194 @@ class Dreamer:
             return False
 
     # ---- after a pass ----------------------------------------------------------------------
+    def begin(self, run_id: str, batch: Batch) -> None:
+        """Journal an unfinished review before the first memory edit.
+
+        Recovery only examines these receipts, never old successful runs whose changes may
+        already have been superseded by the owner. The receipt and its eventual removal live in
+        the same database as memory versions.
+        """
+        event = next((e for e in batch.events if is_dream(e)), None)
+        if event is not None:
+            self.app.db.kv_set(
+                PENDING_PREFIX + run_id,
+                dumps({"to_id": int(event.payload.get("to_id") or 0)}),
+                now=self.app.clock.now(),
+            )
+
+    def _forget_pending(self, run_id: str) -> None:
+        self.app.db.execute("DELETE FROM kv WHERE key = ?", (PENDING_PREFIX + run_id,))
+
+    def _needs_review(self, run_id: str) -> bool:
+        return bool(loads(self.app.db.kv_get(PENDING_PREFIX + run_id), {}).get("needs_review"))
+
+    @contextmanager
+    def _review_transaction(self, run_id: str) -> Iterator[None]:
+        """Roll back the failed undo savepoint before isolating an owner-edit conflict.
+
+        This also works inside the worker's dead-notice or supersession transaction: it can
+        close the stale SDK checkpoint and acknowledge the event without losing this receipt.
+        IO failures remain errors, retaining their original receipt for a later retry.
+        """
+        try:
+            with self.app.db.tx():
+                yield
+        except MemoryConflictError as exc:
+            self._flag_review(run_id, str(exc))
+
+    def _flag_review(self, run_id: str, reason: str) -> None:
+        app = self.app
+        with app.db.tx():
+            data = loads(app.db.kv_get(PENDING_PREFIX + run_id), {})
+            if data.get("needs_review"):
+                return
+            data.update(needs_review=True, review_reason=reason, review_at=app.clock.now())
+            app.db.kv_set(PENDING_PREFIX + run_id, dumps(data), now=app.clock.now())
+            app.outbox.enqueue(
+                session_key=DREAM_KEY,
+                channel=app.notify_channel(),
+                text=(
+                    f"I could not automatically undo nightly memory pass {run_id}: later edits "
+                    "would be overwritten. I kept the current files; some changes from that pass "
+                    "may remain. Other work can continue. `pa dream review` lists the affected "
+                    "notes and their versions. After reviewing them, you can explicitly keep "
+                    f"the current memory with `pa dream review resolve {run_id} --keep-current`."
+                ),
+                kind="notice",
+                urgency="low",
+                dedupe_key=f"dream:review:{run_id}",
+            )
+
+    def pending_reviews(self) -> list[DreamReview]:
+        """Conflicts needing an owner's decision; their pending keys continue pinning evidence."""
+        found = []
+        for row in self.app.db.query(
+            "SELECT key, value, updated_at FROM kv WHERE key GLOB ? ORDER BY updated_at, key",
+            (PENDING_PREFIX + "*",),
+        ):
+            data = loads(row["value"], {})
+            if data.get("needs_review"):
+                found.append(
+                    DreamReview(
+                        run_id=row["key"][len(PENDING_PREFIX) :],
+                        reason=str(
+                            data.get("review_reason") or "a later edit prevents safe rollback"
+                        ),
+                        flagged_at=float(data.get("review_at") or row["updated_at"]),
+                    )
+                )
+        return found
+
+    def resolve_review(self, run_id: str, *, keep_current: bool = False) -> bool:
+        """The owner accepts current memory. No file, version or success cursor is changed."""
+        if not keep_current:
+            raise ValueError("Choose --keep-current explicitly to accept the current memory.")
+        with self.app.db.tx():
+            if not self._needs_review(run_id):
+                return False
+            if self.app.approvals.load_run(run_id) is not None:
+                raise ValueError(
+                    "This pass still has a saved execution; finish or cancel it first."
+                )
+            self._forget_pending(run_id)
+            return True
+
+    def abort(self, run_id: str) -> None:
+        """Discard an interrupted attempt's edits before its inbox event can be retried.
+
+        This is not a failed *night*: the worker may retry a temporary provider error. Its
+        eventual successful finish or terminal abandonment owns the failure counter.
+        """
+        with self._review_transaction(run_id):
+            if self.app.db.kv_get(PENDING_PREFIX + run_id) is None or self._needs_review(run_id):
+                return
+            self.app.memory.revert_run(run_id)
+            self._forget_pending(run_id)
+
+    def recover(self) -> int:
+        """Finish reviews left by a dead process. Call only while holding the engine lock.
+
+        Successful runs may have died between writing their outcome and reviewing memory;
+        interrupted runs must undo their candidate changes before other work resumes.
+        Removing the receipt in the same transaction makes a second recovery harmless.
+        """
+        rows = self.app.db.query(
+            "SELECT key, value FROM kv WHERE key GLOB ? ORDER BY updated_at, key",
+            (PENDING_PREFIX + "*",),
+        )
+        recovered = 0
+        for row in rows:
+            run_id = row["key"][len(PENDING_PREFIX) :]
+            if self._needs_review(run_id):
+                continue
+            if self.app.approvals.load_run(run_id) is not None:
+                # A suspended pass (including a crashed resume) still has a checkpoint. Its
+                # approved tool steps must not resume against memory that we already rolled back.
+                continue
+            run = self.app.runs.get(run_id)
+            if run is not None and run.status in ("completed", "silent"):
+                self.finish_run(run_id)
+            elif self.app.approvals.for_run(run_id):
+                # Resume failure committed its terminal status and dropped the SDK snapshot,
+                # but the process may have died before it could roll back or queue the notice.
+                self.finish_run(run_id, notify_interrupted=True)
+            else:
+                self.abort(run_id)
+            if self.app.db.kv_get(PENDING_PREFIX + run_id) is None:
+                recovered += 1
+        return recovered
+
+    def finish_run(self, run_id: str, *, notify_interrupted: bool = False) -> None:
+        """Settle a journaled pass after approval resume, using its durable cursor receipt.
+
+        Waiting is not completion. Resume failures must drop their SDK checkpoint *before*
+        calling this method, so a future approval cannot replay against reverted memory.
+        A conflict is isolated for owner review. Other restore failures raise and keep the
+        receipt for recovery instead of claiming success.
+        """
+        app = self.app
+        with self._review_transaction(run_id):
+            receipt = app.db.kv_get(PENDING_PREFIX + run_id)
+            if (
+                receipt is None
+                or self._needs_review(run_id)
+                or app.approvals.load_run(run_id) is not None
+            ):
+                return
+            run = app.runs.get(run_id)
+            if run is None:
+                self.abort(run_id)
+                return
+            self._complete(run_id, run.status, int(loads(receipt, {}).get("to_id", 0)))
+            if notify_interrupted and run.status not in ("completed", "silent"):
+                app.outbox.enqueue(
+                    session_key=DREAM_KEY,
+                    channel=app.notify_channel(),
+                    text=(
+                        "The nightly memory tidy-up did not finish after approval, so its "
+                        "candidate memory changes were undone and its saved execution was closed. "
+                        "It will try again on a future scheduled pass. `pa dream log` shows why."
+                    ),
+                    kind="notice",
+                    urgency="low",
+                    dedupe_key=f"dream:interrupted:{run_id}",
+                )
+            self._forget_pending(run_id)
+
     def finished(self, batch: Batch, outcome: RunOutcome) -> None:
         """Bookkeeping for a pass that ended: review what it changed, move the cursor, count
         failures. Never raises: the run is over and its record is already written."""
         event = next((e for e in batch.events if is_dream(e)), None)
         if event is None:
             return
+        if outcome.status == "awaiting_approval":
+            return  # The receipt spans approval rounds; the original inbox event is only parked.
+        if self._needs_review(outcome.run_id):
+            return
         try:
-            self._finished(int(event.payload.get("to_id") or 0), outcome)
+            with self._review_transaction(outcome.run_id):
+                self._complete(outcome.run_id, outcome.status, int(event.payload.get("to_id") or 0))
+                self._forget_pending(outcome.run_id)
         except Exception:
             log.warning("dream bookkeeping failed", exc_info=True)
 
@@ -236,12 +427,16 @@ class Dreamer:
         except Exception:
             log.warning("dream bookkeeping failed", exc_info=True)
 
-    def _finished(self, to_id: int, outcome: RunOutcome) -> None:
+    def _complete(self, run_id: str, status: str, to_id: int) -> None:
         app = self.app
-        if outcome.status not in ("completed", "silent"):
+        # Even a failed/budget-stopped run may already have changed files. Review those edits
+        # first; otherwise the most destructive attempt is the one that escapes the guard.
+        reverted = self.review(run_id)
+        if status not in ("completed", "silent"):
+            if not reverted:
+                app.memory.revert_run(run_id)
             self._failed("it did not finish")
             return
-        reverted = self.review(outcome.run_id)
         app.db.kv_set(CURSOR, str(max(self.cursor(), to_id)), now=app.clock.now())
         if reverted:
             self._failed("it deleted too much and was undone")

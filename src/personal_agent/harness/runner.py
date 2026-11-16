@@ -282,12 +282,32 @@ class Harness:
             owner_request=self.owner_request_for(batch),
         )
         ctx.know_urls(self.owner_urls_for(batch))
+        dreamer = Dreamer(app) if profile == "dream" else None
         if profile == "dream":
             ctx.cost_cap_usd = app.config.dreaming.max_cost_usd
-        outcome = await self._settle(ctx, self._execute(batch, ctx, model_name))
-        if profile == "dream":
-            Dreamer(app).finished(batch, outcome)
+        if dreamer is not None:
+            dreamer.begin(run_id, batch)
+        try:
+            outcome = await self._settle(ctx, self._execute(batch, ctx, model_name))
+        except BaseException:
+            if dreamer is not None:
+                dreamer.abort(run_id)
+            raise
+        if dreamer is not None:
+            dreamer.finished(batch, outcome)
         return outcome
+
+    async def _with_deadline(self, work: Awaitable[RunOutcome]) -> RunOutcome:
+        """One deadline includes plugin preparation and compaction, not only model turns."""
+        seconds = self.app.config.runtime.run_timeout_s
+        deadline = asyncio.timeout(seconds)
+        try:
+            async with deadline:
+                return await work
+        except TimeoutError as exc:
+            if deadline.expired():
+                raise RunTimedOut(f"the run exceeded {seconds:.0f}s") from exc
+            raise
 
     async def _settle(
         self, ctx: RunContext, work: Awaitable[RunOutcome], *, resuming: bool = False
@@ -295,23 +315,35 @@ class Harness:
         """Await `work` and make sure the run record ends up truthful whatever happens."""
         app = self.app
         try:
-            return await work
+            return await self._with_deadline(work)
         except asyncio.CancelledError:
-            if resuming:
+            if resuming and ctx.profile != "dream":
                 app.runs.set_status(ctx.run_id, "awaiting_approval")  # still resumable
             else:
-                app.runs.finish(ctx.run_id, "cancelled", error="cancelled")
+                with app.db.tx():
+                    if resuming:
+                        app.approvals.drop_run(ctx.run_id)
+                    app.runs.finish(ctx.run_id, "cancelled", error="cancelled")
             raise
         except Exception as exc:
             failure = classify(exc)
-            if resuming:
+            if resuming and ctx.profile != "dream":
                 app.runs.set_status(ctx.run_id, "awaiting_approval")
-            elif isinstance(exc, BudgetExceeded) and exc.scope == "daily":
-                app.runs.finish(ctx.run_id, "paused_budget", error=failure.summary)
             else:
-                app.runs.finish(ctx.run_id, "failed", error=failure.summary)
+                with app.db.tx():
+                    if resuming:
+                        app.approvals.drop_run(ctx.run_id)
+                    status = (
+                        "paused_budget"
+                        if isinstance(exc, BudgetExceeded) and exc.scope == "daily"
+                        else "failed"
+                    )
+                    app.runs.finish(ctx.run_id, status, error=failure.summary)
             log.warning("run %s failed: %s", ctx.run_id, failure.summary)
             raise
+        finally:
+            if resuming and ctx.profile == "dream":
+                Dreamer(app).finish_run(ctx.run_id, notify_interrupted=True)
 
     def _instructions(self, profile: str) -> str:
         app, cfg = self.app, self.app.config
@@ -454,29 +486,26 @@ class Harness:
         app, cfg = self.app, self.app.config
         resuming = isinstance(run_input, RunState)
         try:
-            result: RunResult = await asyncio.wait_for(
-                Runner.run(
-                    agent,
-                    run_input,
-                    session=SdkSession(
-                        app.sessions,
-                        ctx.session_key,
-                        ctx.run_id,
-                        window=cfg.agent.history_items,
-                        media=app.media,
-                        keep_images=cfg.media.images_in_context,
-                    ),
-                    context=None if resuming else ctx,
-                    hooks=RunAccounting(app, model_name),
-                    max_turns=cfg.agent.max_turns,
-                    run_config=RunConfig(
-                        tracing_disabled=True,
-                        trace_include_sensitive_data=False,
-                        tool_not_found_behavior="return_error_to_model",
-                        reasoning_item_id_policy=cfg.model.reasoning_item_ids,
-                    ),
+            result: RunResult = await Runner.run(
+                agent,
+                run_input,
+                session=SdkSession(
+                    app.sessions,
+                    ctx.session_key,
+                    ctx.run_id,
+                    window=cfg.agent.history_items,
+                    media=app.media,
+                    keep_images=cfg.media.images_in_context,
                 ),
-                timeout=cfg.runtime.run_timeout_s,
+                context=None if resuming else ctx,
+                hooks=RunAccounting(app, model_name),
+                max_turns=cfg.agent.max_turns,
+                run_config=RunConfig(
+                    tracing_disabled=True,
+                    trace_include_sensitive_data=False,
+                    tool_not_found_behavior="return_error_to_model",
+                    reasoning_item_id_policy=cfg.model.reasoning_item_ids,
+                ),
             )
         except MaxTurnsExceeded:
             return self._finish_step_limit(ctx)
@@ -484,8 +513,6 @@ class Harness:
             if exc.scope == "run":
                 return self._finish_run_budget(ctx, exc)
             raise
-        except TimeoutError as exc:
-            raise RunTimedOut(f"the run exceeded {cfg.runtime.run_timeout_s:.0f}s") from exc
 
         if result.interruptions:
             return self._suspend(ctx, result)
@@ -530,6 +557,11 @@ class Harness:
         if saved is None:
             # Already resumed, or the owner moved on and the request was closed. Nothing to do.
             return RunOutcome(run_id or "-", "silent", error="nothing to resume")
+        if not saved.accepts(event):
+            return RunOutcome(run_id, "silent", error="stale approval response")
+        if any(a.status == "pending" for a in app.approvals.for_run(run_id)):
+            # A retry may find the next approval round already saved. Pending is never a refusal.
+            return RunOutcome(run_id, "awaiting_approval", error="approval still pending")
         run = app.runs.get(run_id)
         model_name = (run.model if run else None) or app.config.model.main
         ctx = RunContext.from_meta(app, run_id, saved.session_key, saved.meta)
@@ -571,23 +603,34 @@ class Harness:
     def _supersede(self, key: str, run_id: str) -> None:
         """The owner sent a new message while a request was waiting: close it, never run it."""
         app = self.app
-        closed = app.approvals.supersede_session(key)
-        for run in {a.run_id for a in closed}:
-            for approval in app.approvals.for_run(run):
-                app.sessions.append(
-                    key,
-                    [
-                        {
-                            "type": "function_call_output",
-                            "call_id": approval.call_id,
-                            "output": SUPERSEDED_MESSAGE,
-                        }
-                    ],
-                    run_id=run_id,
-                )
-                app.audit.set_outcome(run, approval.call_id, "superseded")
-            app.approvals.drop_run(run)
-            app.runs.finish(run, "cancelled", error="superseded by a new message")
+        with app.db.tx():
+            closed = app.approvals.supersede_session(key)
+            answered = {
+                item.get("call_id")
+                for item in app.sessions.items(key)
+                if item.get("type") == "function_call_output"
+            }
+            for run in {a.run_id for a in closed}:
+                for approval in app.approvals.for_run(run):
+                    if approval.call_id in answered:
+                        continue  # an earlier round already ran; do not duplicate its result
+                    app.sessions.append(
+                        key,
+                        [
+                            {
+                                "type": "function_call_output",
+                                "call_id": approval.call_id,
+                                "output": SUPERSEDED_MESSAGE,
+                            }
+                        ],
+                        run_id=run_id,
+                    )
+                    app.audit.set_outcome(run, approval.call_id, "superseded")
+                app.approvals.drop_run(run)
+                app.runs.finish(run, "cancelled", error="superseded by a new message")
+                record = app.runs.get(run)
+                if record is not None and record.profile == "dream":
+                    Dreamer(app).finish_run(run, notify_interrupted=True)
 
     # ---- endings -----------------------------------------------------------------------
     def _finish(self, ctx: RunContext, final_text: str) -> RunOutcome:

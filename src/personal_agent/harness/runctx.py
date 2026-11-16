@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -104,15 +105,21 @@ class RunContext:
             "owner_request": self.owner_request,
             "known_urls": list(self.known_urls),
             "work_id": self.work_id,
+            "cost_cap_usd": self.cost_cap_usd,
         }
 
     @classmethod
     def from_meta(cls, app: App, run_id: str, session_key: str, meta: dict[str, Any]) -> RunContext:
+        profile = str(meta.get("profile") or "full")
+        cap = app.config.dreaming.max_cost_usd if profile == "dream" else None
+        saved_cap = meta.get("cost_cap_usd")
+        if isinstance(saved_cap, int | float) and math.isfinite(saved_cap) and saved_cap > 0:
+            cap = float(saved_cap) if cap is None else min(cap, float(saved_cap))
         return cls(
             app=app,
             run_id=run_id,
             session_key=session_key,
-            profile=str(meta.get("profile") or "full"),
+            profile=profile,
             origin=Origin.from_json(meta.get("origin") or {}),
             trust=Trust(meta.get("trust") or "owner"),
             tainted=bool(meta.get("tainted", False)),
@@ -121,4 +128,5 @@ class RunContext:
             owner_request=str(meta.get("owner_request") or ""),
             known_urls=dict.fromkeys(str(k) for k in meta.get("known_urls") or []),
             work_id=str(meta.get("work_id") or ""),
+            cost_cap_usd=cap,
         )
