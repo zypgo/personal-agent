@@ -7,6 +7,8 @@
 // repeat text that someone else wrote.
 
 import { Live, api } from "./api.js";
+import { activityLabel, connectionLabel } from "./activity.js";
+import { audioDuration } from "./audio-metadata.js";
 import {
   clockTime,
   commandHints,
@@ -662,9 +664,11 @@ function buildComposer() {
   const attach = features.images ? iconButton("clip", "Attach a picture", () => picker.click(), "attach") : null;
   const send = iconButton("send", "Send", () => submit(), "send primary");
   const mic = features.voice && canRecord() ? iconButton("mic", "Record a voice message", () => startVoice(), "mic") : null;
-  const row = h("div", { class: "row" }, attach, input, mic, send);
+  const voicePicker = h("input", { type: "file", accept: "audio/*", hidden: true });
+  const audio = features.voice && !canRecord() ? iconButton("mic", "Send a voice file", () => voicePicker.click(), "mic") : null;
+  const row = h("div", { class: "row" }, attach, input, mic, audio, send);
   const recording = h("div", { class: "recording", hidden: true });
-  const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker);
+  const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker, voicePicker);
   const composer = { element, input, files, chips, hints, send, mic, row, recording, picker, voice: null };
 
   const refresh = () => {
@@ -706,6 +710,17 @@ function buildComposer() {
   picker.addEventListener("change", () => {
     addFiles([...picker.files]);
     picker.value = "";
+  });
+  voicePicker.addEventListener("change", async () => {
+    const file = voicePicker.files[0];
+    voicePicker.value = "";
+    if (!file) return;
+    if (file.size > features.max_voice_bytes) return toast("That voice file is too large.", { error: true });
+    const seconds = await audioDuration(file);
+    const entry = store.addPending({ clientId: newClientId(), text: "", voice: { blob: file, name: file.name, seconds }, at: nowSeconds() });
+    renderLog();
+    scrollToBottom(false);
+    await deliver(entry);
   });
   root.addEventListener("dragover", (event) => {
     if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
@@ -785,7 +800,7 @@ async function deliver(entry) {
   for (const file of entry.files) form.append("image", file, file.name || "photo.jpg");
   if (entry.voice) {
     form.set("voice", entry.voice.blob, entry.voice.name);
-    form.set("voice_seconds", String(entry.voice.seconds));
+    if (Number.isFinite(entry.voice.seconds)) form.set("voice_seconds", String(entry.voice.seconds));
   }
   try {
     const result = await api("/api/messages", { method: "POST", form });
@@ -862,6 +877,22 @@ async function startVoice() {
 // ---- settings -------------------------------------------------------------------------------
 async function openSettings() {
   const status = h("pre", { class: "status-text", text: "Asking…" });
+  const activity = h("ol", { class: "activity-list", "aria-live": "polite" });
+  const connection = h("p", { class: "about", text: connectionLabel(session.connection) });
+  const refreshStatus = async () => {
+    try {
+      const data = await api("/api/status");
+      status.textContent = data.text;
+      connection.textContent = `${connectionLabel(data.connection)} · ${data.connection.address}`;
+      const items = data.activity?.items ?? [];
+      activity.replaceChildren(...(items.length ? items.map((item) => h("li", {},
+        h("strong", { text: item.title }),
+        h("p", { class: "about", text: activityLabel(item) }),
+      )) : [h("li", { class: "about", text: "No recent tasks." })]));
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  };
   const choice = h("div", { class: "segments", role: "radiogroup", "aria-label": "Appearance" });
   const paint = () => {
     choice.replaceChildren(
@@ -872,7 +903,7 @@ async function openSettings() {
   };
   paint();
   const hints = [];
-  if (!canRecord() && session.features.voice) hints.push("Voice messages need a secure address (https). Serve this page with Tailscale, or open it on this computer.");
+  if (!canRecord() && session.features.voice) hints.push("You can send a recorded audio file here. Recording with the microphone needs HTTPS; connect through Tailscale to enable it.");
   const ios = /iPhone|iPad/.test(navigator.userAgent);
   const installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   if (ios && !installed) hints.push("To use this like an app: Share, then Add to Home Screen. Pair again from the new icon, which keeps its own sign-in.");
@@ -881,6 +912,8 @@ async function openSettings() {
     { class: "sheet", "aria-label": "Settings" },
     h("header", {}, h("h2", { text: session.agent }), iconButton("close", "Close", () => dialog.close(), "close")),
     h("section", {}, h("h3", { text: "Right now" }), status),
+    h("section", {}, h("h3", { text: "Recent tasks" }), activity, h("button", { type: "button", text: "Refresh status", onclick: refreshStatus })),
+    h("section", {}, h("h3", { text: "Connection" }), connection),
     h("section", {}, h("h3", { text: "Appearance" }), choice),
     h(
       "section",
@@ -905,11 +938,7 @@ async function openSettings() {
   dialog.addEventListener("close", () => dialog.remove());
   document.body.append(dialog);
   dialog.showModal();
-  try {
-    status.textContent = (await api("/api/status")).text;
-  } catch (error) {
-    status.textContent = error.message;
-  }
+  await refreshStatus();
 }
 
 // ---- the phone's keyboard, the badge, coming back from the background ---------------------------

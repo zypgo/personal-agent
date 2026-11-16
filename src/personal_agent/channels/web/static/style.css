@@ -1093,6 +1093,11 @@ dialog::backdrop {
   overflow-wrap: anywhere;
 }
 
+.activity-list { list-style: none; margin: 0; padding: 0; }
+.activity-list li { padding: 0.65rem 0; border-bottom: 1px solid currentColor; }
+.activity-list strong { display: block; overflow-wrap: anywhere; font-size: 0.9rem; }
+.activity-list p { margin: 0.35rem 0 0; }
+
 .segments {
   display: flex;
   border: 1.5px solid var(--rule-strong);

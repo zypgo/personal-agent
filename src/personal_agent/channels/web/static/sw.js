@@ -12,6 +12,8 @@ const SHELL = [
   `/static/style.css?v=${VERSION}`,
   `/static/app.js?v=${VERSION}`,
   "/static/api.js",
+  "/static/activity.js",
+  "/static/audio-metadata.js",
   "/static/format.js",
   "/static/md.js",
   "/static/media.js",
