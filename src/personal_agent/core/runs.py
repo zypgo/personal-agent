@@ -116,6 +116,21 @@ class RunStore:
     ) -> None:
         with self.db.tx():
             self.db.execute(
+                """INSERT INTO usage_events(run_id, at, requests, input_tokens, cached_tokens,
+                                             output_tokens, reasoning_tokens, cost_usd)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    run_id,
+                    self.clock.now(),
+                    requests,
+                    input_tokens,
+                    cached_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    cost_usd,
+                ),
+            )
+            self.db.execute(
                 """UPDATE runs SET requests = requests + ?, input_tokens = input_tokens + ?,
                    cached_tokens = cached_tokens + ?, output_tokens = output_tokens + ?,
                    reasoning_tokens = reasoning_tokens + ?, cost_usd = cost_usd + ? WHERE id = ?""",
@@ -187,14 +202,15 @@ class RunStore:
         if session_key:
             return float(
                 self.db.scalar(
-                    "SELECT SUM(cost_usd) FROM runs WHERE started_at >= ? AND session_key = ?",
+                    """SELECT SUM(u.cost_usd) FROM usage_events u JOIN runs r ON r.id = u.run_id
+                       WHERE u.at >= ? AND r.session_key = ?""",
                     (since, session_key),
                     default=0.0,
                 )
             )
         return float(
             self.db.scalar(
-                "SELECT SUM(cost_usd) FROM runs WHERE started_at >= ?", (since,), default=0.0
+                "SELECT SUM(cost_usd) FROM usage_events WHERE at >= ?", (since,), default=0.0
             )
         )
 

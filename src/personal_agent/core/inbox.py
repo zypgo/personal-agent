@@ -67,7 +67,6 @@ class Inbox:
         self.lease_s = lease_s
         self.max_attempts = max_attempts
         self.max_age_s = max_age_s
-        self._dead: list[Event] = []
         self._held: set[str] = set()
 
     @contextlib.contextmanager
@@ -138,6 +137,10 @@ class Inbox:
             {"now": now, "session": session_key, "held": self._held_json()},
         )
         return row is not None
+
+    def has_unreported_dead(self) -> bool:
+        """A terminal failure still needs its durable owner notification settled."""
+        return self.db.one("SELECT 1 FROM dead_event_notices LIMIT 1") is not None
 
     def active_for(self, session_key: str) -> int:
         """Events of a session that are running or ready to run (not ones waiting to retry)."""
@@ -245,12 +248,19 @@ class Inbox:
                lease_expires_at = NULL, done_at = ? WHERE id = ?""",
             (detail, now, row["id"]),
         )
-        self._dead.append(_event(row))
+        self.db.execute(
+            "INSERT OR IGNORE INTO dead_event_notices(event_id, created_at) VALUES (?, ?)",
+            (row["id"], now),
+        )
 
     def take_dead(self) -> list[Event]:
-        """Events that became dead since the last call (the worker tells the owner)."""
-        dead, self._dead = self._dead, []
-        return dead
+        """Terminal failures not yet settled by the worker. Call inside its notification tx."""
+        rows = self.db.query(
+            """SELECT e.* FROM events e JOIN dead_event_notices n ON n.event_id = e.id
+               ORDER BY e.id"""
+        )
+        self.db.execute("DELETE FROM dead_event_notices")
+        return [_event(row) for row in rows]
 
     def heartbeat(self, batch: Batch, lease_s: float | None = None) -> bool:
         """Extend the lease of a running batch. False means the lease was lost."""

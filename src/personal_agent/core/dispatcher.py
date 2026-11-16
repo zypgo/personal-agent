@@ -81,9 +81,8 @@ class Dispatcher:
                     outbox.mark_maybe_sent(message.id, f"unknown outcome: {exc}")
                     report.unknown.append(message.id)
             else:
-                # One unit: a message the database calls sent has its memory commits applied and
-                # its place in the history, and a crash in between leaves it as it was (not sent),
-                # never "sent" with its bookmark lost.
+                # Delivery, transcript and desired memory contents commit as one unit. Memory
+                # files are projected after COMMIT; a crash replays those bytes idempotently.
                 with self.app.db.tx():
                     outbox.mark_sent(message.id)
                     self._record(message)

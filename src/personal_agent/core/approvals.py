@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from personal_agent.clock import Clock, SystemClock
-from personal_agent.core.events import Kind, NewEvent, Trust
+from personal_agent.core.events import Event, Kind, NewEvent, Trust
 from personal_agent.core.inbox import Inbox
 from personal_agent.core.sessions import DEFAULT_SESSION
 from personal_agent.db import Database, dumps, loads
@@ -97,6 +97,16 @@ class SavedRun:
     session_key: str
     state: str
     meta: dict[str, Any]
+    generation: int
+
+    def accepts(self, event: Event) -> bool:
+        """An old response may neither resume nor abandon a newer suspension."""
+        generation = event.payload.get("generation")
+        if generation is None and event.external_id:
+            # Events written by older versions encoded the generation in this id only.
+            suffix = event.external_id.rsplit(":", 1)[-1]
+            generation = int(suffix) if suffix.isdigit() else None
+        return generation is None or generation == self.generation
 
 
 def _approval(row: sqlite3.Row) -> Approval:
@@ -255,7 +265,10 @@ class Approvals:
         now = self.clock.now()
         with self.db.tx():
             rows = self.db.query(
-                "SELECT * FROM approvals WHERE session_key = ? AND status = 'pending' ORDER BY id",
+                """SELECT * FROM approvals WHERE session_key = ? AND
+                   (status = 'pending' OR (status = 'superseded' AND EXISTS (
+                       SELECT 1 FROM run_states WHERE run_states.run_id = approvals.run_id)))
+                   ORDER BY id""",
                 (session_key,),
             )
             for row in rows:
@@ -275,19 +288,18 @@ class Approvals:
             (run_id,),
             default=0,
         )
-        if waiting or self.load_run(run_id) is None:
+        saved = self.load_run(run_id)
+        if waiting or saved is None:
             return False
         # A run can be suspended again after it resumes (the next call may also need approval),
         # so the idempotency key must differ per round: each round adds approvals.
-        round_no = self.db.scalar(
-            "SELECT COUNT(*) FROM approvals WHERE run_id = ?", (run_id,), default=0
-        )
+        round_no = saved.generation
         self.inbox.add(
             NewEvent(
                 source="approval",
                 kind=Kind.APPROVAL_RESPONSE,
                 session_key=session_key,
-                payload={"run_id": run_id},
+                payload={"run_id": run_id, "generation": round_no},
                 external_id=f"resume:{run_id}:{round_no}",
                 trust=Trust.OWNER,
             )
@@ -297,17 +309,31 @@ class Approvals:
     # ---- suspended runs ---------------------------------------------------------------
     def save_run(self, run_id: str, session_key: str, state: str, meta: dict[str, Any]) -> None:
         with self.db.tx():
+            generation = max(
+                1,
+                int(
+                    self.db.scalar(
+                        "SELECT COUNT(*) FROM approvals WHERE run_id = ?", (run_id,), default=0
+                    )
+                ),
+            )
             self.db.execute(
-                """INSERT OR REPLACE INTO run_states(run_id, session_key, state, meta, created_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (run_id, session_key, state, dumps(meta), self.clock.now()),
+                """INSERT OR REPLACE INTO run_states(run_id, session_key, state, meta, created_at, generation)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (run_id, session_key, state, dumps(meta), self.clock.now(), generation),
             )
 
     def load_run(self, run_id: str) -> SavedRun | None:
         row = self.db.one("SELECT * FROM run_states WHERE run_id = ?", (run_id,))
         if row is None:
             return None
-        return SavedRun(row["run_id"], row["session_key"], row["state"], loads(row["meta"], {}))
+        return SavedRun(
+            row["run_id"],
+            row["session_key"],
+            row["state"],
+            loads(row["meta"], {}),
+            row["generation"],
+        )
 
     def drop_run(self, run_id: str) -> None:
         with self.db.tx():

@@ -63,7 +63,7 @@ class Worker:
         """
         app = self.app
         batch = app.inbox.claim(self.owner, session_key=session_key)
-        self._tell_owner_about_dead(app.inbox.take_dead())
+        self._settle_dead()
         if batch is None:
             return None
         with app.inbox.holding(batch):  # nothing awaits between the claim and here
@@ -92,7 +92,12 @@ class Worker:
                     environmental=failure.environmental,
                     retry_in=failure.retry_in or None,
                 )
-                self._tell_owner_about_failure(batch, failure)
+                self._settle_dead()
+                if any(
+                    row and row["status"] != "dead"
+                    for row in (app.inbox.get(event_id) for event_id in batch.ids)
+                ):
+                    self._tell_owner_about_failure(batch, failure)
             return WorkResult(batch, failure=failure)
         finally:
             beat.cancel()
@@ -129,6 +134,12 @@ class Worker:
                 return
 
     # ---- telling the owner -----------------------------------------------------------
+    def _settle_dead(self) -> None:
+        # Removing a pending notice and enqueuing its message (or dropping a suspended run)
+        # commit together. A crash leaves this durable work available to the next process.
+        with self.app.db.tx():
+            self._tell_owner_about_dead(self.app.inbox.take_dead())
+
     def _notice(
         self,
         *,
@@ -224,11 +235,13 @@ class Worker:
         app = self.app
         run_id = str(event.payload.get("run_id") or "")
         saved = app.approvals.load_run(run_id)
-        if saved is None:
+        if saved is None or not saved.accepts(event):
             return
         app.approvals.drop_run(run_id)
         app.runs.finish(run_id, "failed", error="could not resume after the approval")
         run = app.runs.get(run_id)
+        if run is not None and run.profile == "dream":
+            Dreamer(app).finish_run(run_id, notify_interrupted=True)
         channel = app.notify_channel()
         recipient = None
         origin = saved.meta.get("origin") or {}
