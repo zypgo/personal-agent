@@ -215,11 +215,19 @@ M = [
         CFG,
     ),
     # ---- pa web
+    # The pairing link is built twice: by `pa web pair` (and connect) and by `pa web open`.
     (
         "web: link in the query",
         W,
-        'url = f"{agent.config.web.address}/#pair={invite.code}"',
-        'url = f"{agent.config.web.address}/?pair={invite.code}"',
+        'url = f"{agent.config.web.address}/#pair={invite.code}"\n    minutes =',
+        'url = f"{agent.config.web.address}/?pair={invite.code}"\n    minutes =',
+        WEBCLI,
+    ),
+    (
+        "web: open's link in the query",
+        W,
+        'url = f"{agent.config.web.address}/#pair={invite.code}"\n        if webbrowser.open(url):',
+        'url = f"{agent.config.web.address}/?pair={invite.code}"\n        if webbrowser.open(url):',
         WEBCLI,
     ),
     (

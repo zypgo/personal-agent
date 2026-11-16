@@ -471,18 +471,34 @@ M = [
         "            if False:\n                raise RuntimeError(",
         DT,
     ),
+    # `os.open(... O_EXCL, 0o600)` appears twice in db.py: for the database file itself and for a backup.
+    # Each anchor includes the call around it, so each mutation changes the one its name says.
     (
         "db: a backup anyone can read",
         DB,
-        "os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)",
-        "os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)",
+        "fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)",
+        "fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)",
         DT,
     ),
     (
         "db: a backup overwrites",
         DB,
-        "os.O_WRONLY | os.O_CREAT | os.O_EXCL",
-        "os.O_WRONLY | os.O_CREAT | os.O_TRUNC",
+        "fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)",
+        "fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)",
+        DT,
+    ),
+    (
+        "db: the database file anyone can read",
+        DB,
+        "os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))",
+        "os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))",
+        DT,
+    ),
+    (
+        "db: opening empties an existing database",
+        DB,
+        "os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))",
+        "os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600))",
         DT,
     ),
     (

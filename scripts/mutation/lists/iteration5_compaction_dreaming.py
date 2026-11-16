@@ -20,6 +20,7 @@ ME = "src/personal_agent/memory/store.py"
 CM = "src/personal_agent/commands/dream.py"
 
 TD = ["tests/test_dreaming.py"]
+TDR = ["tests/test_dream_approval_recovery.py", "tests/test_dream_conflicts.py"]
 TB = ["tests/test_dreaming.py", "tests/test_budget.py"]
 TC = ["tests/test_compaction.py", "tests/test_sessions.py"]
 TCF = [*TC, "tests/test_compaction_failures.py"]
@@ -266,7 +267,22 @@ M = [
         "before = app.memory.file_count() + deleted + created",
         TD,
     ),
-    ("dr review: no revert", DR, "        app.memory.revert_run(run_id)\n", "        pass\n", TD),
+    # `_complete` also calls revert_run (for a pass that failed without tripping the review), and it comes
+    # first in the file: the anchor names the line after, so it is the review's own revert that is removed.
+    (
+        "dr review: no revert",
+        DR,
+        "        app.memory.revert_run(run_id)\n        app.outbox.enqueue(",
+        "        pass\n        app.outbox.enqueue(",
+        TD,
+    ),
+    (
+        "dr complete: a failed pass keeps its edits",
+        DR,
+        '            if not reverted:\n                app.memory.revert_run(run_id)\n            self._failed("it did not finish")',
+        '            if not reverted:\n                pass\n            self._failed("it did not finish")',
+        TDR,
+    ),
     (
         "dr review: says nothing was reverted",
         DR,
@@ -871,11 +887,19 @@ M = [
         '    conn.execute("SELECT 1")',
         TS,
     ),
+    # The same INSERT line is in the insert trigger and, after the 'delete' line, in the update trigger.
     (
         "db index: new rows not indexed",
         DB,
-        "             INSERT INTO transcript_fts(rowid, text) VALUES (new.id, new.text);",
-        "             SELECT 1;",
+        "AFTER INSERT ON transcript BEGIN\n             INSERT INTO transcript_fts(rowid, text) VALUES (new.id, new.text);",
+        "AFTER INSERT ON transcript BEGIN\n             SELECT 1;",
+        TS,
+    ),
+    (
+        "db index: edited rows not re-indexed",
+        DB,
+        "VALUES ('delete', old.id, old.text);\n             INSERT INTO transcript_fts(rowid, text) VALUES (new.id, new.text);",
+        "VALUES ('delete', old.id, old.text);\n             SELECT 1;",
         TS,
     ),
 ]
