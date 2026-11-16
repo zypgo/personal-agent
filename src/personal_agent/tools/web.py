@@ -63,6 +63,12 @@ FORBIDDEN_HEADERS = frozenset(
     {"host", "content-length", "transfer-encoding", "connection", "upgrade", "te", "trailer"}
 )
 HEADER_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+")
+AUTHORIZATION_VALUE = re.compile(rf"(?:(?i:Bearer|Basic|Token) )?{PLACEHOLDER.pattern}")
+TOKEN_HEADERS = frozenset(
+    {"x-api-key", "api-key", "private-token", "x-auth-token", "x-access-token"}
+)
+"""Fixed credential header names, whose values may only be a single secret placeholder. Any
+other name or value is model-written data and needs the ordinary outbound-data approval."""
 LOCAL_NAMES = frozenset({"localhost", "localhost.localdomain", "ip6-localhost"})
 SHOWN_HEADERS = ("content-type", "location", "retry-after", "x-ratelimit-remaining", "link")
 TEXT_TYPES = ("text/", "application/json", "application/xml", "application/javascript")
@@ -233,14 +239,20 @@ def _carries_only_its_address(args: dict[str, Any]) -> bool:
     """Whether a request says nothing but where it goes. A body or a header is text the model can
     fill with anything it has seen, and the address gate judges only the address: `GET <a page it
     read>` with `X-Notes: <the owner's notes>` is a request to an address it has legitimately
-    seen, and the page's owner reads the header. So a header counts only when it holds a secret
-    placeholder: the model does not choose what that stands for, and it is only ever sent to the
-    hosts the owner listed for it."""
+    seen, and the page's owner reads the header. Only fixed credential templates are exempt:
+    neither an arbitrary header name nor text around a placeholder may carry model-written data.
+    The broker separately checks where each placeholder may be sent."""
     if args.get("body"):
         return False
-    return all(
-        PLACEHOLDER.search(str((pair or {}).get("value", ""))) for pair in args.get("headers") or []
-    )
+    for pair in args.get("headers") or []:
+        name = str((pair or {}).get("name", "")).lower()
+        value = str((pair or {}).get("value", ""))
+        if name == "authorization" and AUTHORIZATION_VALUE.fullmatch(value):
+            continue
+        if name in TOKEN_HEADERS and PLACEHOLDER.fullmatch(value):
+            continue
+        return False
+    return True
 
 
 def _category(rc: RunContext, args: dict[str, Any]) -> Category:

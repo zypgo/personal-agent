@@ -41,6 +41,25 @@ DREAM = "dream"  # nightly memory maintenance
 ALL_PROFILES = frozenset({FULL, SCHEDULED, UNTRUSTED, DREAM})
 
 
+class ToolResult(str):
+    """Text plus explicit outcome and provenance at the tool/guard boundary.
+
+    A failed remote call can still return untrusted text; a successful result can begin with
+    "Error". Those are independent facts. Being a string keeps existing tool callers compatible;
+    the guard consumes this metadata before storing or returning the cleaned text to the SDK.
+    Plain strings from existing tools keep their previous behavior.
+    """
+
+    error: bool
+    untrusted: bool
+
+    def __new__(cls, text: str, *, error: bool = False, untrusted: bool = False) -> ToolResult:
+        result = super().__new__(cls, text)
+        result.error = error
+        result.untrusted = untrusted
+        return result
+
+
 @dataclass(frozen=True)
 class ToolDef:
     name: str

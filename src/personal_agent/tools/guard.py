@@ -29,7 +29,7 @@ from personal_agent.security.audit import safe_args
 from personal_agent.security.policy import Decision, ToolCall, Verdict
 from personal_agent.security.redact import known_secret_values, redact
 from personal_agent.security.sanitize import clipped, one_line, scrub_surrogates, strip_invisible
-from personal_agent.tools.base import ToolDef
+from personal_agent.tools.base import ToolDef, ToolResult
 
 if TYPE_CHECKING:
     from personal_agent.app import App
@@ -248,11 +248,20 @@ class ToolGuard:
             )
             raise
 
-        if isinstance(result, str):
-            result = self._clean(result)
-            if result.startswith("Error") and outcome == "ok":
+        if isinstance(result, ToolResult):
+            # Outcome and provenance are independent: a remote protocol error may contain just
+            # as much outside text as a successful response, and must not bypass the taint gate.
+            untrusted = result.untrusted
+            if result.error and outcome == "ok":
                 outcome = "error"
-        if tool.taints and outcome == "ok":
+            result = self._clean(result)
+        else:
+            if isinstance(result, str):
+                result = self._clean(result)
+                if result.startswith("Error") and outcome == "ok":
+                    outcome = "error"
+            untrusted = tool.taints and outcome == "ok"
+        if untrusted:
             rc.taint(f"tool:{tool.name}")
         app.audit.set_outcome(rc.run_id, call_id, outcome, int((time.monotonic() - started) * 1000))
         return result

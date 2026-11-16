@@ -21,6 +21,7 @@ from personal_agent.core.transcript import IN, OUT, Turn
 from personal_agent.harness.runctx import RunContext
 from personal_agent.security.sanitize import fenced, strip_invisible
 from personal_agent.tools.base import DREAM, FULL, SCHEDULED, Category, ToolDef, ToolRegistry
+from personal_agent.tools.tool_history import register_tool_history
 
 SEARCH_HISTORY_DESCRIPTION = """\
 Search what you and the owner said to each other, on every channel, for as long as the history \
@@ -109,6 +110,7 @@ def _cut(text: str) -> str:
 
 
 def register_history(registry: ToolRegistry) -> None:
+    register_tool_history(registry)
     registry.register(
         ToolDef(
             name="search_history",
