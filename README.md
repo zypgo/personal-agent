@@ -186,6 +186,8 @@ uv run python scripts/mutation/run.py scripts/mutation/lists/iteration7_data.py 
 uv run mypy                   # 整个包都在 strict 下
 uv run pa --version
 scripts/fetch_references.sh   # 重新拉取只读参考项目到 references/
+.venv/bin/python scripts/pr_watch.py watch            # 本机监测 GitHub 新 PR，来一个就打印一行事件；在 Cursor 里当后台任务监视它，处理办法见 docs/PR_PLAYBOOK.md
+.venv/bin/python scripts/github_export.py --dry-run   # 推送到 GitHub 之前的检查（去掉 workflow 文件、查隐私与密钥）；去掉 --dry-run 才真的推送
 ```
 
 ## 安全约定
@@ -193,3 +195,4 @@ scripts/fetch_references.sh   # 重新拉取只读参考项目到 references/
 - 密钥只放 `.env`（已 git-ignore），**不要贴进聊天或提交**。
 - 个人数据（记忆、会话、数据库）默认在 `~/.personal-agent`，不在仓库内；数据库与 `.env` 只有你自己读得到（`pa init` 会把已有的收紧，`pa doctor` 会提醒）。
 - 遥测与 OpenAI 托管 tracing 默认关闭。
+- 推到 GitHub 只经 `scripts/github_export.py`：它读的私有配置（隐私名单、gitleaks 的放行名单）在 `~/.config/pa-export/`，不在仓库里；提交自带的放行文件它一律不读。
