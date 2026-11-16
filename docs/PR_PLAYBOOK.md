@@ -41,8 +41,8 @@ Cursor 里监视这个终端的对话被这一行唤醒，按本手册处理：*
 
 ```bash
 MAIN="$(git rev-parse --show-toplevel)"; N=7; REPO=zypgo/personal-agent
-PRW=".venv/bin/python scripts/pr_watch.py"
-$PRW claim $N                          # 退出码 4：别处已在处理，跳过；5：它不在等答复
+prw() { "$MAIN/.venv/bin/python" "$MAIN/scripts/pr_watch.py" "$@"; }   # 函数而不是变量：zsh 不会把变量按空格拆成命令和参数
+prw claim $N                           # 退出码 4：别处已在处理，跳过；5：它不在等答复
 git fetch github                      # refs/remotes/github/main 必须是 GitHub 上真实的那个
 git fetch github "refs/pull/$N/head:refs/pr/$N"
 REVIEWED=$(git rev-parse refs/pr/$N)   # 必须等于 status 里记录的 head；不等就是作者又推了：重新 status
@@ -105,8 +105,8 @@ git push origin main                                    # origin 是完整历史
 **7. 收尾，同样按顺序：**
 
 ```bash
-$PRW ack $N --result integrated --head "$REVIEWED" --note "landed as $(git rev-parse --short github/main)"
-gh pr comment $N --repo $REPO --body-file "$TMPDIR/pr-$N-reply.md"   # 用文件，避免引号问题
+prw ack $N --result integrated --head "$REVIEWED" --note "landed as $(git rev-parse --short github/main)"
+gh pr comment $N --repo $REPO --body-file "${TMPDIR:-/tmp}/pr-$N-reply.md"   # 用文件，避免引号问题
 gh pr close $N --repo $REPO
 git worktree remove "$WT" && git branch -d "integrate/pr-$N"
 ```
