@@ -397,8 +397,7 @@ def _headers_of(cfg: NetConfig, written: dict[str, str]) -> httpx.Headers:
         {
             "user-agent": cfg.user_agent,
             "accept": "text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.5",
-            # Compressed answers are unpacked before they are measured, so a small download can
-            # become a very large one. Asking for the plain text keeps honest servers from doing it.
+            # A compressed body is refused before reading it, even if the server ignores this.
             "accept-encoding": "identity",
         }
     )
@@ -407,9 +406,20 @@ def _headers_of(cfg: NetConfig, written: dict[str, str]) -> httpx.Headers:
 
 
 async def _read_capped(response: httpx.Response, limit: int) -> tuple[bytes, bool]:
-    """The body of a response up to `limit` bytes, and whether there was more."""
+    """Read a bounded identity body without ever invoking an automatic decompressor.
+
+    Checking the returned size after `aiter_bytes()` would be too late: one small gzip chunk can
+    allocate an enormous decoded chunk. Servers which ignore our identity request are refused
+    before consuming their stream. A future compressed-body implementation must bound decoding,
+    not merely the bytes it keeps afterwards.
+    """
+    encoding = response.headers.get("content-encoding", "identity").strip().lower()
+    if encoding not in ("", "identity"):
+        raise Blocked(
+            "the server returned a compressed response; only uncompressed responses are accepted"
+        )
     body = bytearray()
-    async for chunk in response.aiter_bytes():
+    async for chunk in response.aiter_raw():
         room = limit - len(body)
         body += chunk[:room]
         if len(chunk) > room:
@@ -449,7 +459,12 @@ async def _follow(
                     visited.append(str(following.url))
                     previous, request = request.url, following
                     continue
-                body, truncated = await _read_capped(response, limit)
+                if request.verb == "HEAD" or response.status_code in (204, 304):
+                    # These responses have no body; Content-Encoding describes a representation
+                    # a later GET might return, and cannot allocate anything here.
+                    body, truncated = b"", False
+                else:
+                    body, truncated = await _read_capped(response, limit)
                 return Fetched(
                     url=str(request.url),
                     status=response.status_code,

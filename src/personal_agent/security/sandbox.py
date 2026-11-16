@@ -119,9 +119,8 @@ class _Sink:
 
 
 PIPE_GRACE_S = 1.0
-"""After the command itself has finished, how long its leftover background processes may keep the
-output pipes open before the whole process group is killed. Runs are bounded, so a command
-cannot leave a daemon behind."""
+"""How long to drain output after the command's process group has been stopped. Cleanup never
+depends on whether a background process kept its output pipes open."""
 
 
 def _kill_group(proc: asyncio.subprocess.Process) -> None:
@@ -144,15 +143,37 @@ async def _exited(proc: asyncio.subprocess.Process) -> None:
         pause = min(pause * 2, 0.05)
 
 
+async def _finish_process(
+    proc: asyncio.subprocess.Process,
+    readers: list[asyncio.Task[None]],
+    on_stop: Callable[[], Awaitable[None]] | None,
+) -> None:
+    """Stop the whole job and reap it on every exit path, including a cancelled caller."""
+    _kill_group(proc)
+    try:
+        if on_stop is not None:
+            await on_stop()  # e.g. destroy the container, not just its local Docker client
+    finally:
+        _, pending = await asyncio.wait(readers, timeout=PIPE_GRACE_S)
+        for reader in pending:
+            reader.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+        await asyncio.wait_for(proc.wait(), 2)
+
+
 async def run_process(
     argv: list[str],
     *,
     env: dict[str, str],
     cwd: Path,
     timeout_s: float,
-    on_timeout: Callable[[], Awaitable[None]] | None = None,
+    on_stop: Callable[[], Awaitable[None]] | None = None,
 ) -> ExecResult:
-    """Run `argv`, cap its output, and kill its whole process group on timeout or cancellation."""
+    """Run `argv`, cap its output, and stop its process group after exit, timeout or cancellation.
+
+    `on_stop`, when provided, also destroys resources beyond the local process group (a Docker
+    container). Cleanup finishes before cancellation is propagated to the caller.
+    """
     started = time.monotonic()
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -177,21 +198,19 @@ async def run_process(
         await asyncio.wait_for(_exited(proc), timeout_s)
     except TimeoutError:
         timed_out = True
-        if on_timeout is not None:
-            await on_timeout()
-        _kill_group(proc)
-        await _exited(proc)
-    except BaseException:
-        _kill_group(proc)
-        for reader in readers:
-            reader.cancel()
-        raise
-    _, still_open = await asyncio.wait(readers, timeout=PIPE_GRACE_S)
-    if still_open:  # background processes are holding the pipes: end them, keep what we have
-        _kill_group(proc)
-        _, still_open = await asyncio.wait(still_open, timeout=2)
-        for reader in still_open:
-            reader.cancel()
+    finally:
+        # A background child may close both pipes and keep working. The group must be stopped
+        # regardless, and cancelling the tool must not leave cleanup running in the background.
+        cleanup = asyncio.create_task(_finish_process(proc, readers, on_stop))
+        interrupted = False
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                interrupted = True  # a second cancellation must not cancel backend cleanup
+        cleanup.result()
+        if interrupted:
+            raise asyncio.CancelledError
     return ExecResult(
         exit_code=None if timed_out else proc.returncode,
         stdout=out.text(),
@@ -204,6 +223,11 @@ async def run_process(
 
 def _real(path: str | Path) -> Path:
     return Path(path).expanduser().resolve()
+
+
+def _is_macos() -> bool:
+    """Runtime platform check: this module is type-checked on every supported host."""
+    return sys.platform == "darwin"
 
 
 def _sbpl(path: Path | str) -> str:
@@ -357,7 +381,7 @@ class SeatbeltSandbox:
         )
 
     def probe(self) -> Probe:
-        if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").exists():
+        if not _is_macos() or not Path("/usr/bin/sandbox-exec").exists():
             return Probe(False, "sandbox-exec is not available on this system")
         try:
             done = subprocess.run(
@@ -418,24 +442,30 @@ class DockerSandbox:
 
     async def execute(self, command: str, *, timeout_s: float) -> ExecResult:
         container = f"pa-{uuid.uuid4().hex[:12]}"
-
-        async def stop_container() -> None:
-            killer = await asyncio.create_subprocess_exec(
-                "docker", "kill", container,
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
-            )  # fmt: skip
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(killer.wait(), 10)
-
         env = {"PATH": os.environ.get("PATH", DEFAULT_PATH), "HOME": os.environ.get("HOME", "/")}
         # The Docker client needs a few variables (DOCKER_HOST, DOCKER_CONFIG) to find the daemon.
         env.update({k: v for k, v in os.environ.items() if k.startswith("DOCKER_")})
+
+        async def stop_container() -> None:
+            killer = await asyncio.create_subprocess_exec(
+                "docker", "rm", "--force", container,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                env=env,
+            )  # fmt: skip
+            try:
+                await asyncio.wait_for(killer.wait(), 10)
+            except BaseException:
+                with contextlib.suppress(ProcessLookupError):
+                    killer.kill()
+                await killer.wait()
+                raise
+
         return await run_process(
             self.argv(command, container),
             env=env,
             cwd=self.workspace,
             timeout_s=timeout_s,
-            on_timeout=stop_container,
+            on_stop=stop_container,
         )
 
     def probe(self) -> Probe:
