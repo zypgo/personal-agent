@@ -15,6 +15,7 @@ steps:
     message: What is a good way to start learning to cook?
 checks:
   - {kind: says, step: ask, pattern: "[\u4e00-\u9fff]{4,}"}
+  - {id: chinese-and-brief, kind: response_style, step: ask, min_han_share: 0.8, max_chars: 100, max_sentences: 2}
   - {kind: memory_untouched, paths: [preferences/instructions.md]}
   - {kind: max_messages, limit: 1}
   - {kind: spend_under, usd: 0.25}
@@ -24,7 +25,7 @@ mock:
       - say: "先从简单的家常菜开始，比如炒鸡蛋和蔬菜汤。多看视频教程，每周固定做几次。"
   bad:
     - name: answers-in-english
-      fails: [says-ask]
+      fails: [says-ask, chinese-and-brief]
       script:
         ask:
           - say: "Start with simple dishes like scrambled eggs and soup."
@@ -34,3 +35,13 @@ mock:
         ask:
           - send: "先从简单的家常菜开始，比如炒鸡蛋。"
           - say: "再补充一点：每周固定做几次，慢慢就熟练了。"
+    - name: chinese-prefix-hides-an-english-answer
+      fails: [chinese-and-brief]
+      script:
+        ask:
+          - say: "先学家常菜。Start with scrambled eggs, then learn knife skills, soups, roasting, and sauces. Practice every day."
+    - name: too-many-chinese-sentences
+      fails: [chinese-and-brief]
+      script:
+        ask:
+          - say: "先学炒蛋。然后学切菜。再试煮汤。每天练习。最后请朋友尝尝。"

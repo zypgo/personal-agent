@@ -33,6 +33,10 @@ checks:
   - {kind: says, step: first, any_of: [tram, 电车, 有轨]}
   - {kind: silent, step: again}
   - {kind: says, step: new-item, any_of: [march, 三月, 3月]}
+  - id: no-old-news
+    kind: never_says
+    step: new-item
+    pattern: '\b(?:approv\w*|authori[sz]\w*|green[- ]?lit|green light|monday)\b|批准|周一|星期一|通过.{0,20}(?:电车|有轨)'
   - {kind: max_messages, limit: 2}
   - {kind: spend_under, usd: 0.4}
 mock:
@@ -55,10 +59,24 @@ mock:
       fails: [says-first, says-new-item]
       script: {}
     - name: repeats-everything-at-the-end
-      fails: [max_messages]
+      fails: [max_messages, no-old-news]
       script:
         first:
           - send: "The city council approved the new tram line on Monday."
         new-item:
           - send: "The council approved the tram line on Monday."
           - send: "The opening date has been moved to March."
+    - name: bundles-old-and-new-in-one-message
+      fails: [no-old-news]
+      script:
+        first:
+          - send: "The city council approved the new tram line on Monday."
+        new-item:
+          - send: "The council approved the tram line on Monday; its opening date has moved to March."
+    - name: paraphrases-the-repeat
+      fails: [no-old-news]
+      script:
+        first:
+          - send: "The city council approved the new tram line on Monday."
+        new-item:
+          - send: "The tram got the green light. Its opening date is now March."

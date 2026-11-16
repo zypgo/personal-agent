@@ -17,8 +17,15 @@ steps:
     message: Which jobs of mine are open? One short sentence.
 checks:
   - {kind: tools_used, step: first, tools: [memory]}
-  - {kind: memory_has, path: "state/tasks/*.md", contains: ["status:"]}
+  - kind: memory_has
+    path: "state/tasks/*.md"
+    contains: ["status:"]
+    pattern: '^\s*(?:[-*>]\s*)?\**status\**\s*:\s*\**\s*(?:in progress|open|pending|underway|进行中|待办)\b'
   - {kind: says, step: second, any_of: [tax, receipt, 税, 发票, 收据]}
+  - id: does-not-deny-open-task
+    kind: never_says
+    step: second
+    pattern: '\bno\b.{0,50}\b(?:tax|receipts?|open jobs?)\b|\b(?:everything|all jobs?|tax.{0,30})\b.{0,25}\b(?:already complete|completed|finished|closed)\b|(?:没有|无).{0,20}(?:税|发票|收据|待办)|(?:全部|税.{0,20})(?:完成|已完成)'
   - {kind: spend_under, usd: 0.5}
 mock:
   good:
@@ -41,7 +48,7 @@ mock:
         second:
           - say: "One open job: collecting your 2026 tax receipts."
     - name: forgets-by-the-next-day
-      fails: [says-second]
+      fails: [says-second, does-not-deny-open-task]
       script:
         first:
           - memory:
@@ -51,3 +58,25 @@ mock:
           - say: "Noted."
         second:
           - say: "You have no open jobs right now."
+    - name: mentions-the-task-but-denies-it-is-open
+      fails: [does-not-deny-open-task]
+      script:
+        first:
+          - memory:
+              command: create
+              path: /memories/state/tasks/tax-receipts-2026.md
+              file_text: "# Collect the 2026 tax receipts\nstatus: in progress\n"
+          - say: "Noted."
+        second:
+          - say: "You have no tax receipt job open; everything is already complete."
+    - name: marks-unfinished-work-complete
+      fails: [memory_has]
+      script:
+        first:
+          - memory:
+              command: create
+              path: /memories/state/tasks/tax-receipts-2026.md
+              file_text: "# Collect the 2026 tax receipts\nstatus: completed\n"
+          - say: "Noted."
+        second:
+          - say: "One open job: collecting your 2026 tax receipts."
