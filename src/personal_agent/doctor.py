@@ -302,7 +302,8 @@ def capability_checks(paths: Paths) -> list[Check]:
 def _service_checks(paths: Paths, manager: ServiceManager | None = None) -> list[Check]:
     """The background service, if one was installed for this home: loaded, still pointing at a
     program that exists, and not somewhere macOS keeps background jobs out of."""
-    if sys.platform != "darwin":
+    platform = sys.platform
+    if platform != "darwin":
         return []
     from personal_agent.launchd import ServiceError, ServiceManager, protected_folder
 

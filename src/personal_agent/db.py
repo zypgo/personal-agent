@@ -8,6 +8,7 @@ an RLock keeps the connection safe if a tool runs in a worker thread.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -18,6 +19,8 @@ from typing import Any
 
 from personal_agent.parsing import loads_json
 from personal_agent.security.sanitize import scrub_tree
+
+log = logging.getLogger(__name__)
 
 
 def _transcript_search_index(conn: sqlite3.Connection) -> None:
@@ -341,6 +344,63 @@ MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     -- An index of only the leased rows is exactly as big as the answer.
     CREATE INDEX events_leased ON events(lease_expires_at) WHERE status = 'leased';
     """,
+    # ---- recovery identities, usage ledger, durable notifications and memory journal -----
+    """
+    ALTER TABLE run_states ADD COLUMN generation INTEGER NOT NULL DEFAULT 1;
+    UPDATE run_states SET generation = MAX(1, (
+        SELECT COUNT(*) FROM approvals WHERE approvals.run_id = run_states.run_id));
+
+    CREATE TABLE usage_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        at REAL NOT NULL,
+        requests INTEGER NOT NULL DEFAULT 0,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        cached_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0
+    );
+    CREATE INDEX usage_events_at ON usage_events(at);
+    CREATE INDEX usage_events_run ON usage_events(run_id, at);
+    -- Historical calls have no individual timestamps; preserve the old attribution once.
+    INSERT INTO usage_events(run_id, at, requests, input_tokens, cached_tokens, output_tokens,
+                             reasoning_tokens, cost_usd)
+        SELECT id, started_at, requests, input_tokens, cached_tokens, output_tokens,
+               reasoning_tokens, cost_usd FROM runs
+        WHERE requests != 0 OR cost_usd != 0;
+
+    CREATE TABLE dead_event_notices (
+        event_id INTEGER PRIMARY KEY,
+        created_at REAL NOT NULL
+    );
+
+    CREATE TABLE memory_documents (
+        path TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        content BLOB,
+        revision INTEGER NOT NULL,
+        projected_revision INTEGER NOT NULL,
+        base_kind TEXT NOT NULL,
+        base_content BLOB,
+        updated_at REAL NOT NULL
+    );
+    CREATE INDEX memory_documents_pending ON memory_documents(revision, projected_revision)
+        WHERE revision != projected_revision;
+
+    CREATE TABLE ingress_receipts (
+        source TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        state TEXT NOT NULL,
+        result TEXT NOT NULL DEFAULT '{}',
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        lease_until REAL NOT NULL,
+        PRIMARY KEY(source, external_id)
+    );
+    CREATE INDEX ingress_receipts_updated ON ingress_receipts(updated_at);
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -386,6 +446,7 @@ class Database:
         self.path = str(path)
         self._lock = threading.RLock()
         self._depth = 0
+        self._after_commit: list[Callable[[], None]] = []
         if self.path != ":memory:":
             _create_private(self.path)
         self._conn = sqlite3.connect(
@@ -471,6 +532,7 @@ class Database:
     @contextmanager
     def tx(self) -> Iterator[Database]:
         """`BEGIN IMMEDIATE` transaction; nested use becomes a savepoint."""
+        callbacks: list[Callable[[], None]] = []
         with self._lock:
             if self._depth == 0:
                 self._conn.execute("BEGIN IMMEDIATE")
@@ -482,10 +544,13 @@ class Database:
                     raise
                 else:
                     self._conn.execute("COMMIT")
+                    callbacks, self._after_commit = self._after_commit, []
                 finally:
                     self._depth = 0
+                    self._after_commit = []
             else:
                 name = f"sp{self._depth}"
+                callback_start = len(self._after_commit)
                 self._conn.execute(f"SAVEPOINT {name}")
                 self._depth += 1
                 try:
@@ -493,11 +558,27 @@ class Database:
                 except BaseException:
                     self._conn.execute(f"ROLLBACK TO {name}")
                     self._conn.execute(f"RELEASE {name}")
+                    del self._after_commit[callback_start:]
                     raise
                 else:
                     self._conn.execute(f"RELEASE {name}")
                 finally:
                     self._depth -= 1
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                # The database already committed. Durable projection work remains pending;
+                # report it honestly, and let recovery retry instead of pretending rollback.
+                log.exception("post-commit projection failed; recovery will retry")
+
+    def after_commit(self, callback: Callable[[], None]) -> None:
+        """Run a recoverable projection only after the outermost transaction commits."""
+        with self._lock:
+            if self._depth:
+                self._after_commit.append(callback)
+                return
+        callback()
 
     # ---- schema -----------------------------------------------------------------------
     @property

@@ -209,7 +209,7 @@ class Daemon:
             while not self._stopping:
                 event.clear()
                 try:
-                    if self.app.inbox.has_ready():
+                    if self.app.inbox.has_ready() or self.app.inbox.has_unreported_dead():
                         result = await worker.run_once()
                         if result is not None:
                             self._after_batch(result)

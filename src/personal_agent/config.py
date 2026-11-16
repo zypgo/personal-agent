@@ -379,6 +379,8 @@ class MediaConfig(_Section):
     """Turn voice messages into text with OpenAI speech-to-text before the agent sees them."""
     transcribe_model: str = "gpt-transcribe"
     """`whisper-1` and the `gpt-4o-*-transcribe` models are scheduled to shut down on 2027-02-26."""
+    transcribe_timeout_s: float = Field(240.0, gt=0, le=3600)
+    """Deadline for one complete transcription, including conversion and provider retries."""
     language: str | None = None
     """ISO-639-1 hint such as "zh" or "en" (improves accuracy for short clips). `None` = detect."""
     max_voice_seconds: int = Field(300, ge=5, le=3600)
@@ -911,6 +913,7 @@ images = true                    # pictures you send are shown to the model
 images_in_context = 2            # each request carries only your newest N pictures
 voice = true                     # voice messages are turned into text first (OpenAI speech-to-text)
 transcribe_model = "gpt-transcribe"
+# transcribe_timeout_s = 240     # interrupted calls require a new message before retrying
 # language = "zh"                # ISO-639-1 hint; default: detect
 
 # Chat with the agent from Telegram. Create a bot with @BotFather, put its token in .env as
@@ -922,8 +925,8 @@ transcribe_model = "gpt-transcribe"
 # proxy = "socks5://127.0.0.1:1080"    # if Telegram is not reachable directly
 
 # A chat page for any browser, installable on a phone's home screen. It listens on this computer
-# only; `tailscale serve --bg 8765` makes it reachable from your own devices over HTTPS. Pair a
-# browser with `pa web pair` (a link and QR code that work once). Nobody else can open it.
+# only; `pa web connect --via tailscale` sets up private HTTPS and a one-time pairing QR.
+# Use `pa web connect --via lan` on trusted Wi-Fi, or `pa web pair` to pair another browser.
 # [web]
 # enabled = true
 # public_url = "https://my-mac.tailnet-name.ts.net"   # where your phone reaches it

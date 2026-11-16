@@ -59,8 +59,11 @@ class Rule:
 
 
 def _never_suspended(column: str, table: str) -> str:
-    """A run that is waiting for an approval keeps its row, and the approvals it waits for."""
-    return f"NOT EXISTS (SELECT 1 FROM run_states WHERE run_states.run_id = {table}.{column})"
+    """Unfinished approval execution or dream review keeps its run and decision records."""
+    return (
+        f"NOT EXISTS (SELECT 1 FROM run_states WHERE run_states.run_id = {table}.{column})"
+        f" AND NOT EXISTS (SELECT 1 FROM kv WHERE key = 'dream:pending:' || {table}.{column})"
+    )
 
 
 RULES: tuple[Rule, ...] = (
@@ -69,7 +72,8 @@ RULES: tuple[Rule, ...] = (
         "events",
         "records",
         "COALESCE(done_at, created_at)",
-        "status IN ('done', 'dead')",
+        "status IN ('done', 'dead') AND NOT EXISTS "
+        "(SELECT 1 FROM dead_event_notices WHERE event_id=events.id)",
         "inbox events that were handled",
     ),
     Rule(
@@ -129,13 +133,26 @@ RULES: tuple[Rule, ...] = (
         "runs that finished",
     ),
     Rule("spend", "spend", "runs", "at", "1", "speech-to-text charges"),
+    Rule("usage_events", "usage_events", "runs", "at", "1", "model usage at the time it happened"),
+    Rule(
+        "ingress_receipts",
+        "ingress_receipts",
+        "records",
+        "updated_at",
+        "state IN ('done', 'rejected', 'uncertain')",
+        "completed voice-message receipts",
+    ),
     Rule("audit", "audit", "audit", "ts", "1", "tool call records"),
     Rule(
         "memory_history",
         "memory_versions",
         "memory_history",
         "created_at",
-        "id NOT IN (SELECT MAX(id) FROM memory_versions GROUP BY path)",
+        "id NOT IN (SELECT MAX(id) FROM memory_versions GROUP BY path) "
+        # An unfinished dream needs every version from its first edit onward, including later
+        # owner edits used to detect a rollback conflict. Its first old_content is the baseline.
+        "AND id < COALESCE((SELECT MIN(v.id) FROM memory_versions v WHERE EXISTS "
+        "(SELECT 1 FROM kv WHERE key = 'dream:pending:' || v.run_id)), 9223372036854775807)",
         "older versions of memory files (the newest of each stays)",
     ),
 )
