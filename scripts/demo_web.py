@@ -23,7 +23,7 @@ from typing import Any
 from agents.testing import ScriptedModel, assistant_message, function_call
 
 from personal_agent.app import App, build_app
-from personal_agent.channels.web.channel import WebChannel, base_url
+from personal_agent.channels.web.channel import WebChannel
 from personal_agent.config import AgentConfig, Config, RuntimeConfig, WebConfig
 from personal_agent.core.approvals import PendingCall
 from personal_agent.daemon import Daemon
@@ -184,7 +184,7 @@ async def serve(app: App, bulk: int = 0) -> None:
         await asyncio.sleep(0.05)
     invite = app.web_auth.invite("demo browser")
     print(f"Open this in a browser (it works once, for {app.config.web.invite_minutes} minutes):")
-    print(f"\n    {base_url(app).replace('127.0.0.1', 'localhost')}/#pair={invite.code}\n")
+    print(f"\n    {app.config.web.address.replace('127.0.0.1', 'localhost')}/#pair={invite.code}\n")
     print("Ctrl-C to stop.")
     await running
 
