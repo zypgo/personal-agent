@@ -5,15 +5,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from typing import TYPE_CHECKING
 
 import typer
 from rich.markup import escape
 
 from personal_agent.commands.common import console, opened, say
 from personal_agent.config import DEFAULT_CONFIG_TOML, DEFAULT_ENV, ConfigError, load_env
-from personal_agent.doctor import capability_checks, live_checks, static_checks
+from personal_agent.doctor import Check, capability_checks, live_checks, static_checks
 from personal_agent.paths import Paths
 from personal_agent.skills.install import install_bundled
+
+if TYPE_CHECKING:
+    from personal_agent.app import App
 
 app = typer.Typer()
 
@@ -50,6 +54,14 @@ def init() -> None:
         say("\nNext: run [bold]pa doctor[/bold], then [bold]pa chat[/bold].")
 
 
+async def _live(agent: App) -> list[Check]:
+    """The live check, and then everything it opened closed, before the event loop ends."""
+    try:
+        return await live_checks(agent)
+    finally:
+        await agent.stop_services()
+
+
 @app.command()
 def doctor(
     live: bool = typer.Option(
@@ -65,7 +77,7 @@ def doctor(
     skipped_live = live and any(c.status == "fail" for c in checks)
     if live and not skipped_live:
         with opened() as agent, console.status("[dim]calling the model...[/dim]"):
-            checks += asyncio.run(live_checks(agent))
+            checks += asyncio.run(_live(agent))
     for check in checks:
         say(f"{MARKS[check.status]} {check.name}: {escape(check.detail)}")
         if check.fix and check.status != "ok":

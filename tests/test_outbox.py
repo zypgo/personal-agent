@@ -32,7 +32,7 @@ def test_enqueue_claim_send(outbox):
 def test_dedupe_key(outbox):
     assert enq(outbox, dedupe_key="brief:2026-11-15") is not None
     assert enq(outbox, "again", dedupe_key="brief:2026-11-15") is None
-    assert len(outbox.list()) == 1
+    assert len(outbox.recent()) == 1
 
 
 def test_not_before_and_channel_filter(outbox, clock):

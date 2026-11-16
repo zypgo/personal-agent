@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
+import time
 
 import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
 
 from helpers import owner_message
 from personal_agent import daemon as daemon_module
-from personal_agent.config import Config, PolicyConfig, RuntimeConfig
+from personal_agent import maintenance
+from personal_agent.config import Config, PolicyConfig, RetentionConfig, RuntimeConfig
 from personal_agent.daemon import Daemon, Engine
+from personal_agent.maintenance import EVERY_S, Janitor
 from personal_agent.presence import HEARTBEAT_KEY, LOCK_NAME, AlreadyRunning, EngineLock
+from rows import DAY, insert, rowids
 from test_dispatcher import FakeChannel
 from tooling import Spy, install
 
@@ -220,6 +225,121 @@ async def test_the_heartbeat_tells_other_processes_the_daemon_is_alive(make_app)
     assert beat is not None and beat.split()[1] == str(app.clock.now())
 
 
+# ---- the daily upkeep -----------------------------------------------------------------------------
+async def test_the_daemon_removes_old_records_once_a_day(make_app, clock, monkeypatch):
+    monkeypatch.setattr(daemon_module, "UPKEEP_CHECK_S", 0.05)
+    monkeypatch.setattr(maintenance, "PAUSE_S", 0.0)
+    app = make_app(ScriptedModel([]), config=cfg())
+    insert(app.db, "events", "done", clock.now() - 400 * DAY, 1)
+    async with running(app) as daemon:
+        await eventually(lambda: app.janitor.last(), what="the first upkeep")
+        assert rowids(app.db, "events") == set() and daemon.stats.rows_pruned == 1
+        first = app.janitor.last()
+        insert(app.db, "events", "done", clock.now() - 400 * DAY, 2)
+        await asyncio.sleep(0.3)  # the same day: left for tomorrow
+        assert len(rowids(app.db, "events")) == 1 and app.janitor.last() == first
+        clock.advance(EVERY_S + 1)
+        await eventually(lambda: rowids(app.db, "events") == set(), what="the next day's upkeep")
+        assert app.janitor.last().at > first.at and daemon.stats.rows_pruned == 2
+
+
+async def test_with_the_upkeep_switched_off_the_daemon_keeps_everything(
+    make_app, clock, monkeypatch
+):
+    monkeypatch.setattr(daemon_module, "UPKEEP_CHECK_S", 0.05)
+    app = make_app(ScriptedModel([]), config=cfg(retention=RetentionConfig(auto=False)))
+    insert(app.db, "events", "done", clock.now() - 400 * DAY, 1)
+    async with running(app) as daemon:
+        await asyncio.sleep(0.3)
+    assert len(rowids(app.db, "events")) == 1
+    assert app.janitor.last() is None and daemon.stats.rows_pruned == 0
+
+
+async def test_a_failing_upkeep_is_logged_counted_and_does_not_take_the_daemon_down(
+    make_app, monkeypatch, caplog
+):
+    monkeypatch.setattr(daemon_module, "UPKEEP_CHECK_S", 0.05)
+
+    def broken(self, **kw):
+        raise KeyError("oops")
+
+    monkeypatch.setattr(Janitor, "maintain", broken)
+    channel = FakeChannel()
+    app = make_app(ScriptedModel([[assistant_message("still here")]]), config=cfg())
+    with caplog.at_level("ERROR", logger=daemon_module.log.name):
+        async with running(app, {"cli": channel}) as daemon:
+            await eventually(lambda: daemon.stats.errors >= 1, what="the failure")
+            daemon.submit(owner_message("ping"))
+            await eventually(lambda: channel.sent, what="the reply")
+    assert "database upkeep failed" in caplog.text
+
+
+async def test_a_long_upkeep_neither_stops_the_heartbeat_nor_keeps_the_agent_from_answering(
+    make_app, clock, monkeypatch
+):
+    monkeypatch.setattr(daemon_module, "UPKEEP_CHECK_S", 0.05)
+    monkeypatch.setattr(daemon_module, "HOUSEKEEPING_S", 0.05)
+    started, release = threading.Event(), threading.Event()
+    real = Janitor.maintain
+
+    def slow(self, **kw):
+        started.set()
+        release.wait(10)
+        return real(self, **kw)
+
+    monkeypatch.setattr(Janitor, "maintain", slow)
+    channel = FakeChannel()
+    app = make_app(ScriptedModel([[assistant_message("answered meanwhile")]]), config=cfg())
+    async with running(app, {"cli": channel}) as daemon:
+        await eventually(started.is_set, what="the upkeep to start")
+        clock.advance(100)
+        await eventually(
+            lambda: (app.db.kv_get(HEARTBEAT_KEY) or "").endswith(str(clock.now())),
+            what="a heartbeat while the upkeep is busy",
+        )
+        daemon.submit(owner_message("hello"))
+        await eventually(lambda: channel.sent, what="an answer while the upkeep is busy")
+        release.set()
+        await eventually(lambda: app.janitor.last(), what="the upkeep to end")
+    assert channel.sent == ["answered meanwhile"]
+
+
+async def test_stopping_the_daemon_stops_the_upkeep_between_batches_and_waits_for_it(
+    make_app, clock, monkeypatch
+):
+    monkeypatch.setattr(daemon_module, "UPKEEP_CHECK_S", 0.05)
+    monkeypatch.setattr(maintenance, "BATCH", 2)
+    # A hundred batches, half a second apart, would take most of a minute if left alone; and a
+    # daemon that did not wait for the thread would be gone while it still slept between batches.
+    monkeypatch.setattr(maintenance, "PAUSE_S", 0.5)
+    finished = threading.Event()
+    real = Janitor.maintain
+
+    def noting(self, **kw):
+        try:
+            return real(self, **kw)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(Janitor, "maintain", noting)
+    app = make_app(ScriptedModel([]), config=cfg())
+    with app.db.tx():
+        for tag in range(200):
+            insert(app.db, "events", "done", clock.now() - 400 * DAY, tag)
+    async with running(app) as daemon:
+        await eventually(lambda: len(rowids(app.db, "events")) < 200, what="the upkeep to begin")
+        began = time.monotonic()
+        daemon.stop()
+    assert time.monotonic() - began < 2.0  # it did not finish the other hundred batches first
+    assert (
+        finished.is_set()
+    )  # and the daemon did not leave while the thread still used the database
+    assert 0 < len(rowids(app.db, "events")) < 200
+    assert (
+        app.janitor.last() is None and app.janitor.due()
+    )  # not written down as done: next start finishes
+
+
 # ---- the CLI engine -----------------------------------------------------------------------------
 async def test_a_lone_cli_runs_the_agent_inline(make_app):
     app = make_app(ScriptedModel([[assistant_message("inline answer")]]), config=cfg())
@@ -252,7 +372,7 @@ async def test_with_a_daemon_running_the_cli_only_submits_and_waits(make_app):
         assert await client.settle("main", tick=tick) == []
         assert ticks >= 1
         assert app.inbox.get(1)["status"] == "done"
-        [reply] = app.outbox.list()
+        [reply] = app.outbox.recent()
         assert (
             reply.text == "daemon answer" and reply.status == "pending"
         )  # for the terminal to show

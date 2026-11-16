@@ -236,7 +236,7 @@ async def test_working_through_one_conversation_leaves_the_others_waiting(tmp_pa
             )
         )
         assert await bench._drain(app, "main") == []
-        assert app.inbox.pending_for("timer:other") == 1
+        assert app.inbox.counts()["pending"] == 1  # the one for the other conversation
     finally:
         await app.stop_services()
         app.close()

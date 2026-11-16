@@ -42,7 +42,7 @@ async def test_the_owner_asks_on_telegram_and_the_answer_comes_back_there(make_a
         ("in", "telegram", "how is the weather?"),
         ("out", "telegram", "Hello **Frank**, it is sunny."),
     ]
-    assert app.outbox.list()[0].status == "sent"
+    assert app.outbox.recent()[0].status == "sent"
 
 
 async def test_a_new_person_pairs_then_talks_and_nobody_else_ever_costs_a_model_call(make_app):

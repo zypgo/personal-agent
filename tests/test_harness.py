@@ -35,7 +35,7 @@ async def test_owner_message_gets_a_reply_in_the_outbox(make_app):
     result = await Worker(app).run_once()
 
     assert result.outcome.status == "completed"
-    [message] = app.outbox.list()
+    [message] = app.outbox.recent()
     assert (message.channel, message.text, message.status, message.kind) == (
         "cli",
         "Hello!",
@@ -115,7 +115,7 @@ async def test_empty_final_answer_gets_an_explicit_notice(make_app):
     app.inbox.add(owner_message("hello?"))
     await Worker(app).run_once()
 
-    [message] = app.outbox.list()
+    [message] = app.outbox.recent()
     assert message.kind == "notice"
     assert "without a reply" in message.text
 
@@ -167,7 +167,7 @@ async def test_unreadable_preferences_stop_the_run_before_anything_is_written(ma
     assert app.sessions.items("main") == []
     event = app.inbox.get(1)
     assert event["status"] == "pending" and event["attempts"] == 0  # not the message's fault
-    [notice] = app.outbox.list()
+    [notice] = app.outbox.recent()
     assert "preferences" in notice.text
 
 
@@ -228,7 +228,7 @@ async def test_background_run_is_silent_unless_it_sends_a_message(make_app):
     result = await Worker(app).run_once()
 
     assert result.outcome.status == "silent"
-    assert app.outbox.list() == []
+    assert app.outbox.recent() == []
     run = app.runs.get(result.outcome.run_id)
     assert run.profile == "scheduled"
     assert run.final_text == "Nothing worth reporting."
@@ -253,7 +253,7 @@ async def test_background_run_delivers_only_through_send_message(make_app):
     result = await Worker(app).run_once()
 
     assert result.outcome.status == "completed"
-    [message] = app.outbox.list()
+    [message] = app.outbox.recent()
     assert (message.text, message.urgency, message.channel) == (
         "Your flight moved to 9:40.",
         "urgent",
@@ -274,7 +274,7 @@ async def test_interactive_runs_also_get_send_message_without_double_delivery(ma
     app.inbox.add(owner_message("do the thing"))
     await Worker(app).run_once()
 
-    assert [m.text for m in sorted(app.outbox.list(), key=lambda m: m.id)] == [
+    assert [m.text for m in sorted(app.outbox.recent(), key=lambda m: m.id)] == [
         "Working on it...",
         "All done.",
     ]
@@ -307,7 +307,7 @@ async def test_a_failed_run_resumes_without_duplicating_the_owners_message(make_
     assert any(RESUME_NOTE in t for t in user_texts)
     assert roles(items).count("function_call") == roles(items).count("function_call_output") == 1
     # The owner is told once that the first attempt failed, then gets the real answer.
-    sent = [m.text for m in sorted(app.outbox.list(), key=lambda m: m.id)]
+    sent = [m.text for m in sorted(app.outbox.recent(), key=lambda m: m.id)]
     assert sent == ["Something went wrong. I will retry automatically.", "recovered"]
 
 
@@ -330,7 +330,7 @@ async def test_a_wake_up_that_is_tried_again_does_not_queue_the_same_message_twi
     clock.advance(30)
     assert (await worker.run_once()).outcome is not None
 
-    assert [m.text for m in app.outbox.list() if m.text == "Your brief."] == ["Your brief."]
+    assert [m.text for m in app.outbox.recent() if m.text == "Your brief."] == ["Your brief."]
 
 
 async def test_the_same_message_in_a_later_wake_up_is_a_new_message(make_app, clock):
@@ -351,7 +351,7 @@ async def test_the_same_message_in_a_later_wake_up_is_a_new_message(make_app, cl
     app.inbox.add(timer("brief", "Summarise my inbox."))
     await worker.run_once()
 
-    assert [m.text for m in app.outbox.list()] == ["Your brief.", "Your brief."]
+    assert [m.text for m in app.outbox.recent()] == ["Your brief.", "Your brief."]
 
 
 async def test_an_event_that_was_already_answered_is_not_run_again(make_app, clock):
@@ -372,7 +372,7 @@ async def test_an_event_that_was_already_answered_is_not_run_again(make_app, clo
 
     assert again.status == "silent" and not again.queued_message_ids
     assert len(model.calls) == 1
-    assert [m.text for m in app.outbox.list()] == ["Hello!"]
+    assert [m.text for m in app.outbox.recent()] == ["Hello!"]
 
 
 async def test_only_the_new_events_of_a_batch_that_comes_back_are_run(make_app, clock):
@@ -390,7 +390,7 @@ async def test_only_the_new_events_of_a_batch_that_comes_back_are_run(make_app, 
 
     texts = [text_of(i) for i in app.sessions.items("main") if i.get("role") == "user"]
     assert [("first" in t, "second" in t) for t in texts] == [(True, False), (False, True)]
-    assert [m.text for m in sorted(app.outbox.list(), key=lambda m: m.id)] == ["One.", "Two."]
+    assert [m.text for m in sorted(app.outbox.recent(), key=lambda m: m.id)] == ["One.", "Two."]
 
 
 async def test_the_answer_and_the_end_of_the_run_are_one_commit(make_app, clock, monkeypatch):
@@ -407,13 +407,13 @@ async def test_the_answer_and_the_end_of_the_run_are_one_commit(make_app, clock,
     monkeypatch.setattr(app.runs, "finish", broken)
     first = await Worker(app).run_once()
     assert first.failure is not None
-    assert [m for m in app.outbox.list() if m.kind == "message"] == []  # nothing half-way
+    assert [m for m in app.outbox.recent() if m.kind == "message"] == []  # nothing half-way
 
     monkeypatch.setattr(app.runs, "finish", finish)
     clock.advance(60)
     await Worker(app).run_once()
 
-    assert [m.text for m in app.outbox.list() if m.kind == "message"] == ["Hello!"]
+    assert [m.text for m in app.outbox.recent() if m.kind == "message"] == ["Hello!"]
 
 
 async def test_dangling_tool_calls_are_closed_before_new_events(make_app):
@@ -448,7 +448,7 @@ async def test_step_limit_ends_the_run_tells_the_owner_and_does_not_retry(make_a
 
     assert result.outcome.status == "failed"
     assert app.inbox.counts()["done"] == 1
-    [notice] = app.outbox.list()
+    [notice] = app.outbox.recent()
     assert "stopped after 2 steps" in notice.text
 
 
@@ -473,7 +473,7 @@ async def test_a_missing_api_key_does_not_use_up_an_attempt_and_tells_the_owner_
 
     clock.advance(400)
     await worker.run_once()
-    notices = [m for m in app.outbox.list() if m.kind == "notice"]
+    notices = [m for m in app.outbox.recent() if m.kind == "notice"]
     assert len(notices) == 1
     assert "API key" in notices[0].text and "pa doctor" in notices[0].text
 
@@ -490,7 +490,7 @@ async def test_an_event_that_keeps_failing_is_given_up_on_and_the_owner_is_told(
     await worker.run_once()  # claim reaps the exhausted event
 
     assert app.inbox.counts()["dead"] == 1
-    assert any("gave up" in m.text for m in app.outbox.list())
+    assert any("gave up" in m.text for m in app.outbox.recent())
 
 
 async def test_interactive_callers_can_drop_instead_of_retry(make_app):
@@ -501,7 +501,7 @@ async def test_interactive_callers_can_drop_instead_of_retry(make_app):
 
     assert result.failure is not None
     assert app.inbox.counts()["dead"] == 1
-    assert app.outbox.list() == []
+    assert app.outbox.recent() == []
 
 
 async def test_nothing_to_do_returns_none(make_app):

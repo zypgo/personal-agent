@@ -23,7 +23,7 @@ def _list(
         return
     with opened() as agent:
         now = agent.clock.now()
-        for message in agent.outbox.list(status=status, limit=30):
+        for message in agent.outbox.recent(status=status, limit=30):
             preview = escape(message.text.replace("\n", " ")[:70])
             say(
                 f"#{message.id:<5} {message.status:<10} {message.channel:<9} "

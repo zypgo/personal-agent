@@ -161,7 +161,7 @@ async def test_a_reply_with_half_an_emoji_reaches_the_owner(make_app):
     [result] = await drain(app)
 
     assert result.outcome.status == "completed"
-    [message] = app.outbox.list()
+    [message] = app.outbox.recent()
     assert message.text == CLEAN
     assert encodable(message.text)
 

@@ -346,12 +346,3 @@ class Inbox:
     def get(self, event_id: int) -> dict[str, Any] | None:
         row = self.db.one("SELECT * FROM events WHERE id = ?", (event_id,))
         return dict(row) if row else None
-
-    def pending_for(self, session_key: str) -> int:
-        return int(
-            self.db.scalar(
-                "SELECT COUNT(*) FROM events WHERE session_key = ? AND status IN ('pending','leased')",
-                (session_key,),
-                default=0,
-            )
-        )

@@ -56,7 +56,7 @@ def _list(
         return
     with opened() as agent:
         now = agent.clock.now()
-        rows = agent.timers.list(include_finished=all_)
+        rows = agent.timers.scheduled(include_finished=all_)
         if not rows:
             say(
                 "[dim]No timers. Ask the agent to remind you of something, or use "

@@ -131,7 +131,7 @@ async def test_the_per_run_cap_stops_a_runaway_run_and_tells_the_owner(make_app)
     assert len(model.calls) == 2
     run = app.runs.get(result.outcome.run_id)
     assert run.status == "failed" and "run budget reached" in run.error
-    [notice] = app.outbox.list()
+    [notice] = app.outbox.recent()
     assert "cost limit" in notice.text and "$0.01" in notice.text
     assert app.inbox.counts()["done"] == 1  # not retried: a retry would spend the same again
 
@@ -142,7 +142,7 @@ async def test_an_answer_that_was_paid_for_is_never_thrown_away(make_app):
     app.inbox.add(owner_message("question"))
     [result] = await drain(app)
     assert result.outcome.status == "completed"
-    assert [m.text for m in app.outbox.list()] == ["Here is your answer."]
+    assert [m.text for m in app.outbox.recent()] == ["Here is your answer."]
 
 
 async def test_the_daily_cap_pauses_work_until_midnight_and_nothing_is_lost(make_app, clock):
@@ -153,7 +153,7 @@ async def test_the_daily_cap_pauses_work_until_midnight_and_nothing_is_lost(make
 
     assert first.failure is not None and first.failure.environmental
     assert app.runs.recent()[0].status == "paused_budget"
-    [notice] = app.outbox.list()
+    [notice] = app.outbox.recent()
     assert "Today's budget" in notice.text and "pa budget extend" in notice.text
     event = app.inbox.get(1)
     assert event["status"] == "pending" and event["attempts"] == 0  # waiting, not failing
@@ -162,14 +162,14 @@ async def test_the_daily_cap_pauses_work_until_midnight_and_nothing_is_lost(make
     app.inbox.add(owner_message("two", session="b"))
     await drain(app)
     assert len(model.calls) == 1 and len(app.runs.recent()) == 1
-    assert len(app.outbox.list()) == 1
+    assert len(app.outbox.recent()) == 1
 
     # After local midnight everything proceeds.
     clock.advance(86_400)
     results = await drain(app)
     assert {r.outcome.status for r in results} == {"completed"}
     assert app.inbox.counts()["done"] == 2 and app.inbox.counts()["dead"] == 0
-    assert sorted(m.text for m in app.outbox.list() if m.kind == "message") == ["first", "second"]
+    assert sorted(m.text for m in app.outbox.recent() if m.kind == "message") == ["first", "second"]
 
 
 async def test_raising_todays_cap_releases_the_waiting_events_immediately(make_app):
@@ -183,7 +183,7 @@ async def test_raising_todays_cap_releases_the_waiting_events_immediately(make_a
     assert (limit, released) == (1.004, 1)
     [result] = await drain(app)
     assert result.outcome.status == "completed"
-    assert any(m.text == "again" for m in app.outbox.list())
+    assert any(m.text == "again" for m in app.outbox.recent())
 
 
 async def test_a_paused_run_keeps_its_cost_on_the_record(make_app):

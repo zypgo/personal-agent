@@ -246,7 +246,7 @@ async def schedule_tool(
     timers = rc.app.timers
     try:
         if action == "list":
-            live = timers.list()
+            live = timers.scheduled()
             if not live:
                 return "No pending wake-ups."
             return f"{len(live)} pending wake-up(s):\n" + "\n".join(_describe(rc, t) for t in live)

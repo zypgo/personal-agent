@@ -24,6 +24,7 @@ from personal_agent.clock import get_tz, valid_zone
 from personal_agent.config import Config, ConfigError, api_key, load_config, read_text_file
 from personal_agent.db import SCHEMA_VERSION
 from personal_agent.harness.pricing import is_known
+from personal_agent.maintenance import footprint, size
 from personal_agent.paths import Paths
 from personal_agent.presence import LOCK_NAME, EngineLock
 
@@ -66,117 +67,144 @@ def _env_file_check(paths: Paths) -> Check:
     return Check("env file", "ok", "private (owner only)")
 
 
-def static_checks(paths: Paths) -> list[Check]:
-    checks: list[Check] = []
-
-    def add(name: str, status: Status, detail: str = "", fix: str = "") -> None:
-        checks.append(Check(name, status, detail, fix))
-
-    add("python", "ok", sys.version.split()[0])  # pyproject.toml enforces the minimum version
-
+def _home_check(paths: Paths) -> Check:
     if not paths.home.is_dir():
-        add("home", "fail", f"{paths.home} does not exist", "Run: pa init")
-        return checks
+        return Check("home", "fail", f"{paths.home} does not exist", "Run: pa init")
     mode = stat.S_IMODE(paths.home.stat().st_mode)
     if mode & 0o077:
-        add(
+        return Check(
             "home",
             "warn",
             f"{paths.home} is accessible by other users ({mode:04o})",
             f"chmod 700 {paths.home}",
         )
-    else:
-        add("home", "ok", str(paths.home))
+    return Check("home", "ok", str(paths.home))
 
-    checks.append(_env_file_check(paths))
 
-    try:
-        cfg = load_config(paths)
-    except ConfigError as exc:
-        add("config", "fail", str(exc), f"Fix {paths.config_file}")
-        return checks
-    add(
-        "config",
-        "ok",
-        str(paths.config_file) if paths.config_file.exists() else "defaults (no config.toml)",
+def _key_check(paths: Paths, cfg: Config) -> Check:
+    if api_key():
+        return Check("OpenAI key", "ok", "OPENAI_API_KEY is set")
+    if cfg.model.base_url or os.environ.get("OPENAI_BASE_URL"):
+        return Check("OpenAI key", "warn", "no key, but a custom endpoint is configured")
+    return Check(
+        "OpenAI key",
+        "fail",
+        "OPENAI_API_KEY is not set",
+        f"Put OPENAI_API_KEY=... in {paths.env_file}",
     )
 
-    if api_key():
-        add("OpenAI key", "ok", "OPENAI_API_KEY is set")
-    elif cfg.model.base_url or os.environ.get("OPENAI_BASE_URL"):
-        add("OpenAI key", "warn", "no key, but a custom endpoint is configured")
-    else:
-        add(
-            "OpenAI key",
-            "fail",
-            "OPENAI_API_KEY is not set",
-            f"Put OPENAI_API_KEY=... in {paths.env_file}",
-        )
 
+def _model_checks(cfg: Config) -> list[Check]:
+    checks = []
     for role, name in (("main model", cfg.model.main), ("fast model", cfg.model.fast)):
         if is_known(name):
-            add(role, "ok", name)
+            checks.append(Check(role, "ok", name))
         else:
-            add(
-                role, "warn", f"{name}: no price on file, so cost estimates assume the highest rate"
-            )
+            detail = f"{name}: no price on file, so cost estimates assume the highest rate"
+            checks.append(Check(role, "warn", detail))
+    return checks
 
-    if cfg.agent.timezone:
-        if valid_zone(cfg.agent.timezone):
-            add("timezone", "ok", cfg.agent.timezone)
-        else:
-            add("timezone", "warn", f"unknown timezone {cfg.agent.timezone!r}; using the system's")
-    else:
-        add("timezone", "ok", f"detected: {get_tz(None)}")
 
+def _timezone_check(cfg: Config) -> Check:
+    zone = cfg.agent.timezone
+    if not zone:
+        return Check("timezone", "ok", f"detected: {get_tz(None)}")
+    if valid_zone(zone):
+        return Check("timezone", "ok", zone)
+    return Check("timezone", "warn", f"unknown timezone {zone!r}; using the system's")
+
+
+def _sqlite_check() -> Check:
     if _fts5_available():
-        add("sqlite", "ok", f"{sqlite3.sqlite_version}, FTS5 available")
-    else:
-        add(
-            "sqlite",
-            "warn",
-            f"{sqlite3.sqlite_version} without FTS5",
-            "Memory search will be slower and less precise.",
-        )
+        return Check("sqlite", "ok", f"{sqlite3.sqlite_version}, FTS5 available")
+    return Check(
+        "sqlite",
+        "warn",
+        f"{sqlite3.sqlite_version} without FTS5",
+        "Memory search will be slower and less precise.",
+    )
 
-    if paths.db_file.exists():
+
+EMPTY_SPACE_WARN_BYTES = 50_000_000
+"""A database is worth mentioning when this much of it, and half of it, is space deleted rows left."""
+
+
+def _database_check(paths: Paths) -> Check:
+    if not paths.db_file.exists():
+        return Check("database", "warn", "not created yet", "Run: pa init")
+    try:
+        conn = sqlite3.connect(f"file:{paths.db_file}?mode=ro", uri=True)
         try:
-            conn = sqlite3.connect(f"file:{paths.db_file}?mode=ro", uri=True)
-            try:
-                version = conn.execute("PRAGMA user_version").fetchone()[0]
-            finally:
-                conn.close()
-        except sqlite3.Error as exc:
-            add("database", "fail", f"cannot open {paths.db_file.name}: {exc}")
-        else:
-            if version > SCHEMA_VERSION:
-                add(
-                    "database",
-                    "fail",
-                    f"schema v{version} is newer than this program (v{SCHEMA_VERSION})",
-                    "Upgrade personal-agent.",
-                )
-            else:
-                add("database", "ok", f"schema v{version}")
-    else:
-        add("database", "warn", "not created yet", "Run: pa init")
+            found = footprint(conn, paths.db_file, rows=False)
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return Check("database", "fail", f"cannot open {paths.db_file.name}: {exc}")
+    if found.schema > SCHEMA_VERSION:
+        return Check(
+            "database",
+            "fail",
+            f"schema v{found.schema} is newer than this program (v{SCHEMA_VERSION})",
+            "Upgrade personal-agent.",
+        )
+    detail = f"schema v{found.schema}, {size(found.total_bytes)}"
+    if (
+        found.reclaimable_bytes >= EMPTY_SPACE_WARN_BYTES
+        and found.reclaimable_bytes * 2 >= found.db_bytes
+    ):
+        return Check(
+            "database",
+            "warn",
+            f"{detail}, over half of it is empty space ({size(found.reclaimable_bytes)})",
+            "Stop the agent, then run: pa db vacuum",
+        )
+    return Check("database", "ok", detail)
 
+
+def _preferences_check(paths: Paths) -> Check:
     unreadable = []
-    for path in sorted(paths.preferences_dir.glob("*")) if paths.preferences_dir.is_dir() else []:
+    files = sorted(paths.preferences_dir.glob("*")) if paths.preferences_dir.is_dir() else []
+    for path in files:
         try:
             path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             unreadable.append(f"{path.name}: {exc}")
     if unreadable:
-        add(
+        return Check(
             "preferences",
             "fail",
             "; ".join(unreadable),
             "The agent refuses to run without being able to read your rules.",
         )
-    else:
-        add("preferences", "ok", str(paths.preferences_dir))
-    return checks
+    return Check("preferences", "ok", str(paths.preferences_dir))
+
+
+def static_checks(paths: Paths) -> list[Check]:
+    """Everything that can be known from the home directory alone, in the order a person would
+    look: the home, then its settings, then what the settings point at. It stops where there is
+    nothing to read on (no home, a config that does not parse)."""
+    python = Check("python", "ok", sys.version.split()[0])  # pyproject.toml sets the minimum
+    home = _home_check(paths)
+    if home.status == "fail":
+        return [python, home]
+    checks = [python, home, _env_file_check(paths)]
+
+    try:
+        cfg = load_config(paths)
+    except ConfigError as exc:
+        return [*checks, Check("config", "fail", str(exc), f"Fix {paths.config_file}")]
+    where = str(paths.config_file) if paths.config_file.exists() else "defaults (no config.toml)"
+    checks.append(Check("config", "ok", where))
+
+    return [
+        *checks,
+        _key_check(paths, cfg),
+        *_model_checks(cfg),
+        _timezone_check(cfg),
+        _sqlite_check(),
+        _database_check(paths),
+        _preferences_check(paths),
+    ]
 
 
 PROBE_HOST = "example.com"
@@ -202,54 +230,32 @@ def _resolve_probe(name: str, timeout: float = 3.0) -> list[str]:
     return list(found)
 
 
-def capability_checks(paths: Paths) -> list[Check]:
-    """What the agent will be able to do on this machine: sandbox, secrets for the web tools."""
+def _sandbox_check(paths: Paths, cfg: Config) -> Check:
     from personal_agent.security.sandbox import SandboxProvider
 
-    try:
-        cfg = load_config(paths)
-    except ConfigError:
-        return []  # static_checks reports the broken config
-    checks: list[Check] = []
-
     if not cfg.tools.shell:
-        checks.append(Check("shell", "ok", "switched off in config.toml"))
-    else:
-        sandbox, reason = SandboxProvider(paths, cfg.sandbox).resolve()
-        if sandbox is None:
-            checks.append(
-                Check(
-                    "shell sandbox",
-                    "warn",
-                    f"the shell tool is off: {reason}",
-                    "On macOS the built-in sandbox needs /usr/bin/sandbox-exec; elsewhere install "
-                    f"Docker and run `docker pull {cfg.sandbox.image}`.",
-                )
-            )
-        elif sandbox.name == "none":
-            checks.append(
-                Check(
-                    "shell sandbox",
-                    "warn",
-                    sandbox.describe(),
-                    "Remove backend = none to isolate it.",
-                )
-            )
-        else:
-            checks.append(Check("shell sandbox", "ok", sandbox.describe()))
+        return Check("shell", "ok", "switched off in config.toml")
+    sandbox, reason = SandboxProvider(paths, cfg.sandbox).resolve()
+    if sandbox is None:
+        return Check(
+            "shell sandbox",
+            "warn",
+            f"the shell tool is off: {reason}",
+            "On macOS the built-in sandbox needs /usr/bin/sandbox-exec; elsewhere install "
+            f"Docker and run `docker pull {cfg.sandbox.image}`.",
+        )
+    if sandbox.name == "none":
+        return Check(
+            "shell sandbox", "warn", sandbox.describe(), "Remove backend = none to isolate it."
+        )
+    return Check("shell sandbox", "ok", sandbox.describe())
 
-    checks.extend(_web_checks(cfg))
-    checks.extend(_skills_checks(paths, cfg))
-    checks.extend(_mcp_checks(paths, cfg))
-    checks.extend(_plugin_checks(cfg))
-    checks.extend(_channel_checks(paths, cfg))
-    checks.extend(_chat_page_checks(paths, cfg))
-    checks.extend(_webhook_checks(paths, cfg))
-    checks.extend(_service_checks(paths))
 
+def _secret_checks(paths: Paths, cfg: Config) -> list[Check]:
+    checks = []
     for name, secret in cfg.secrets.items():
-        hosts = ", ".join(secret.hosts)
         if os.environ.get(secret.env):
+            hosts = ", ".join(secret.hosts)
             checks.append(
                 Check(f"secret {name}", "ok", f"{secret.env} is set; sent only to {hosts}")
             )
@@ -263,6 +269,26 @@ def capability_checks(paths: Paths) -> list[Check]:
                 )
             )
     return checks
+
+
+def capability_checks(paths: Paths) -> list[Check]:
+    """What the agent will be able to do on this machine: sandbox, secrets for the web tools."""
+    try:
+        cfg = load_config(paths)
+    except ConfigError:
+        return []  # static_checks reports the broken config
+    return [
+        _sandbox_check(paths, cfg),
+        *_web_checks(cfg),
+        *_skills_checks(paths, cfg),
+        *_mcp_checks(paths, cfg),
+        *_plugin_checks(cfg),
+        *_channel_checks(paths, cfg),
+        *_chat_page_checks(paths, cfg),
+        *_webhook_checks(paths, cfg),
+        *_service_checks(paths),
+        *_secret_checks(paths, cfg),
+    ]
 
 
 def _service_checks(paths: Paths, manager: ServiceManager | None = None) -> list[Check]:
@@ -844,7 +870,7 @@ async def live_checks(app: App) -> list[Check]:
         )
 
     app.sessions.clear(session)
-    for message in app.outbox.list(status="pending"):
+    for message in app.outbox.recent(status="pending"):
         if message.session_key == session:
             app.outbox.cancel(message.id)
     return checks

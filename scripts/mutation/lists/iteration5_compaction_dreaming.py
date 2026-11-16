@@ -307,8 +307,8 @@ M = [
     (
         "ru dream: owner told about it",
         RU,
-        '            if ctx.profile == "dream"\n            else app.outbox.enqueue(',
-        "            if False\n            else app.outbox.enqueue(",
+        '                if ctx.profile == "dream"\n                else app.outbox.enqueue(',
+        "                if False\n                else app.outbox.enqueue(",
         TD,
     ),
     (
@@ -377,15 +377,15 @@ M = [
     (
         "cm run: not forced",
         CM,
-        "event_id = dreamer.enqueue(force=True)",
-        "event_id = dreamer.enqueue()",
+        "if dreamer.enqueue(force=True) is None:",
+        "if dreamer.enqueue() is None:",
         TD,
     ),
     (
         "cm run: error exits zero",
         CM,
-        "                    raise typer.Exit(1)\n",
-        "                    pass\n",
+        '            fail("Error:", result.failure.user_hint or result.failure.summary)',
+        '            say("Error: " + (result.failure.user_hint or result.failure.summary))',
         TD,
     ),
     # ---- compaction ----------------------------------------------------------------------

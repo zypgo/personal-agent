@@ -348,7 +348,7 @@ def test_a_command_is_answered_without_the_agent(web):
     response = web.send("/status", client_id="client-0003")
     assert response.status_code == 200 and response.json()["status"] == "command"
     assert web.events() == []
-    [reply] = web.app.outbox.list()
+    [reply] = web.app.outbox.recent()
     assert reply.channel == "web" and "Idle." in reply.text and reply.payload["interactive"] is True
 
 

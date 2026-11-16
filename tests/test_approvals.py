@@ -136,7 +136,6 @@ def test_saved_run_state_round_trips(approvals):
     suspend(approvals)
     saved = approvals.load_run("r1")
     assert saved.state == "STATE" and saved.meta == {"profile": "full"}
-    assert approvals.suspended_runs() == ["r1"]
     approvals.drop_run("r1")
     assert approvals.load_run("r1") is None
 

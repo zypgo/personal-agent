@@ -175,7 +175,7 @@ async def test_mistakes_come_back_as_errors_the_model_can_fix(make_app):
     ]
     assert len(outs) == len(cases)
     assert all(o.startswith("Error") for o in outs), outs
-    assert app.timers.list() == []
+    assert app.timers.scheduled() == []
 
 
 async def test_a_duplicate_name_is_refused(make_app):
@@ -227,7 +227,7 @@ async def test_after_sent_edits_are_applied_only_after_delivery_is_confirmed(mak
     await drain(app)
 
     assert app.memory.read_text("/memories/state/bookmark.md") is None  # queued, not yet applied
-    [message] = [m for m in app.outbox.list() if m.kind == "message"]
+    [message] = [m for m in app.outbox.recent() if m.kind == "message"]
     assert message.on_sent[0]["path"] == "/memories/state/bookmark.md"
 
     channel = FakeChannel()
@@ -265,4 +265,4 @@ async def test_a_bad_after_sent_edit_is_refused_before_anything_is_queued(make_a
         i["output"] for i in app.sessions.items("main") if i.get("type") == "function_call_output"
     ]
     assert len(outs) == len(bad) and all("Nothing was queued" in o for o in outs), outs
-    assert [m for m in app.outbox.list() if m.kind == "message" and m.text == "hello"] == []
+    assert [m for m in app.outbox.recent() if m.kind == "message" and m.text == "hello"] == []

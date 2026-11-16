@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import gc
+import logging
 import os
 
 import pytest
 from agents.testing import ScriptedModel
 from hypothesis import HealthCheck, settings
 
+from helpers import our_log_handlers
 from personal_agent import launchd
 from personal_agent.app import App, build_app
 from personal_agent.clock import ManualClock
 from personal_agent.config import Config
 from personal_agent.db import Database, open_database
+from personal_agent.logs import LOGGER_NAME
 from personal_agent.paths import Paths
 from personal_agent.security.sandbox import SandboxProvider
 
@@ -63,6 +66,20 @@ def _no_test_changes_the_real_launchd(monkeypatch, tmp_path):
 
     monkeypatch.setattr(launchd, "system_launchctl", only_looking)
     monkeypatch.setattr(launchd, "agents_dir", lambda: tmp_path / "guarded-launchagents")
+
+
+@pytest.fixture(autouse=True)
+def _no_test_leaves_a_log_handler_behind():
+    """`setup_logging` does its work once per process, and any command that opens a home calls it.
+    A file handler left by one test would send every later test's log lines into that test's
+    folder (and a later test that looks for its own log file would not find it), and keep the file
+    open. This showed up as a test that failed only when the tests were shared out the wrong way
+    between processes."""
+    yield
+    logger = logging.getLogger(LOGGER_NAME)
+    for handler in our_log_handlers():
+        logger.removeHandler(handler)
+        handler.close()
 
 
 @pytest.fixture

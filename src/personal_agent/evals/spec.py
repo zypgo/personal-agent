@@ -411,18 +411,32 @@ class Scenario(_Model):
 
     @model_validator(mode="after")
     def _consistent(self) -> Scenario:
+        """The parts must fit each other: what refers to a step, a file or a check names one that
+        exists, and nothing is named twice."""
         step_ids = [s.id for s in self.steps]
         if len(set(step_ids)) != len(step_ids):
             raise ValueError("step ids must be unique")
+        self._checks_name_real_steps(step_ids)
+        self._check_ids_are_distinct()
+        self._untouched_files_are_seeded()
+        if self.mock is not None:
+            self._mock_fits(self.mock, step_ids)
+        return self
+
+    def _checks_name_real_steps(self, step_ids: list[str]) -> None:
         for _, check in self.labelled_checks():
             step = getattr(check, "step", None)
             if step is not None and step not in step_ids:
                 raise ValueError(f"a check refers to the step {step!r}, which does not exist")
+
+    def _check_ids_are_distinct(self) -> None:
         given = [c.id for c in self.checks if c.id]
         if len(set(given)) != len(given):
             raise ValueError("check ids must be unique")
         if set(given) & {f"ends-{s.id}" for s in self.steps}:
             raise ValueError("an id may not be one of the implicit `ends-<step>` names")
+
+    def _untouched_files_are_seeded(self) -> None:
         known = set(self.seed.memory_files())
         for _, check in self.labelled_checks():
             if isinstance(check, MemoryUntouched):
@@ -431,25 +445,23 @@ class Scenario(_Model):
                     raise ValueError(
                         f"`memory_untouched` names {missing[0]!r}, which the seed does not create"
                     )
-        if self.mock is not None:
-            scripts = [("good", self.mock.good)] + [(b.name, b.script) for b in self.mock.bad]
-            for who, script in scripts:
-                unknown = [k for k in script if k not in step_ids]
-                if unknown:
-                    raise ValueError(
-                        f"the {who} script has a step {unknown[0]!r} that does not exist"
-                    )
-            valid = set(self.check_ids())
-            for bad in self.mock.bad:
-                unknown = [f for f in bad.fails if f not in valid]
-                if unknown:
-                    raise ValueError(
-                        f"the bad run {bad.name!r} must fail {unknown[0]!r}, which is no check here"
-                    )
-            names_bad = [b.name for b in self.mock.bad]
-            if len(set(names_bad)) != len(names_bad):
-                raise ValueError("bad runs need distinct names")
-        return self
+
+    def _mock_fits(self, mock: Mock, step_ids: list[str]) -> None:
+        scripts = [("good", mock.good)] + [(b.name, b.script) for b in mock.bad]
+        for who, script in scripts:
+            unknown = [k for k in script if k not in step_ids]
+            if unknown:
+                raise ValueError(f"the {who} script has a step {unknown[0]!r} that does not exist")
+        valid = set(self.check_ids())
+        for bad in mock.bad:
+            unknown = [f for f in bad.fails if f not in valid]
+            if unknown:
+                raise ValueError(
+                    f"the bad run {bad.name!r} must fail {unknown[0]!r}, which is no check here"
+                )
+        names = [b.name for b in mock.bad]
+        if len(set(names)) != len(names):
+            raise ValueError("bad runs need distinct names")
 
 
 # ---- loading --------------------------------------------------------------------------------------------

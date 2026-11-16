@@ -207,6 +207,38 @@ class BudgetConfig(_Section):
     """Across all runs since local midnight. Reaching it pauses work until tomorrow; nothing is lost."""
 
 
+Window = Literal["records", "runs", "audit", "memory_history"]
+"""The four ages `RetentionConfig` sets; each rule in maintenance.py belongs to one."""
+
+
+class RetentionConfig(_Section):
+    """How long the record of what already happened is kept (see maintenance.py).
+
+    In days; 0 keeps it for ever. What you and the agent said, and what the agent remembers, are
+    never removed by this."""
+
+    auto: bool = True
+    """The running agent tidies up once a day. `pa db prune` does the same on request."""
+    records_days: int = Field(90, ge=0, le=36_500)
+    """Handled events, delivered messages, finished timers, answered approval requests, expired
+    pairing codes and browser sessions."""
+    runs_days: int = Field(180, ge=0, le=36_500)
+    """What each finished run did and cost, and the speech-to-text charges."""
+    audit_days: int = Field(365, ge=0, le=36_500)
+    """The record of every tool call and what the policy decided about it."""
+    memory_history_days: int = Field(365, ge=0, le=36_500)
+    """Earlier versions of memory files, which is how far back `pa memory restore` reaches. The
+    newest version of every file stays, whatever its age."""
+
+    def days(self, window: Window) -> int:
+        return {
+            "records": self.records_days,
+            "runs": self.runs_days,
+            "audit": self.audit_days,
+            "memory_history": self.memory_history_days,
+        }[window]
+
+
 class NotifyConfig(_Section):
     channel: str = "auto"
     """Where messages go when no conversation is waiting (scheduled work, alerts): `auto`, or a
@@ -453,7 +485,6 @@ class WebConfig(_Section):
         return self.public_url or f"http://127.0.0.1:{self.port}"
 
 
-WEBHOOK_SCHEMES = ("github", "gitlab", "standard", "generic")
 _ROUTE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 
 
@@ -615,21 +646,32 @@ class McpServerConfig(_Section):
 
     @model_validator(mode="after")
     def _fits_its_transport(self) -> McpServerConfig:
-        from personal_agent.security.redact import find_secrets
-
         if self.transport == "stdio":
-            if not (self.command or "").strip():
-                raise ValueError(f"server {self.name!r}: a stdio server needs a `command`")
-            if self.url or self.headers:
-                raise ValueError(f"server {self.name!r}: `url` and `headers` are for http servers")
+            self._check_stdio()
         else:
-            if not (self.url or "").strip():
-                raise ValueError(f"server {self.name!r}: an http server needs a `url`")
-            if self.command or self.args or self.env or self.cwd:
-                raise ValueError(
-                    f"server {self.name!r}: `command`, `args`, `env` and `cwd` are for stdio servers"
-                )
-            self._check_url(ENV_REFERENCE.sub("x", self.url or ""))
+            self._check_http()
+        self._check_no_literal_credential()
+        return self
+
+    def _check_stdio(self) -> None:
+        if not (self.command or "").strip():
+            raise ValueError(f"server {self.name!r}: a stdio server needs a `command`")
+        if self.url or self.headers:
+            raise ValueError(f"server {self.name!r}: `url` and `headers` are for http servers")
+
+    def _check_http(self) -> None:
+        if not (self.url or "").strip():
+            raise ValueError(f"server {self.name!r}: an http server needs a `url`")
+        if self.command or self.args or self.env or self.cwd:
+            raise ValueError(
+                f"server {self.name!r}: `command`, `args`, `env` and `cwd` are for stdio servers"
+            )
+        self._check_url(ENV_REFERENCE.sub("x", self.url or ""))
+
+    def _check_no_literal_credential(self) -> None:
+        """A key belongs in `.env`, with `${NAME}` written here: config.toml is meant to be read,
+        shared and backed up, and an argument or url shows in process lists."""
+        from personal_agent.security.redact import find_secrets
 
         def literal_secret(text: str) -> bool:
             return bool(find_secrets(ENV_REFERENCE.sub("", text)))
@@ -651,7 +693,6 @@ class McpServerConfig(_Section):
                     "stored in config.toml and shown in process lists). "
                     "Put it in .env and write ${NAME} here instead."
                 )
-        return self
 
     def _check_url(self, url: str) -> None:
         from urllib.parse import urlsplit
@@ -721,6 +762,7 @@ class Config(_Section):
     runtime: RuntimeConfig = RuntimeConfig()
     policy: PolicyConfig = PolicyConfig()
     budget: BudgetConfig = BudgetConfig()
+    retention: RetentionConfig = RetentionConfig()
     notify: NotifyConfig = NotifyConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
     sandbox: SandboxConfig = SandboxConfig()
@@ -813,6 +855,14 @@ approval_timeout_hours = 12      # an unanswered request counts as a refusal
 [budget]
 per_run_usd = 1.0                # one run above this is stopped and reported
 daily_usd = 5.0                  # all runs since local midnight; reaching it pauses work, loses nothing
+
+[retention]
+auto = true                      # the running agent tidies up once a day; `pa db prune` does it on request
+records_days = 90                # handled events, delivered messages, finished timers, answered approval requests
+runs_days = 180                  # what each finished run did and cost
+audit_days = 365                 # the record of every tool call and what the policy decided
+memory_history_days = 365        # older versions of memory files (the newest of each stays)
+#                                # 0 keeps a kind of record for ever; what was said and remembered is never removed
 
 [notify]
 channel = "auto"                 # where unprompted messages go: auto (the phone chat app you last wrote from) | cli | telegram | web

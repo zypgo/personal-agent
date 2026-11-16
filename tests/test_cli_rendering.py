@@ -7,11 +7,14 @@ the name of a timer) must be shown as written, not eaten, and never crash the co
 
 from __future__ import annotations
 
+import io
+
 import pytest
 import typer
 from agents.testing import ScriptedModel, assistant_message
 from hypothesis import given
 from hypothesis import strategies as st
+from rich.console import Console
 
 from helpers import invoke
 from personal_agent.commands import common
@@ -76,6 +79,18 @@ def test_warn_and_echo_show_text_as_it_is(text, capsys):
     common.echo(text)
     lines = capsys.readouterr().out.splitlines()
     assert lines == [text, text]
+
+
+def test_say_and_echo_never_break_a_long_word_in_two(monkeypatch):
+    """A path, an id or a link that is split over two lines cannot be copied: the terminal wraps it
+    itself, the program does not. (The `invoke` helper makes the terminal very wide, so no command
+    test notices if this stops being true.)"""
+    word = "https://example.com/" + "x" * 90
+    for print_it in (common.say, common.echo):
+        narrow = Console(width=20, file=io.StringIO(), force_terminal=False)
+        monkeypatch.setattr(common, "console", narrow)
+        print_it(word)
+        assert narrow.file.getvalue() == word + "\n"  # type: ignore[attr-defined]
 
 
 def test_a_table_has_the_columns_it_was_asked_for_and_no_frame():

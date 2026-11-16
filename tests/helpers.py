@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import gc
+import logging
 import signal
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
+from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from agents import Usage
@@ -12,6 +16,7 @@ from openai.types.responses.response_usage import InputTokensDetails, OutputToke
 from typer.testing import CliRunner
 
 from personal_agent.core.events import Kind, NewEvent, Trust
+from personal_agent.logs import LOGGER_NAME
 
 
 def usage(
@@ -103,3 +108,26 @@ def within(seconds: float) -> Iterator[None]:
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
+
+
+def our_log_handlers() -> list[logging.Handler]:
+    """The handlers `setup_logging` adds. (pytest attaches its own capturing handlers to a logger that
+    does not propagate, for the length of each phase of a test; those are not ours.)"""
+    return [
+        h
+        for h in logging.getLogger(LOGGER_NAME).handlers
+        if isinstance(h, RotatingFileHandler) or type(h) is logging.StreamHandler
+    ]
+
+
+@contextmanager
+def watching_for_leaks() -> Iterator[list[str]]:
+    """What the block left open: the `ResourceWarning`s that arrive when the garbage is collected
+    after it. The suite turns those into failures; here they are looked at instead, to show that
+    they are (or are not) there. The list is filled when the block ends, so look at it after."""
+    leaks: list[str] = []
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        yield leaks
+        gc.collect()
+    leaks.extend(str(w.message) for w in caught if issubclass(w.category, ResourceWarning))

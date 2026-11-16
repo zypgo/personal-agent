@@ -23,6 +23,7 @@
 | 4b | Web 页面（PWA，手机可用）、Webhook（签名校验）、插件提供的渠道、真实模型验证套件 | ✅ |
 | 5 | 对着 Anthropic 的 always-on 文章补齐记忆：每次唤醒一段新对话（带着任务进度索引与"已经告诉过你什么"）、压缩、`search_history`、每夜"做梦"整理记忆（可撤销、有花费上限） | ✅ |
 | 6 | 评测（`pa eval`：场景文件、先验证判分本身、再用真实模型多次试验）、launchd 常驻服务（`pa service`）、加固与最终验证 | ✅ |
+| 7 | 系统性优化：整个包在 mypy strict 下；属性测试与模糊测试；崩溃一致性（在每一次落盘之后把进程杀掉，再看会不会少答、多答、重复动手）与真实进程的端到端；CLI 按主题拆开、延迟加载；数据的生命周期（`pa db`、`[retention]`、每天一次的整理） | ✅ |
 
 ## 快速开始
 
@@ -150,18 +151,31 @@ uv run pa eval run --live --trials 3 --max-cost 1.0 --model gpt-6.1-sol --effort
 
 一个场景是一页 YAML：`seed`（它已经知道什么：偏好、记忆、任务进度、已经发过的消息、配置）、`steps`（来了什么：你的消息 / 一个定时任务 / 一次 webhook）、`checks`（之后必须成立的事：说没说、说了几条、用了哪些工具、记忆里写了什么、你写的偏好有没有被动过、花了多少）。检查从不比对措辞，因为同一句话模型有很多种说法。每个步骤还有一条隐含检查：它的 run 必须以允许的方式结束——一个崩溃的 run 什么也没说，不能被当成"选择安静"而通过。内置场景覆盖文章里的几件事：同一条新闻只说一次、没有新东西就不打扰、源读不到不能当成"一切正常"、跨几次唤醒的任务进度、你的偏好被遵守、webhook 里夹带的指令只是数据。报告（JSON + Markdown）写在 `~/.personal-agent/evals/reports/`（0600，密钥已去掉）。
 
+数据库不会无限变大（`pa db`）。agent 常驻时每天整理一次：只删"已经结束、而且够旧"的记录（处理完的事件、送达的消息、触发过的定时任务、过期的配对码与网页会话、结束的 run、工具调用的审计、记忆文件的旧版本），**从不删**你们的对话、记忆与偏好，也不动还在进行的东西（待发的消息、等你批准的动作、挂起的 run）。多久算"够旧"写在 `config.toml` 的 `[retention]` 里（天数，0 = 永远）：
+
+```bash
+uv run pa db                           # 大小、各表行数、现在能清掉多少、保留多久、上次整理做了什么
+uv run pa db prune --dry-run           # 只说会删什么；去掉 --dry-run 就是现在做（守护进程每天也会自己做一次）
+uv run pa db check                     # 体检：只读打开，连 agent 自己打不开的坏文件也能看（--full 读全部页并核对索引）
+uv run pa db backup                    # 在线备份（agent 运行时也行）：一个只有你能读的文件；只含数据库，要备份一切就拷贝整个主目录
+uv run pa db vacuum                    # 把删掉的空间还给磁盘（要先停掉 agent；平时用不着，`pa doctor` 会在该做的时候提醒）
+```
+
 想先试用而不动你的主目录：`PA_HOME=./.pa-home uv run pa init`（`.pa-home/` 已被 git 忽略）。
 
 ## 开发环境
 
 ```bash
 uv sync --all-extras          # Python 3.13 + 全部依赖
-uv run pytest                 # 测试（不需要 API key，模型由脚本化的 ScriptedModel 代替）
+scripts/check.sh              # 提交前要过的一关：格式、lint、类型（mypy strict）、全部离线测试、网页脚本测试；--fast 不跑测试
+uv run pytest                 # 测试（不需要 API key，模型由脚本化的 ScriptedModel 代替；没有关掉的文件或连接——有就是测试失败）
+HYPOTHESIS_PROFILE=ci uv run pytest tests -n 4          # 属性测试用固定的随机用例，红了可以重现（scripts/check.sh 用的就是这个）
+HYPOTHESIS_PROFILE=thorough uv run pytest tests -n 4    # 同样的属性，多跑很多组随机用例
 node --test tests/js/*.test.mjs   # 网页前端的纯逻辑测试
 uv run pa eval run            # 内置行为场景的"判分自检"（不联网）；--live 才用真实模型
 PA_LIVE=1 uv run pytest tests/live   # 用真实 OPENAI_API_KEY 的端到端验证（会花钱；key 只从环境读）
-uv run python scripts/mutation/run.py scripts/mutation/lists/iteration6_spec.py   # 变异验证：故意把保护代码改坏，测试必须失败
-uv run ruff check src tests && uv run ruff format --check src tests
+uv run python scripts/mutation/run.py scripts/mutation/lists/iteration7_data.py   # 变异验证：故意把保护代码改坏，测试必须失败
+uv run mypy                   # 整个包都在 strict 下
 uv run pa --version
 scripts/fetch_references.sh   # 重新拉取只读参考项目到 references/
 ```

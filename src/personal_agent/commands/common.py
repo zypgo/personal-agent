@@ -12,6 +12,7 @@ argument, a broken config, no home yet).
 from __future__ import annotations
 
 import contextlib
+import sqlite3
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, NoReturn
 
@@ -21,6 +22,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from personal_agent.config import ConfigError, load_env
+from personal_agent.db import DatabaseTooNew
 from personal_agent.logs import setup_logging
 from personal_agent.paths import Paths
 
@@ -96,6 +98,11 @@ def opened() -> Iterator[App]:
         app = build()
     except ConfigError as exc:
         fail(str(exc), code=USAGE)
+    except DatabaseTooNew as exc:
+        fail(str(exc), code=USAGE)
+    except sqlite3.DatabaseError as exc:
+        # Not a database, or a damaged one. `pa db check` can look at it without opening it for use.
+        fail(f"cannot open the database: {exc}.", "Run `pa db check`.")
     setup_logging(app.paths)
     with app:
         yield app

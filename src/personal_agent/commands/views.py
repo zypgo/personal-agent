@@ -43,7 +43,7 @@ def show_status(app: App) -> None:
     say(f"inbox   {_counts(inbox)}")
     say(f"outbox  {_counts(outbox)}")
     say(f"runs    {_counts(app.runs.summary())}")
-    timers = app.timers.list()
+    timers = app.timers.scheduled()
     if timers:
         upcoming = app.timers.next_due()
         soon = f", next in {span(upcoming - now)}" if upcoming is not None else ""

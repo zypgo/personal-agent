@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import tzinfo
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from personal_agent.channels.base import PULL_ONLY
 from personal_agent.channels.pairing import PairingStore
@@ -30,6 +30,7 @@ from personal_agent.core.transcript import Transcript
 from personal_agent.db import Database, open_database
 from personal_agent.harness.compaction import LLMSummarizer, Summarizer
 from personal_agent.harness.models import ModelFactory, OpenAIModels
+from personal_agent.maintenance import Janitor
 from personal_agent.memory.store import MemoryStore
 from personal_agent.memory.templates import bootstrap
 from personal_agent.paths import Paths
@@ -47,6 +48,13 @@ from personal_agent.tools.base import ToolRegistry
 from personal_agent.tools.builtin import register_builtin
 
 log = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class ClosesConnections(Protocol):
+    """Something that keeps connections open for the event loop it was used in."""
+
+    async def aclose(self) -> None: ...
 
 
 @dataclass
@@ -81,6 +89,7 @@ class App:
     media: MediaStore
     transcriber: Transcriber
     web_auth: WebAuth
+    janitor: Janitor
     plugins: list[PluginInfo] = field(default_factory=list)
     plugin_channels: dict[str, ChannelSpec] = field(default_factory=dict)
 
@@ -132,12 +141,20 @@ class App:
             await asyncio.to_thread(self.sandbox.resolve)
 
     async def stop_services(self) -> None:
-        """Close what was opened for the running event loop (MCP connections and the programs
-        behind them). Every place that runs a loop to its end calls this first."""
+        """Close what was opened for the running event loop: the MCP connections and the programs
+        behind them, and the connections to the model and speech services. Every place that runs
+        a loop to its end calls this first; calling it again does no harm."""
         try:
             await self.mcp.stop()
         except Exception:
             log.warning("could not stop the MCP servers cleanly", exc_info=True)
+        holders: tuple[object, ...] = (self.model_factory, self.transcriber)
+        for held in holders:
+            if isinstance(held, ClosesConnections):
+                try:
+                    await held.aclose()
+                except Exception:
+                    log.warning("could not close %s cleanly", type(held).__name__, exc_info=True)
 
     def extend_budget(self, amount: float) -> tuple[float, int]:
         """Raise today's spending cap and let work that was paused for the budget continue.
@@ -249,6 +266,7 @@ def build_app(
             session_days=cfg.web.session_days,
             invite_minutes=cfg.web.invite_minutes,
         ),
+        janitor=Janitor(database, cfg.retention, clock),
         plugins=plugins,
         plugin_channels=plugin_channels,
     )

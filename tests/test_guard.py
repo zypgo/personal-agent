@@ -168,7 +168,7 @@ async def test_an_untrusted_event_starts_tainted_so_even_allowed_tools_ask(make_
     [result] = await drain(app)
 
     assert result.outcome.status == "awaiting_approval" and spy.ran() == []
-    [ask_msg] = [m for m in app.outbox.list() if m.kind == "approval_request"]
+    [ask_msg] = [m for m in app.outbox.recent() if m.kind == "approval_request"]
     assert "shell" in ask_msg.text
 
 

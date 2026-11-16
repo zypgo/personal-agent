@@ -284,7 +284,7 @@ async def test_a_forwarded_message_is_passed_on_as_somebody_elses_words(paired, 
 async def test_a_forwarded_command_is_not_run(paired):
     await paired.poll([tg.message(1, text="/new", forward_origin={"type": "user"})])
     assert [e["payload"].get("forwarded") for e in events(paired.app)] == ["/new"]
-    assert paired.app.outbox.list() == []
+    assert paired.app.outbox.recent() == []
 
 
 async def test_the_part_of_a_message_that_was_quoted_is_what_the_reply_is_about(paired):

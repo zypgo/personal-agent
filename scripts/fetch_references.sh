@@ -27,6 +27,7 @@ REFS=(
   "openclaw|https://github.com/openclaw/openclaw.git|docs src/cron src/memory src/pairing src/security src/secrets src/agents|Gateway/channels/cron/skills/memory/pairing/exec-approvals"
   "zeroclaw|https://github.com/zeroclaw-labs/zeroclaw.git|crates/zeroclaw-runtime/src/approval crates/zeroclaw-memory docs|Approval manager (always_ask precedence), supervised-by-default"
   "aimock|https://github.com/CopilotKit/aimock.git||Mock of the OpenAI Responses API: the wire shape our fake server (tests/fake_openai.py) answers with"
+  "home-assistant-core|https://github.com/home-assistant/core.git|homeassistant/components/recorder|A long-running SQLite store that prunes itself: batched purge, nightly auto-purge, monthly repack (VACUUM)"
 )
 
 LOCK="references/SOURCES.lock"

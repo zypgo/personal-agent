@@ -165,37 +165,56 @@ class ToolGuard:
         tool_context: ToolContext[RunContext],
         raw_args: str,
     ) -> Any:
-        app = self.app
+        """What the model gets back for one tool call: the tool's result if it was allowed and ran,
+        otherwise the reason it did not. Decide, refuse or run; nothing else happens here."""
         rc: RunContext = tool_context.context
         call_id = tool_context.tool_call_id
         args = parse_args(raw_args)
 
-        if app.approvals.is_approved(rc.run_id, call_id):
+        if self.app.approvals.is_approved(rc.run_id, call_id):
             # An approved action runs at most once. If a crash interrupted an earlier attempt to
             # resume this run, its effect is unknown: say so instead of doing it a second time.
-            if app.audit.outcome_of(rc.run_id, call_id) not in (None, "pending"):
+            if self.app.audit.outcome_of(rc.run_id, call_id) not in (None, "pending"):
                 return INTERRUPTED_RESULT
-            # The owner said yes. Hard rules still win: neither a safety floor nor a deny rule
-            # added since the question was asked can be bypassed.
-            base = app.policy.evaluate(self._call(tool, args, rc))
-            if floor := tool.floor_of(rc, args):
-                decision = Decision(Verdict.DENY, "floor", floor)
-            elif base.verdict is Verdict.DENY:
-                decision = base
-            else:
-                decision = Decision(Verdict.ALLOW, "approval", "approved by the owner")
+            decision = self._after_approval(tool, args, rc)
         else:
             decision = await self.decide(tool, args, rc, call_id)
 
+        if decision.verdict is not Verdict.ALLOW:
+            return self._refusal(decision, rc, call_id)
+        return await self._run(tool, original, tool_context, raw_args, args)
+
+    def _after_approval(self, tool: ToolDef, args: dict[str, Any], rc: RunContext) -> Decision:
+        """The owner said yes. Hard rules still win: neither a safety floor nor a deny rule added
+        since the question was asked can be bypassed."""
+        base = self.app.policy.evaluate(self._call(tool, args, rc))
+        if floor := tool.floor_of(rc, args):
+            return Decision(Verdict.DENY, "floor", floor)
+        if base.verdict is Verdict.DENY:
+            return base
+        return Decision(Verdict.ALLOW, "approval", "approved by the owner")
+
+    def _refusal(self, decision: Decision, rc: RunContext, call_id: str) -> str:
+        """The text for a call that is not going to run, with that recorded."""
         if decision.verdict is Verdict.DENY:
             if decision.layer == "invalid":
-                return f"Error: {decision.reason}"
-            app.audit.set_outcome(rc.run_id, call_id, "denied")
+                return f"Error: {decision.reason}"  # the decision was already audited as such
+            self.app.audit.set_outcome(rc.run_id, call_id, "denied")
             return DENIED_TEXT.format(reason=decision.reason)
-        if decision.verdict is not Verdict.ALLOW:
-            app.audit.set_outcome(rc.run_id, call_id, "denied")
-            return NOT_APPROVED_TEXT
+        self.app.audit.set_outcome(rc.run_id, call_id, "denied")
+        return NOT_APPROVED_TEXT
 
+    async def _run(
+        self,
+        tool: ToolDef,
+        original: FunctionTool,
+        tool_context: ToolContext[RunContext],
+        raw_args: str,
+        args: dict[str, Any],
+    ) -> Any:
+        app = self.app
+        rc: RunContext = tool_context.context
+        call_id = tool_context.tool_call_id
         started = time.monotonic()
         outcome = "ok"
         app.audit.set_outcome(rc.run_id, call_id, "running")  # durable marker: it may have started

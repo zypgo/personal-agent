@@ -162,7 +162,7 @@ async def test_a_reminder_is_set_for_the_time_asked(live):
     chat = live()
     before = chat.app.clock.now()
     reply = await chat.say("Remind me in two hours to stretch my legs.")
-    [timer] = chat.app.timers.list()
+    [timer] = chat.app.timers.scheduled()
     assert timer.due_at - before == pytest.approx(2 * 3600, abs=180)
     assert "stretch" in timer.prompt.lower()
     assert reply.run.status == "completed"

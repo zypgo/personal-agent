@@ -255,10 +255,10 @@ def test_lookup_by_id_or_name_and_listing(timers, clock):
     assert (
         timers.get(a.id).name == "first" == timers.get(str(a.id)).name == timers.get("first").name
     )
-    assert [t.name for t in timers.list()] == ["second", "first"]  # soonest first
+    assert [t.name for t in timers.scheduled()] == ["second", "first"]  # soonest first
     timers.cancel("first")
-    assert [t.name for t in timers.list()] == ["second"]
-    assert {t.name for t in timers.list(include_finished=True)} == {"first", "second"}
+    assert [t.name for t in timers.scheduled()] == ["second"]
+    assert {t.name for t in timers.scheduled(include_finished=True)} == {"first", "second"}
     assert timers.next_due() == pytest.approx(clock.now() + 30)
 
 

@@ -197,7 +197,7 @@ def test_timers_add_rejects_unclear_or_invalid_input(wired):
     assert invoke("timers", "add", "x", "do it", "--at", "tomorrow").exit_code == 2
     too_often = invoke("timers", "add", "x", "do it", "--cron", "* * * * *")
     assert too_often.exit_code == 1 and "Traceback" not in too_often.output
-    assert app.timers.list() == []
+    assert app.timers.scheduled() == []
 
 
 def test_timers_actions_on_unknown_timers_fail_politely(wired):

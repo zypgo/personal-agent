@@ -8,6 +8,7 @@ an RLock keeps the connection safe if a tool runs in a worker thread.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator, Sequence
@@ -350,6 +351,16 @@ def loads(text: str | None, default: Any = None) -> Any:
         return default
 
 
+WAL_KEEP_BYTES = 64 * 1024 * 1024
+
+
+class DatabaseTooNew(RuntimeError):
+    """The file was last written by a newer version of this program, which this one must not touch."""
+
+
+CHECKPOINT_MODES = ("PASSIVE", "FULL", "RESTART", "TRUNCATE")
+
+
 class Database:
     def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5_000) -> None:
         self.path = str(path)
@@ -362,11 +373,18 @@ class Database:
             timeout=busy_timeout_ms / 1000,
         )
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        if self.path != ":memory:":
-            self._conn.execute("PRAGMA journal_mode = WAL")
-            self._conn.execute("PRAGMA synchronous = NORMAL")
+        try:
+            self._conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
+            self._conn.execute("PRAGMA foreign_keys = ON")
+            if self.path != ":memory:":
+                self._conn.execute("PRAGMA journal_mode = WAL")
+                self._conn.execute("PRAGMA synchronous = NORMAL")
+                # A busy minute can swell the write-ahead log; once it is checkpointed it is cut
+                # back to this size instead of keeping the disk space for as long as the agent runs.
+                self._conn.execute(f"PRAGMA journal_size_limit = {WAL_KEEP_BYTES}")
+        except sqlite3.Error:  # not a database, or a damaged one: do not leave the file open
+            self._conn.close()
+            raise
 
     # ---- statements -------------------------------------------------------------------
     def _run(self, sql: str, params: Sequence[Any] | dict[str, Any]) -> sqlite3.Cursor:
@@ -468,7 +486,7 @@ class Database:
         """Apply pending migrations; returns the resulting schema version."""
         current = self.version
         if current > SCHEMA_VERSION:
-            raise RuntimeError(
+            raise DatabaseTooNew(
                 f"database schema v{current} is newer than this program (v{SCHEMA_VERSION}); "
                 "upgrade personal-agent"
             )
@@ -493,6 +511,46 @@ class Database:
                     raise
         return self.version
 
+    # ---- upkeep -----------------------------------------------------------------------
+    def checkpoint(self, mode: str = "PASSIVE") -> None:
+        """Move what the write-ahead log holds into the database file. `PASSIVE` never waits for
+        anyone; `TRUNCATE` also empties the log file, waiting (up to the busy timeout) for readers."""
+        if mode not in CHECKPOINT_MODES:
+            raise ValueError(f"unknown checkpoint mode {mode!r}")
+        with self._lock:
+            self._conn.execute(f"PRAGMA wal_checkpoint({mode})")
+
+    def optimize(self) -> None:
+        """Refresh the statistics the query planner relies on, where they have gone stale."""
+        with self._lock:
+            self._conn.execute("PRAGMA optimize")
+
+    def vacuum(self) -> None:
+        """Rewrite the file without the pages that deleted rows left empty. It needs the whole
+        database to itself for as long as it takes, and room for a second copy on disk."""
+        with self._lock:
+            if self._depth:
+                raise RuntimeError("VACUUM cannot run inside a transaction")
+            self._conn.execute("VACUUM")
+
+    def backup(self, dest: str | Path) -> None:
+        """A consistent copy of the database in a new file that only the owner can read, taken
+        while other connections keep working. An existing file is never overwritten."""
+        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+        copy = sqlite3.connect(str(dest))
+        try:
+            with self._lock:
+                self._conn.backup(copy)
+            # One self-contained file: without this the copy remembers it was in WAL mode and
+            # opening it would leave a `-wal` and a `-shm` file next to it.
+            copy.execute("PRAGMA journal_mode = DELETE")
+        except BaseException:
+            copy.close()
+            Path(dest).unlink(missing_ok=True)
+            raise
+        copy.close()
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
@@ -500,5 +558,9 @@ class Database:
 
 def open_database(path: str | Path) -> Database:
     db = Database(path)
-    db.migrate()
+    try:
+        db.migrate()
+    except BaseException:
+        db.close()
+        raise
     return db

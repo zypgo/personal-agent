@@ -803,7 +803,8 @@ async def test_a_delivery_over_the_network_wakes_the_agent_and_the_owner_hears_o
         assert answer.status_code == 202 and answer.json() == {"status": "queued"}
         assert "server" not in answer.headers, "the listener does not say what it is"
         await eventually(
-            lambda: [m for m in app.outbox.list() if m.text == "PR 7 was opened."], what="the alert"
+            lambda: [m for m in app.outbox.recent() if m.text == "PR 7 was opened."],
+            what="the alert",
         )
 
     text = text_of(model.calls[0].input[0])

@@ -2,6 +2,7 @@ import sqlite3
 
 import pytest
 
+from helpers import watching_for_leaks
 from personal_agent.db import MIGRATIONS, SCHEMA_VERSION, Database, open_database
 
 
@@ -125,3 +126,32 @@ def test_row_is_the_one_row_a_query_must_find(db):
     assert db.row("SELECT value FROM kv WHERE key = ?", ("a",))["value"] == "1"
     with pytest.raises(LookupError, match="expected a row: SELECT value FROM kv"):
         db.row("SELECT value FROM kv WHERE key = ?", ("missing",))
+
+
+def test_a_file_that_is_not_a_database_is_not_left_open(tmp_path):
+    path = tmp_path / "state.db"
+    path.write_bytes(b"this is not a database " * 500)
+
+    def attempt():
+        with pytest.raises(sqlite3.DatabaseError):
+            Database(path)
+
+    with watching_for_leaks() as leaks:
+        attempt()
+    assert leaks == []
+
+
+def test_a_database_that_cannot_be_migrated_is_not_left_open(tmp_path):
+    path = tmp_path / "state.db"
+    conn = sqlite3.connect(path)
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 5}")
+    conn.commit()
+    conn.close()
+
+    def attempt():
+        with pytest.raises(RuntimeError, match="newer"):
+            open_database(path)
+
+    with watching_for_leaks() as leaks:
+        attempt()
+    assert leaks == []

@@ -327,10 +327,13 @@ def test_tools_not_used_names_the_ones_that_were():
 
 
 def test_only_tools_names_the_extras_sorted():
-    t = {"one": result("one", tools=["send_message", "zeta", "alpha"])}
+    # Eight names: a set lists its strings in an order that differs from run to run, and with only
+    # two it would be the sorted one half of the time, which would hide a missing sort.
+    names = ["zeta", "kappa", "alpha", "omega", "delta", "sigma", "beta", "gamma"]
+    t = {"one": result("one", tools=["send_message", *names])}
     extra = only({"kind": "only_tools", "allowed": ["send_message"]}, **t)
-    assert extra == Verdict("only_tools", False, "also called alpha, zeta")
-    assert only({"kind": "only_tools", "allowed": ["send_message", "zeta", "alpha"]}, **t) == (
+    assert extra == Verdict("only_tools", False, "also called " + ", ".join(sorted(names)))
+    assert only({"kind": "only_tools", "allowed": ["send_message", *names]}, **t) == (
         Verdict("only_tools", True, "only the allowed")
     )
     assert only({"kind": "only_tools", "allowed": []}) == Verdict(

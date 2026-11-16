@@ -278,9 +278,8 @@ class Outbox:
             params.append(session_key)
         return [_message(r) for r in self.db.query(sql + " ORDER BY id", params)]
 
-    # Declared last on purpose: inside a class body a method named `list` hides the builtin in
-    # the annotations that follow it, and callers know this method by that name.
-    def list(self, *, status: str | None = None, limit: int = 50) -> list[OutMessage]:
+    def recent(self, *, status: str | None = None, limit: int = 50) -> list[OutMessage]:
+        """The latest messages, newest first; only those in `status` if one is given."""
         if status:
             rows = self.db.query(
                 "SELECT * FROM outbox WHERE status = ? ORDER BY id DESC LIMIT ?", (status, limit)

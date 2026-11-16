@@ -694,7 +694,7 @@ def whole_record(app) -> str:
             "session": app.sessions.items("main"),
             "audit": [vars(r) for r in app.audit.recent(500)],
             "approvals": [vars(a) for a in app.approvals.pending()],
-            "outbox": [vars(o) for o in app.outbox.list()],
+            "outbox": [vars(o) for o in app.outbox.recent()],
         },
         default=str,
     )

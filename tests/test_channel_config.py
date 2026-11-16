@@ -210,7 +210,7 @@ async def test_background_work_is_delivered_to_that_channel(make_app):
     app.transcript.add_in("telegram", "hi")
     app.inbox.add(timer("brief", "Summarise my inbox."))
     await drain(app)
-    [message] = app.outbox.list()
+    [message] = app.outbox.recent()
     assert (message.channel, message.recipient, message.text) == (
         "telegram",
         None,
@@ -230,7 +230,7 @@ async def test_an_answer_goes_back_to_the_channel_and_chat_that_asked(make_app):
     )
     app.inbox.add(owner_message("weather?", source="telegram", recipient="777"))
     await drain(app)
-    [message] = app.outbox.list()
+    [message] = app.outbox.recent()
     assert (message.channel, message.recipient) == ("telegram", "777")  # not the notify channel
 
 

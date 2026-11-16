@@ -75,7 +75,9 @@ async def test_quiet_hours_are_evaluated_in_the_owners_timezone(make_app, clock)
     channel = FakeChannel()
     queue(app, "late")
     report = await deliver(app, channel)
-    assert report.held and app.outbox.list()[0].not_before == epoch(2026, 11, 16, 0, 0)  # 08:00 CST
+    assert report.held and app.outbox.recent()[0].not_before == epoch(
+        2026, 11, 16, 0, 0
+    )  # 08:00 CST
 
 
 async def test_the_hourly_limit_spreads_background_messages_out(make_app, clock):

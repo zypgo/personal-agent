@@ -333,7 +333,7 @@ async def test_the_owner_asks_in_the_browser_and_the_answer_comes_back_there(mak
         again = await browser.client.get("/api/history")
         texts = [t["text"] for t in again.json()["turns"]]
         assert texts == ["how is the weather?", "It is **sunny** in Lisbon."]
-    assert [m.status for m in app.outbox.list()] == ["sent"]
+    assert [m.status for m in app.outbox.recent()] == ["sent"]
 
 
 async def test_sending_it_twice_costs_one_answer(make_app):

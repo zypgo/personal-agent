@@ -475,6 +475,7 @@ def test_status_tells_a_service_started_agent_from_one_started_in_a_terminal(ser
 
 # ---- logs -------------------------------------------------------------------------------------------------
 def test_logs_before_anything_has_run_say_so(service):
+    (service.paths.logs_dir / "pa.log").unlink(missing_ok=True)  # `pa init` leaves an empty one
     result = invoke("service", "logs")
     assert result.exit_code == 1 and "no log yet" in flat(result.output)
 

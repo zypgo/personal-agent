@@ -67,10 +67,6 @@ class Probe:
     detail: str
 
 
-class SandboxUnavailable(RuntimeError):
-    pass
-
-
 class Sandbox(Protocol):
     name: str
 

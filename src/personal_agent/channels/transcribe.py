@@ -136,6 +136,12 @@ class OpenAITranscriber:
                 raise TranscriptionError(f"I cannot transcribe voice messages: {exc}") from exc
         return self._client
 
+    async def aclose(self) -> None:
+        """Close the client's connections (see `OpenAIModels.aclose`)."""
+        client, self._client = self._client, None
+        if client is not None:
+            await client.close()
+
     async def transcribe(self, data: bytes, *, mime: str, name: str = "") -> str:
         extension = audio_extension(mime, name)
         if extension not in ACCEPTED:

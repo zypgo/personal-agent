@@ -112,7 +112,7 @@ class ChatCommands:
         waiting = app.approvals.pending()
         if waiting:
             lines.append(f"{len(waiting)} action(s) waiting for your answer (/approvals).")
-        timers = app.timers.list()
+        timers = app.timers.scheduled()
         if timers:
             upcoming = app.timers.next_due()
             soon = f", next in {_span(upcoming - now)}" if upcoming is not None else ""

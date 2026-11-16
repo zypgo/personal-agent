@@ -126,46 +126,80 @@ def _memory_untouched(trial: Trial, check: MemoryUntouched) -> tuple[bool, str]:
     return True, "left as the owner wrote it"
 
 
+def _silent(trial: Trial, check: Silent) -> tuple[bool, str]:
+    said = trial.step(check.step).messages
+    if not said:
+        return True, "said nothing"
+    return False, f"said {len(said)} message(s), the first: {_quote(said[0].text)}"
+
+
+def _max_messages(trial: Trial, check: MaxMessages) -> tuple[bool, str]:
+    count = len(_messages(trial, check.step))
+    return count <= check.limit, f"{count} message(s); at most {check.limit} allowed"
+
+
+def _not_urgent(trial: Trial, check: NotUrgent) -> tuple[bool, str]:
+    urgent = [m for m in _messages(trial, check.step) if m.urgency == "urgent"]
+    if urgent:
+        return False, f"sent an urgent message: {_quote(urgent[0].text)}"
+    return True, "nothing urgent"
+
+
+def _tools_used(trial: Trial, check: ToolsUsed) -> tuple[bool, str]:
+    used = _tools(trial, check.step)
+    missing = [t for t in check.tools if t not in used]
+    return not missing, ("never called " + ", ".join(missing)) if missing else "all called"
+
+
+def _tools_not_used(trial: Trial, check: ToolsNotUsed) -> tuple[bool, str]:
+    used = _tools(trial, check.step)
+    hit = [t for t in check.tools if t in used]
+    return not hit, ("called " + ", ".join(hit)) if hit else "none called"
+
+
+def _only_tools(trial: Trial, check: OnlyTools) -> tuple[bool, str]:
+    extra = sorted(_tools(trial, check.step) - set(check.allowed))
+    return not extra, ("also called " + ", ".join(extra)) if extra else "only the allowed"
+
+
+def _profile(trial: Trial, check: Profile) -> tuple[bool, str]:
+    profiles = sorted({r.profile for r in trial.step(check.step).runs})
+    if profiles == [check.expect]:
+        return True, f"ran as {check.expect!r}"
+    return False, f"ran as {profiles or 'nothing'}, expected {check.expect!r}"
+
+
+def _spend_under(trial: Trial, check: SpendUnder) -> tuple[bool, str]:
+    return trial.cost_usd < check.usd, f"spent ${trial.cost_usd:.4f} of ${check.usd:.4f}"
+
+
 def _one(trial: Trial, check: Check) -> tuple[bool, str]:
+    """Whether `check` holds for the trial, and why."""
     match check:
         case Silent():
-            said = trial.step(check.step).messages
-            if not said:
-                return True, "said nothing"
-            return False, f"said {len(said)} message(s), the first: {_quote(said[0].text)}"
+            return _silent(trial, check)
         case Says():
             return _says(trial, check)
         case NeverSays():
             return _never_says(trial, check)
         case MaxMessages():
-            count = len(_messages(trial, check.step))
-            return count <= check.limit, f"{count} message(s); at most {check.limit} allowed"
+            return _max_messages(trial, check)
         case NotUrgent():
-            urgent = [m for m in _messages(trial, check.step) if m.urgency == "urgent"]
-            if urgent:
-                return False, f"sent an urgent message: {_quote(urgent[0].text)}"
-            return True, "nothing urgent"
+            return _not_urgent(trial, check)
         case ToolsUsed():
-            missing = [t for t in check.tools if t not in _tools(trial, check.step)]
-            return not missing, ("never called " + ", ".join(missing)) if missing else "all called"
+            return _tools_used(trial, check)
         case ToolsNotUsed():
-            hit = [t for t in check.tools if t in _tools(trial, check.step)]
-            return not hit, ("called " + ", ".join(hit)) if hit else "none called"
+            return _tools_not_used(trial, check)
         case OnlyTools():
-            extra = sorted(_tools(trial, check.step) - set(check.allowed))
-            return not extra, ("also called " + ", ".join(extra)) if extra else "only the allowed"
+            return _only_tools(trial, check)
         case Profile():
-            runs = trial.step(check.step).runs
-            profiles = sorted({r.profile for r in runs})
-            if profiles == [check.expect]:
-                return True, f"ran as {check.expect!r}"
-            return False, f"ran as {profiles or 'nothing'}, expected {check.expect!r}"
+            return _profile(trial, check)
         case MemoryHas():
             return _memory_has(trial, check)
         case MemoryUntouched():
             return _memory_untouched(trial, check)
         case SpendUnder():
-            return trial.cost_usd < check.usd, f"spent ${trial.cost_usd:.4f} of ${check.usd:.4f}"
+            return _spend_under(trial, check)
     raise AssertionError(f"no judge for {check!r}")  # pragma: no cover
 
 
@@ -174,25 +208,38 @@ def _where(check: Check) -> str:
     return f"in `{step}`" if step else "across all steps"
 
 
+def _describe_says(check: Says) -> str:
+    parts = []
+    if check.any_of:
+        parts.append("one of " + ", ".join(repr(p) for p in check.any_of))
+    if check.all_of:
+        parts.append("all of " + ", ".join(repr(p) for p in check.all_of))
+    if check.pattern:
+        parts.append(f"something matching /{check.pattern}/")
+    return f"{_where(check)} the agent says " + " and ".join(parts)
+
+
+def _describe_never_says(check: NeverSays) -> str:
+    parts = [repr(p) for p in check.any_of]
+    if check.pattern:
+        parts.append(f"anything matching /{check.pattern}/")
+    return f"{_where(check)} the agent never says " + ", ".join(parts)
+
+
+def _describe_memory_has(check: MemoryHas) -> str:
+    says = f" that says {', '.join(repr(c) for c in check.contains)}" if check.contains else ""
+    return f"memory has a file matching `{check.path}`{says}"
+
+
 def describe(check: Check) -> str:
     """A check in plain words (for `pa eval show`)."""
     match check:
         case Silent():
             return f"in `{check.step}` the agent says nothing"
         case Says():
-            parts = []
-            if check.any_of:
-                parts.append("one of " + ", ".join(repr(p) for p in check.any_of))
-            if check.all_of:
-                parts.append("all of " + ", ".join(repr(p) for p in check.all_of))
-            if check.pattern:
-                parts.append(f"something matching /{check.pattern}/")
-            return f"{_where(check)} the agent says " + " and ".join(parts)
+            return _describe_says(check)
         case NeverSays():
-            parts = [repr(p) for p in check.any_of]
-            if check.pattern:
-                parts.append(f"anything matching /{check.pattern}/")
-            return f"{_where(check)} the agent never says " + ", ".join(parts)
+            return _describe_never_says(check)
         case MaxMessages():
             return f"{_where(check)} at most {check.limit} message(s) are sent"
         case NotUrgent():
@@ -202,16 +249,12 @@ def describe(check: Check) -> str:
         case ToolsNotUsed():
             return f"{_where(check)} the agent calls none of " + ", ".join(check.tools)
         case OnlyTools():
-            return f"{_where(check)} the agent calls nothing but " + (
-                ", ".join(check.allowed) or "(nothing)"
-            )
+            nothing_else = ", ".join(check.allowed) or "(nothing)"
+            return f"{_where(check)} the agent calls nothing but {nothing_else}"
         case Profile():
             return f"`{check.step}` runs with the {check.expect!r} profile"
         case MemoryHas():
-            more = (
-                f" that says {', '.join(repr(c) for c in check.contains)}" if check.contains else ""
-            )
-            return f"memory has a file matching `{check.path}`{more}"
+            return _describe_memory_has(check)
         case MemoryUntouched():
             return "the owner's files stay exactly as written: " + ", ".join(check.paths)
         case SpendUnder():

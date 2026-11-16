@@ -449,9 +449,8 @@ class Timers:
             trust=timer.trust,
         )
 
-    # Declared last on purpose: inside a class body a method named `list` hides the builtin in
-    # the annotations that follow it, and callers know this method by that name.
-    def list(self, *, include_finished: bool = False) -> list[Timer]:
+    def scheduled(self, *, include_finished: bool = False) -> list[Timer]:
+        """The timers that are set (active or paused), and the ones that are over if asked."""
         sql = "SELECT * FROM timers"
         if not include_finished:
             sql += " WHERE status IN ('active', 'paused')"

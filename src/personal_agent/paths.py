@@ -68,6 +68,11 @@ class Paths:
         """Pictures the owner sent, stored by content hash."""
         return self.home / "media"
 
+    @property
+    def backups_dir(self) -> Path:
+        """Copies of the database that `pa db backup` makes. Created when the first one is."""
+        return self.home / "backups"
+
     @classmethod
     def resolve(cls, home: str | os.PathLike[str] | None = None) -> Paths:
         raw = home or os.environ.get("PA_HOME") or DEFAULT_HOME

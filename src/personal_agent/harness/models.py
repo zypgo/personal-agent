@@ -50,6 +50,13 @@ class OpenAIModels:
             self._client = make_client(self.cfg, timeout=self.cfg.timeout_s)
         return self._client
 
+    async def aclose(self) -> None:
+        """Close the shared client's connections. They belong to the event loop that is ending;
+        asking for a model afterwards opens a new client."""
+        client, self._client = self._client, None
+        if client is not None:
+            await client.close()
+
     def __call__(self, name: str) -> Model:
         if self.cfg.api == "chat_completions":
             return OpenAIChatCompletionsModel(model=name, openai_client=self.client)

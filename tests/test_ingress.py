@@ -153,7 +153,7 @@ async def test_a_command_is_answered_here_and_never_reaches_the_model(rig):
     )
     assert result.status == "command"
     assert events(app) == []  # no event: the model never sees it
-    [answer] = app.outbox.list()
+    [answer] = app.outbox.recent()
     assert (answer.channel, answer.recipient, answer.kind) == ("telegram", "777", "notice")
     assert answer.payload["interactive"] is True
     assert "Idle." in answer.text
@@ -166,21 +166,21 @@ async def test_a_command_seen_again_runs_only_once(rig):
     await ingress.owner_message(channel="telegram", text="/new", external_id="tg:5")
     second = await ingress.owner_message(channel="telegram", text="/new", external_id="tg:5")
     assert second.status == "duplicate"
-    assert len(app.outbox.list()) == 1
+    assert len(app.outbox.recent()) == 1
 
 
 async def test_commands_can_carry_the_bot_name_telegram_adds(rig):
     app, ingress, *_ = rig()
     result = await ingress.owner_message(channel="telegram", text="/help@my_assistant_bot")
     assert result.status == "command"
-    assert "/approve" in app.outbox.list()[0].text
+    assert "/approve" in app.outbox.recent()[0].text
 
 
 async def test_an_unknown_slash_word_is_an_ordinary_message(rig):
     app, ingress, *_ = rig()
     result = await ingress.owner_message(channel="web", text="/usr/bin is where it lives, right?")
     assert result.status == "queued"
-    assert app.outbox.list() == []
+    assert app.outbox.recent() == []
 
 
 async def test_a_picture_with_a_slash_caption_is_not_a_command(rig):
@@ -198,7 +198,7 @@ async def test_a_failing_command_says_so_instead_of_staying_silent(rig, monkeypa
     monkeypatch.setattr(ingress.commands, "run", explode)
     result = await ingress.owner_message(channel="web", text="/status")
     assert result.status == "command"
-    assert "failed" in app.outbox.list()[0].text
+    assert "failed" in app.outbox.recent()[0].text
 
 
 # ---- voice -------------------------------------------------------------------------------------
@@ -419,7 +419,7 @@ async def test_a_command_inside_a_forwarded_message_is_never_run(rig):
     result = await ingress.owner_message(channel="telegram", text="/approve all", forwarded=True)
     assert result.status == "queued"  # a message for the agent to read, not a command to obey
     assert len(app.approvals.pending()) == 1
-    assert app.outbox.list() == []
+    assert app.outbox.recent() == []
 
 
 async def test_forwarded_words_reach_the_model_fenced_as_outside_text(rig):

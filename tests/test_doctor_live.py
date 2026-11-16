@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
 
+from helpers import invoke
 from personal_agent.core.worker import Worker, WorkResult
 from personal_agent.doctor import LIVE_PROMPTS, live_checks
 from personal_agent.harness.runner import RunOutcome
@@ -52,7 +53,7 @@ async def test_the_self_test_leaves_no_session_and_no_message_behind(make_app):
     await live_checks(app)
 
     assert app.sessions.items(session) == []
-    assert not [m for m in app.outbox.list(status="pending") if m.session_key == session]
+    assert not [m for m in app.outbox.recent(status="pending") if m.session_key == session]
 
 
 async def test_a_model_that_skips_the_memory_tool_is_a_warning_not_a_failure(make_app):
@@ -139,3 +140,46 @@ async def test_the_cost_of_each_turn_is_reported(make_app, turn):
     checks = await live_checks(app)
 
     assert "about $" in checks[turn].detail
+
+
+def _a_doctor_that_counts_how_often_the_services_are_stopped(home, monkeypatch, wired):
+    invoke("init")  # with the real wiring; the scripted app takes over afterwards
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-" + "test-not-real")
+    app = wired(
+        ScriptedModel([[view_memory()], [assistant_message("READY")], [assistant_message("ok")]])
+    )
+    stopped: list[bool] = []
+    stop = app.stop_services
+
+    async def counting() -> None:
+        stopped.append(True)
+        await stop()
+
+    monkeypatch.setattr(app, "stop_services", counting)
+    return stopped
+
+
+def test_the_command_closes_what_the_check_opened_before_the_loop_ends(home, monkeypatch, wired):
+    stopped = _a_doctor_that_counts_how_often_the_services_are_stopped(home, monkeypatch, wired)
+
+    result = invoke("doctor", "--live")
+
+    assert result.exit_code == 0, result.output
+    assert "history replay" in result.output
+    assert stopped == [True]
+
+
+def test_they_are_closed_even_when_the_check_itself_breaks(home, monkeypatch, wired):
+    from personal_agent.commands import setup
+
+    stopped = _a_doctor_that_counts_how_often_the_services_are_stopped(home, monkeypatch, wired)
+
+    async def broken(_app):
+        raise RuntimeError("the check broke")
+
+    monkeypatch.setattr(setup, "live_checks", broken)
+
+    result = invoke("doctor", "--live")
+
+    assert isinstance(result.exception, RuntimeError)
+    assert stopped == [True]

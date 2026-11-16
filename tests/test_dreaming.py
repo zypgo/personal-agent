@@ -373,7 +373,7 @@ async def test_a_pass_that_finishes_moves_the_cursor_to_the_end_of_what_it_read(
     results = await night(app, clock)
     assert results[0].outcome.status == "silent"
     assert dreamer(app).cursor() == ids[-1] and app.db.kv_get(FAILURES) == "0"
-    assert app.outbox.list() == []  # it never reports its tidying to the owner
+    assert app.outbox.recent() == []  # it never reports its tidying to the owner
 
 
 async def test_each_night_starts_a_conversation_of_its_own(make_app, clock):
@@ -404,7 +404,7 @@ async def test_a_pass_that_fails_leaves_the_cursor_where_it_was(make_app, clock)
     chatter(app)
     await night(app, clock)
     assert dreamer(app).cursor() == 0
-    assert app.outbox.list() == []
+    assert app.outbox.recent() == []
 
 
 async def test_a_pass_that_hits_its_cost_cap_stops_without_bothering_the_owner(make_app, clock):
@@ -422,7 +422,7 @@ async def test_a_pass_that_hits_its_cost_cap_stops_without_bothering_the_owner(m
     (result,) = await night(app, clock)
     assert result.outcome.status == "failed" and "run budget" in result.outcome.error
     assert len(model.calls) == 1  # the first call was paid for, the second was refused
-    assert app.outbox.list() == []  # an ordinary task would have told the owner; this is not one
+    assert app.outbox.recent() == []  # an ordinary task would have told the owner; this is not one
     assert dreamer(app).cursor() == 0 and app.db.kv_get(FAILURES) == "1"
 
 
@@ -512,7 +512,7 @@ async def test_a_pass_that_deletes_more_than_half_of_the_notes_is_undone_whole(m
     await night(app, clock)
 
     assert {p: app.memory.read_text(p) for p in paths} == before  # all eight are back
-    [notice] = app.outbox.list()
+    [notice] = app.outbox.recent()
     assert "undid everything" in notice.text and "pa dream log" in notice.text
     assert notice.kind == "notice" and notice.urgency == "low"
     assert app.db.kv_get(FAILURES) == "1"
@@ -528,7 +528,7 @@ async def test_a_few_deletions_are_left_alone(make_app, clock):
     await night(app, clock)
     assert app.memory.read_text(paths[0]) is None and app.memory.read_text(paths[1]) is None
     assert app.memory.read_text(paths[2]) is not None
-    assert app.outbox.list() == [] and app.db.kv_get(FAILURES) == "0"
+    assert app.outbox.recent() == [] and app.db.kv_get(FAILURES) == "0"
 
 
 async def test_a_limit_on_the_number_of_deletions_applies_whatever_the_share(make_app, clock):
@@ -540,7 +540,7 @@ async def test_a_limit_on_the_number_of_deletions_applies_whatever_the_share(mak
     chatter(app)
     await night(app, clock)
     assert all(app.memory.read_text(p) is not None for p in paths)
-    assert len(app.outbox.list()) == 1
+    assert len(app.outbox.recent()) == 1
 
 
 async def test_a_small_memory_may_lose_most_of_its_notes(make_app, clock):
@@ -549,7 +549,7 @@ async def test_a_small_memory_may_lose_most_of_its_notes(make_app, clock):
     chatter(app)
     await night(app, clock)
     assert [app.memory.read_text(p) is None for p in paths] == [True, True, True, False]
-    assert app.outbox.list() == []
+    assert app.outbox.recent() == []
 
 
 def bare(app) -> None:
@@ -567,7 +567,7 @@ async def test_exactly_as_many_deletions_as_allowed_are_allowed(make_app, clock)
     chatter(app)
     await night(app, clock)
     assert [app.memory.read_text(p) is None for p in paths[:3]] == [True, True, False]
-    assert app.outbox.list() == []
+    assert app.outbox.recent() == []
 
 
 async def test_half_of_the_notes_may_be_deleted(make_app, clock):
@@ -576,7 +576,7 @@ async def test_half_of_the_notes_may_be_deleted(make_app, clock):
     chatter(app)
     await night(app, clock)
     assert [app.memory.read_text(p) is None for p in paths[:6]] == [True] * 5 + [False]
-    assert app.outbox.list() == []
+    assert app.outbox.recent() == []
 
 
 async def test_the_share_that_may_be_deleted_is_the_configured_one(make_app, clock):
@@ -608,7 +608,7 @@ async def test_a_memory_of_four_notes_may_lose_three(make_app, clock):
     chatter(app)
     await night(app, clock)
     assert [app.memory.read_text(p) is None for p in paths] == [True, True, True, False]
-    assert app.outbox.list() == []
+    assert app.outbox.recent() == []
 
 
 async def test_a_memory_of_five_notes_may_not_lose_three(make_app, clock):
@@ -618,7 +618,7 @@ async def test_a_memory_of_five_notes_may_not_lose_three(make_app, clock):
     chatter(app)
     await night(app, clock)
     assert all(app.memory.read_text(p) is not None for p in paths)
-    assert len(app.outbox.list()) == 1
+    assert len(app.outbox.recent()) == 1
 
 
 async def test_notes_the_pass_created_do_not_make_its_deletions_look_smaller(make_app, clock):
@@ -763,10 +763,10 @@ def test_three_failed_nights_in_a_row_pause_the_pass_for_a_week_and_say_so_once(
     d = dreamer(app)
     for _ in range(2):
         d.finished(dream_batch(), outcome("failed"))
-    assert not d.paused() and app.outbox.list() == []
+    assert not d.paused() and app.outbox.recent() == []
     d.finished(dream_batch(), outcome("failed"))
     assert d.paused()
-    [notice] = app.outbox.list()
+    [notice] = app.outbox.recent()
     assert "paused it for a week" in notice.text and "pa dream" in notice.text
     clock.advance(6 * 86_400)
     assert d.paused()
@@ -803,7 +803,7 @@ async def test_a_pass_the_inbox_gave_up_on_counts_as_a_failed_night_without_a_me
     assert app.inbox.counts()["dead"] == 1
     await drain(app)  # a claim is when dead events are noticed
     assert app.db.kv_get(FAILURES) == "1"
-    assert app.outbox.list() == []  # nobody is told about one bad night
+    assert app.outbox.recent() == []  # nobody is told about one bad night
     assert dreamer(app).cursor() == 0
 
 
@@ -811,7 +811,7 @@ def test_dropped_passes_are_counted_like_failed_ones_and_pause_it_in_the_end(mak
     app = make_app(config=config())
     for _ in range(3):
         dreamer(app).gave_up()
-    assert dreamer(app).paused() and len(app.outbox.list()) == 1
+    assert dreamer(app).paused() and len(app.outbox.recent()) == 1
 
 
 def test_the_cursor_only_moves_forward(make_app):

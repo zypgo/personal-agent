@@ -1,12 +1,13 @@
 """The always-on loop, and the engine a one-off command uses to run the agent.
 
-The agent sleeps most of the time. This process does four cheap things in a loop:
+The agent sleeps most of the time. This process does a few cheap things in a loop:
 
 - workers claim ready events from the inbox and run the harness (a few sessions at once, one run
   per session at a time);
 - the scheduler turns due timers into events (and, once a night, queues the memory tidy-up);
 - the dispatcher delivers outbox messages (quiet hours and rate limits are applied there);
-- housekeeping closes approvals nobody answered and writes a heartbeat.
+- housekeeping closes approvals nobody answered and writes a heartbeat;
+- once a day the upkeep removes finished records that are past their retention (maintenance.py).
 
 Nothing is held in memory that the database does not also hold, so killing the process at any
 moment loses nothing: leases expire, interrupted runs are repaired by the next run, and
@@ -40,6 +41,9 @@ if TYPE_CHECKING:
     from personal_agent.app import App
 
 log = logging.getLogger(__name__)
+
+UPKEEP_CHECK_S = 60.0
+"""How often the running agent looks whether the daily upkeep is due."""
 
 
 class _Wakeups:
@@ -77,6 +81,7 @@ class Stats:
     timers_fired: int = 0
     approvals_expired: int = 0
     messages_sent: int = 0
+    rows_pruned: int = 0
     errors: int = 0
     started_at: float = 0.0
     extra: dict[str, int] = field(default_factory=dict)
@@ -144,6 +149,7 @@ class Daemon:
                 asyncio.create_task(self._scheduler_loop(), name="scheduler"),
                 asyncio.create_task(self._dispatch_loop(), name="dispatcher"),
                 asyncio.create_task(self._housekeeping_loop(), name="housekeeping"),
+                asyncio.create_task(self._upkeep_loop(), name="upkeep"),
             ]
             tasks += [
                 asyncio.create_task(self._supervise(s), name=f"service-{s.name}")
@@ -172,10 +178,11 @@ class Daemon:
             log.warning("could not start the MCP servers", exc_info=True)
 
     async def _shutdown(self, tasks: list[asyncio.Task[Any]]) -> None:
-        workers = [t for t in tasks if (t.get_name() or "").startswith("worker-")]
+        workers = [t for t in tasks if (t.get_name() or "").startswith(("worker-", "upkeep"))]
         if workers:
             # Let runs that are in flight finish; anything slower is cancelled, which releases its
-            # events untouched (no attempt used) for the next process.
+            # events untouched (no attempt used) for the next process. The upkeep stops between two
+            # batches and is waited for too: the database must not be closed under it.
             _, pending = await asyncio.wait(workers, timeout=self.grace_s)
             for task in pending:
                 task.cancel()
@@ -267,6 +274,32 @@ class Daemon:
                     self.stats.errors += 1
                     log.exception("housekeeping failed")
                 await self._nap(event, HOUSEKEEPING_S)
+
+    async def _upkeep_loop(self) -> None:
+        """Once a day, remove finished records past their retention. It runs on a thread, in small
+        batches, so that nothing else waits for it for long, and apart from housekeeping so that the
+        heartbeat does not stop while it works."""
+        with self._wake.listener() as event:
+            while not self._stopping:
+                event.clear()
+                try:
+                    if self.app.janitor.due():
+                        tidy = await asyncio.to_thread(
+                            self.app.janitor.maintain, stop=lambda: self._stopping
+                        )
+                        self.stats.rows_pruned += tidy.total
+                        if tidy.total:
+                            log.info(
+                                "database upkeep removed %d old record(s): %s",
+                                tidy.total,
+                                tidy.removed,
+                            )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self.stats.errors += 1
+                    log.exception("database upkeep failed")
+                await self._nap(event, UPKEEP_CHECK_S)
 
     def _beat(self) -> None:
         now = self.app.clock.now()

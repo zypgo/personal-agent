@@ -50,7 +50,7 @@ async def test_a_risky_call_suspends_the_run_and_asks_the_owner(make_app):
 
     [approval] = app.approvals.pending()
     assert (approval.tool, approval.summary) == ("shell", "git push origin main")
-    [ask] = app.outbox.list()
+    [ask] = app.outbox.recent()
     assert ask.kind == "approval_request" and f"/approve {approval.id}" in ask.text
     assert ask.payload["approval_ids"] == [approval.id]
     assert len(model.calls) == 1  # the model is not consulted while waiting
@@ -85,7 +85,7 @@ async def test_a_message_that_comes_back_does_not_close_the_request_it_already_m
     [resumed] = await drain(app)
     assert resumed.outcome.status == "completed"
     assert spy.ran("shell") == ["git push origin main"]
-    assert [m.text for m in app.outbox.list() if m.kind == "message"] == ["Pushed."]
+    assert [m.text for m in app.outbox.recent() if m.kind == "message"] == ["Pushed."]
 
 
 async def test_approving_continues_the_run_and_runs_the_tool_exactly_once(make_app):
@@ -102,7 +102,7 @@ async def test_approving_continues_the_run_and_runs_the_tool_exactly_once(make_a
     items = app.sessions.items("main")
     assert roles(items).count("function_call") == roles(items).count("function_call_output") == 1
     assert text_of(items[-1]) == "Pushed."
-    sent = [m.text for m in app.outbox.list() if m.kind == "message"]
+    sent = [m.text for m in app.outbox.recent() if m.kind == "message"]
     assert sent == ["Pushed."]
     assert app.approvals.load_run(first.outcome.run_id) is None  # state cleaned up
     run = app.runs.get(first.outcome.run_id)
@@ -121,7 +121,7 @@ async def test_denying_tells_the_model_and_nothing_runs(make_app):
     assert spy.ran() == []
     assert DENIED_MESSAGE in outputs(app)["c1"] and "not on main" in outputs(app)["c1"]
     assert DENIED_MESSAGE in str(model.calls[1].input)  # the model saw the refusal
-    assert [m.text for m in app.outbox.list() if m.kind == "message"] == [
+    assert [m.text for m in app.outbox.recent() if m.kind == "message"] == [
         "Understood, I did not push."
     ]
     assert app.audit.recent()[0].outcome == "rejected"
@@ -280,7 +280,7 @@ async def test_a_run_that_cannot_be_resumed_is_dropped_cleanly_after_repeated_fa
 
     assert app.approvals.load_run(first.outcome.run_id) is None
     assert app.runs.get(first.outcome.run_id).status == "failed"
-    assert any("could not continue a task" in m.text for m in app.outbox.list())
+    assert any("could not continue a task" in m.text for m in app.outbox.recent())
     assert app.inbox.counts()["dead"] == 1
 
 
@@ -309,7 +309,7 @@ async def test_a_scheduled_run_asks_through_the_default_channel(make_app, clock)
     [result] = await drain(app)
 
     assert result.outcome.status == "awaiting_approval"
-    [ask] = [m for m in app.outbox.list() if m.kind == "approval_request"]
+    [ask] = [m for m in app.outbox.recent() if m.kind == "approval_request"]
     assert ask.channel == "cli"
     assert app.approvals.load_run(result.outcome.run_id).meta["profile"] == "scheduled"
 

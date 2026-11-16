@@ -306,16 +306,6 @@ class Approvals:
         with self.db.tx():
             self.db.execute("DELETE FROM run_states WHERE run_id = ?", (run_id,))
 
-    def suspended_runs(self, session_key: str | None = None) -> list[str]:
-        if session_key:
-            rows = self.db.query(
-                "SELECT run_id FROM run_states WHERE session_key = ? ORDER BY created_at",
-                (session_key,),
-            )
-        else:
-            rows = self.db.query("SELECT run_id FROM run_states ORDER BY created_at")
-        return [r["run_id"] for r in rows]
-
 
 def request_text(approvals: Sequence[Approval]) -> str:
     """The message that asks the owner. Plain text so every channel can show it."""
