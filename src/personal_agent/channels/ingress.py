@@ -11,6 +11,9 @@ trust.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
 import re
 import uuid
@@ -22,6 +25,7 @@ from personal_agent.channels.commands import ChatCommands, parse_command
 from personal_agent.channels.transcribe import TranscriptionError, estimate_seconds
 from personal_agent.core.events import Kind, NewEvent, Trust
 from personal_agent.core.media import MediaError
+from personal_agent.core.receipts import ReceiptStore
 from personal_agent.core.sessions import DEFAULT_SESSION
 from personal_agent.core.transcript import Turn
 from personal_agent.harness.pricing import transcription_cost_usd
@@ -83,6 +87,7 @@ class Ingress:
         self.wake = wake
         self.session_key = session_key
         self.commands = ChatCommands(app, wake=wake)
+        self.receipts = ReceiptStore(app.db, app.clock)
 
     async def owner_message(
         self,
@@ -116,8 +121,61 @@ class Ingress:
             return self._command(parsed, body, channel, recipient, external_id)
 
         spoken = False
+        receipt_key: tuple[str, str] | None = None
         if voice is not None:
-            heard = await self._transcribe(voice)
+            cached: str | None = None
+            if external_id is not None:
+                receipt_key = (channel, external_id)
+                fingerprint = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "voice": hashlib.sha256(voice.data).hexdigest(),
+                            "mime": voice.mime,
+                            "duration": voice.duration_s,
+                            "name": voice.name,
+                            "text": body,
+                            "forwarded": forwarded,
+                            "recipient": recipient,
+                            "session": self.session_key,
+                            "reply_to": reply_to,
+                            "images": [hashlib.sha256(item.data).hexdigest() for item in images],
+                        },
+                        sort_keys=True,
+                        ensure_ascii=False,
+                    ).encode()
+                ).hexdigest()
+                receipt = self.receipts.claim(
+                    channel, external_id, fingerprint, app.config.media.transcribe_timeout_s
+                )
+                if receipt.state == "done":
+                    return Accepted("duplicate", event_id=receipt.result.get("event_id"))
+                if receipt.state == "conflict":
+                    return Accepted(
+                        "rejected",
+                        reply="This message ID was already used for different content. Send it as a new message.",
+                    )
+                if receipt.state == "rejected":
+                    return Accepted(
+                        "rejected",
+                        reply=receipt.result.get("reply", "Send a new voice message to try again."),
+                    )
+                if receipt.state == "uncertain":
+                    return Accepted(
+                        "rejected",
+                        reply="The previous transcription was interrupted. It will not be charged again automatically. Send a new voice message to try again.",
+                    )
+                if receipt.state == "processing" and not receipt.fresh:
+                    return Accepted(
+                        "rejected",
+                        reply="This voice message is still being transcribed. Wait for the original request to finish.",
+                    )
+                if receipt.state == "ready":
+                    cached = str(receipt.result["words"])
+            heard = (
+                cached
+                if cached is not None
+                else await self._transcribe(voice, receipt_key=receipt_key)
+            )
             if isinstance(heard, Accepted):
                 return heard
             body = f"{body}\n\n{heard}".strip() if body else heard
@@ -150,6 +208,8 @@ class Ingress:
                     trust=Trust.OWNER,
                 )
             )
+            if receipt_key is not None:
+                self.receipts.save(*receipt_key, "done", {"event_id": added.id})
             if added.duplicate:
                 return Accepted("duplicate", event_id=added.id)
             marks = {k: True for k, on in (("voice", spoken), ("forwarded", forwarded)) if on}
@@ -192,38 +252,56 @@ class Ingress:
         return Accepted("command", turn=turn)
 
     # ---- voice and pictures -----------------------------------------------------------
-    async def _transcribe(self, voice: Upload) -> str | Accepted:
+    async def _transcribe(
+        self, voice: Upload, *, receipt_key: tuple[str, str] | None = None
+    ) -> str | Accepted:
         """The words of a voice message, or the reason it was not turned into any."""
         app, cfg = self.app, self.app.config.media
+
+        def reject(reply: str) -> Accepted:
+            if receipt_key is not None:
+                self.receipts.save(*receipt_key, "rejected", {"reply": reply})
+            return Accepted("rejected", reply=reply)
+
         if not cfg.voice:
-            return Accepted("rejected", reply="Voice messages are switched off ([media] voice).")
+            return reject("Voice messages are switched off ([media] voice).")
         if len(voice.data) > cfg.max_voice_bytes:
-            return Accepted(
-                "rejected",
-                reply=f"That recording is too large ({len(voice.data) // 1_000_000} MB).",
-            )
+            return reject(f"That recording is too large ({len(voice.data) // 1_000_000} MB).")
         seconds = estimate_seconds(len(voice.data), voice.duration_s)
         if seconds > cfg.max_voice_seconds:
-            return Accepted(
-                "rejected",
-                reply=f"That recording is too long ({int(seconds)} s; the limit is {cfg.max_voice_seconds} s).",
+            return reject(
+                f"That recording is too long ({int(seconds)} s; the limit is {cfg.max_voice_seconds} s)."
             )
         if app.budget.spent_today() >= app.budget.daily_limit():
-            return Accepted(
-                "rejected", reply="Today's spending limit is reached, so I cannot listen right now."
-            )
+            return reject("Today's spending limit is reached, so I cannot listen right now.")
         try:
-            words = await app.transcriber.transcribe(voice.data, mime=voice.mime, name=voice.name)
+            async with asyncio.timeout(cfg.transcribe_timeout_s):
+                words = await app.transcriber.transcribe(
+                    voice.data, mime=voice.mime, name=voice.name
+                )
         except TranscriptionError as exc:
-            return Accepted("rejected", reply=str(exc))
+            return reject(str(exc))
+        except TimeoutError:
+            if receipt_key is not None:
+                self.receipts.save(*receipt_key, "uncertain", {})
+            return Accepted(
+                "rejected", reply="Transcription timed out. Send a new voice message to try again."
+            )
+        except (asyncio.CancelledError, Exception):
+            if receipt_key is not None:
+                self.receipts.save(*receipt_key, "uncertain", {})
+            raise
         # Whatever happened inside, the audio was sent and billed: count it.
-        app.budget.record_spend(
-            "transcription",
-            transcription_cost_usd(cfg.transcribe_model, seconds),
-            f"{cfg.transcribe_model}, {seconds:.0f}s",
-        )
-        if not words:
-            return Accepted("rejected", reply="I could not make out any words in that recording.")
+        with app.db.tx():
+            app.budget.record_spend(
+                "transcription",
+                transcription_cost_usd(cfg.transcribe_model, seconds),
+                f"{cfg.transcribe_model}, {seconds:.0f}s",
+            )
+            if not words:
+                return reject("I could not make out any words in that recording.")
+            if receipt_key is not None:
+                self.receipts.save(*receipt_key, "ready", {"words": words})
         return words
 
     def _store_images(self, images: Sequence[Upload]) -> list[dict[str, Any]]:
