@@ -245,6 +245,17 @@ class MaxMessages(_Check):
     limit: int = Field(ge=0)
 
 
+class ResponseStyle(_Check):
+    """Measurable style constraints, not a semantic or language-model judge."""
+
+    kind: Literal["response_style"]
+    step: str | None = None
+    min_han_share: float = Field(default=0, ge=0, le=1)
+    """Minimum Han share of alphabetic characters; punctuation/digits do not inflate it."""
+    max_chars: int = Field(ge=1)
+    max_sentences: int = Field(ge=1)
+
+
 class NotUrgent(_Check):
     kind: Literal["not_urgent"]
     step: str | None = None
@@ -279,6 +290,12 @@ class MemoryHas(_Check):
     path: str
     """A glob, relative to the memory folder (`state/tasks/*.md`)."""
     contains: list[str] = Field(default_factory=list)
+    pattern: str | None = None
+
+    @field_validator("pattern")
+    @classmethod
+    def _valid_pattern(cls, value: str | None) -> str | None:
+        return _regex(value)
 
     @field_validator("path")
     @classmethod
@@ -306,6 +323,7 @@ Check = Annotated[
     | Says
     | NeverSays
     | MaxMessages
+    | ResponseStyle
     | NotUrgent
     | ToolsUsed
     | ToolsNotUsed

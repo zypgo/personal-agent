@@ -1,6 +1,8 @@
 """Grading a trial. Every check looks at an effect (what was said, which tools ran, what was written
-to memory, what it cost) and says why it passed or failed. None looks at exact wording: a model
-says the same thing many ways, and a check that wants one of them measures luck.
+to memory, what it cost) and says why it passed or failed. Text checks use explicit phrases and
+patterns; these are bounded assertions, not a general semantic judge. Adversarial scripts test
+known negations, repeats and style violations. A live trial still needs human inspection for
+paraphrases these rules do not cover.
 
 Every step also gets an implicit check, `ends-<step>`: its runs ended as the step allows. Without
 it, a run that crashed would "stay silent" and pass every `silent` check.
@@ -22,6 +24,7 @@ from personal_agent.evals.spec import (
     NotUrgent,
     OnlyTools,
     Profile,
+    ResponseStyle,
     Says,
     Silent,
     SpendUnder,
@@ -105,14 +108,18 @@ def _memory_has(trial: Trial, check: MemoryHas) -> tuple[bool, str]:
             found.append(path)
     if not found:
         return False, f"no file matches {check.path}"
-    if not check.contains:
+    if not check.contains and not check.pattern:
         return True, f"found {', '.join(str(p.relative_to(root)) for p in found[:3])}"
     wanted = [_norm(s) for s in check.contains]
     for path in found:
         text = _norm(path.read_text(encoding="utf-8", errors="replace")[:MAX_FILE_CHARS])
-        if all(s in text for s in wanted):
+        matches = not check.pattern or re.search(check.pattern, text, re.IGNORECASE | re.MULTILINE)
+        if all(s in text for s in wanted) and matches:
             return True, f"{path.relative_to(root)} says it"
-    return False, f"{len(found)} file(s) match {check.path}, none contains {check.contains}"
+    return False, (
+        f"{len(found)} file(s) match {check.path}, none contains {check.contains}"
+        + (f" and matches {check.pattern!r}" if check.pattern else "")
+    )
 
 
 def _memory_untouched(trial: Trial, check: MemoryUntouched) -> tuple[bool, str]:
@@ -136,6 +143,26 @@ def _silent(trial: Trial, check: Silent) -> tuple[bool, str]:
 def _max_messages(trial: Trial, check: MaxMessages) -> tuple[bool, str]:
     count = len(_messages(trial, check.step))
     return count <= check.limit, f"{count} message(s); at most {check.limit} allowed"
+
+
+def _response_style(trial: Trial, check: ResponseStyle) -> tuple[bool, str]:
+    text = _seen(trial, check.step).strip()
+    if not text:
+        return False, "said nothing"
+    letters = [c for c in text if c.isalpha()]
+    han = sum("\u3400" <= c <= "\u9fff" or "\U00020000" <= c <= "\U0003134f" for c in letters)
+    share = han / max(1, len(letters))
+    # Newlines also delimit fragments, so unpunctuated bullet lists do not evade the limit.
+    sentences = sum(bool(part.strip()) for part in re.split(r"[.!?\u3002\uff01\uff1f\n]+", text))
+    ok = (
+        share >= check.min_han_share
+        and len(text) <= check.max_chars
+        and sentences <= check.max_sentences
+    )
+    return ok, (
+        f"Han share {share:.0%} (minimum {check.min_han_share:.0%}); "
+        f"{len(text)}/{check.max_chars} characters; {sentences}/{check.max_sentences} sentence fragments"
+    )
 
 
 def _not_urgent(trial: Trial, check: NotUrgent) -> tuple[bool, str]:
@@ -184,6 +211,8 @@ def _one(trial: Trial, check: Check) -> tuple[bool, str]:
             return _never_says(trial, check)
         case MaxMessages():
             return _max_messages(trial, check)
+        case ResponseStyle():
+            return _response_style(trial, check)
         case NotUrgent():
             return _not_urgent(trial, check)
         case ToolsUsed():
@@ -228,6 +257,8 @@ def _describe_never_says(check: NeverSays) -> str:
 
 def _describe_memory_has(check: MemoryHas) -> str:
     says = f" that says {', '.join(repr(c) for c in check.contains)}" if check.contains else ""
+    if check.pattern:
+        says += f" matching /{check.pattern}/"
     return f"memory has a file matching `{check.path}`{says}"
 
 
@@ -242,6 +273,11 @@ def describe(check: Check) -> str:
             return _describe_never_says(check)
         case MaxMessages():
             return f"{_where(check)} at most {check.limit} message(s) are sent"
+        case ResponseStyle():
+            return (
+                f"{_where(check)} at least {check.min_han_share:.0%} of letters are Han; "
+                f"at most {check.max_chars} characters and {check.max_sentences} sentence fragments"
+            )
         case NotUrgent():
             return f"{_where(check)} nothing is sent as urgent"
         case ToolsUsed():
