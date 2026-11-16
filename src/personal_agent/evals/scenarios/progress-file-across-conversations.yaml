@@ -17,10 +17,13 @@ steps:
     message: Which jobs of mine are open? One short sentence.
 checks:
   - {kind: tools_used, step: first, tools: [memory]}
+  # The file must say where the job stands, and not that it is finished: a job that waits for the
+  # owner ("status: waiting for the receipts' location", what a live run wrote) is still open. A list
+  # of the words that mean "open" would always miss one; the words that mean "done" are few.
   - kind: memory_has
     path: "state/tasks/*.md"
     contains: ["status:"]
-    pattern: '^\s*(?:[-*>]\s*)?\**status\**\s*:\s*\**\s*(?:in progress|open|pending|underway|进行中|待办)\b'
+    pattern: '^[ \t]*(?:[-*>][ \t]*)?\**status\**[ \t]*:[ \t]*\**[ \t]*(?!(?:complete[d]?|done|finished|closed|resolved|cancell?ed|archived)\b|已完成|完成|已结束|已关闭|已取消)[^\s*]'
   - {kind: says, step: second, any_of: [tax, receipt, 税, 发票, 收据]}
   - id: does-not-deny-open-task
     kind: never_says
@@ -35,7 +38,7 @@ mock:
           path: /memories/state/tasks/tax-receipts-2026.md
           file_text: |
             # Collect the 2026 tax receipts
-            status: in progress (electricity bills first, then the insurance letters)
+            status: waiting for the owner to say where the bills are (electricity bills first, then the insurance letters)
       - say: "I will collect the 2026 tax receipts and keep a progress file."
     second:
       - say: "One open job: collecting your 2026 tax receipts."
@@ -77,6 +80,28 @@ mock:
               command: create
               path: /memories/state/tasks/tax-receipts-2026.md
               file_text: "# Collect the 2026 tax receipts\nstatus: completed\n"
+          - say: "Noted."
+        second:
+          - say: "One open job: collecting your 2026 tax receipts."
+    - name: marks-it-done-in-other-words
+      fails: [memory_has]
+      script:
+        first:
+          - memory:
+              command: create
+              path: /memories/state/tasks/tax-receipts-2026.md
+              file_text: "# Collect the 2026 tax receipts\n- **Status:** Done, all receipts collected\n"
+          - say: "Noted."
+        second:
+          - say: "One open job: collecting your 2026 tax receipts."
+    - name: leaves-the-status-empty
+      fails: [memory_has]
+      script:
+        first:
+          - memory:
+              command: create
+              path: /memories/state/tasks/tax-receipts-2026.md
+              file_text: "# Collect the 2026 tax receipts\nstatus:\nElectricity bills first, then the insurance letters.\n"
           - say: "Noted."
         second:
           - say: "One open job: collecting your 2026 tax receipts."

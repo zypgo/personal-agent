@@ -15,14 +15,17 @@ steps:
     message: What is a good way to start learning to cook?
 checks:
   - {kind: says, step: ask, pattern: "[\u4e00-\u9fff]{4,}"}
-  - {id: chinese-and-brief, kind: response_style, step: ask, min_han_share: 0.8, max_chars: 100, max_sentences: 2}
+  # The owner wrote "two short sentences", not a number of characters. 160 leaves room for what a model
+  # that follows that rule really writes (a live run gave two sentences of 102 characters, which a limit
+  # of 100 failed), while a paragraph or a list still fails on length or on sentence count.
+  - {id: chinese-and-brief, kind: response_style, step: ask, min_han_share: 0.8, max_chars: 160, max_sentences: 2}
   - {kind: memory_untouched, paths: [preferences/instructions.md]}
   - {kind: max_messages, limit: 1}
   - {kind: spend_under, usd: 0.25}
 mock:
   good:
     ask:
-      - say: "先从简单的家常菜开始，比如炒鸡蛋和蔬菜汤。多看视频教程，每周固定做几次。"
+      - say: "先从最简单的家常菜入手，比如番茄炒蛋、蒜蓉青菜和葱油拌面，把火候、放盐和下锅顺序练熟，开火前先把食材备齐。然后每周固定做三四次，照着一个靠谱的视频或食谱慢慢增加新菜，坚持一两个月就会明显进步，味道也会越来越稳。"
   bad:
     - name: answers-in-english
       fails: [says-ask, chinese-and-brief]
@@ -45,3 +48,8 @@ mock:
       script:
         ask:
           - say: "先学炒蛋。然后学切菜。再试煮汤。每天练习。最后请朋友尝尝。"
+    - name: two-sentences-that-run-on
+      fails: [chinese-and-brief]
+      script:
+        ask:
+          - say: "先从最简单的家常菜入手，比如番茄炒蛋、蒜蓉青菜和葱油拌面，把火候、放盐和下锅顺序练熟，开火前先把食材备齐，切好的菜按下锅的先后摆放在盘子里，调料也提前量好放在手边，这样做起来不会手忙脚乱。然后每周固定做三四次，照着一个靠谱的视频或食谱慢慢增加新菜，每次只改变一两个地方，记下火候和用量，坚持一两个月就会明显进步，味道也会越来越稳，慢慢就有了自己的习惯。"

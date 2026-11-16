@@ -185,6 +185,83 @@ M = [
         "    wanted = list(check.contains)",
         CKT,
     ),
+    # ---- response style: language, length and sentence count -------------------------------------
+    (
+        "ck style: language not measured",
+        CK_,
+        "        share >= check.min_han_share\n        and len(text) <= check.max_chars\n",
+        "        len(text) <= check.max_chars\n",
+        CKT,
+    ),
+    (
+        "ck style: length not measured",
+        CK_,
+        "        and len(text) <= check.max_chars\n",
+        "",
+        CKT,
+    ),
+    (
+        "ck style: sentence count not measured",
+        CK_,
+        "        and sentences <= check.max_sentences\n",
+        "",
+        CKT,
+    ),
+    (
+        "ck style: a line break does not end a fragment",
+        CK_,
+        'r"[.!?\\u3002\\uff01\\uff1f\\n]+"',
+        'r"[.!?\\u3002\\uff01\\uff1f]+"',
+        CKT,
+    ),
+    (
+        "ck style: silence passes",
+        CK_,
+        '    if not text:\n        return False, "said nothing"\n    letters =',
+        '    if not text:\n        return True, "said nothing"\n    letters =',
+        CKT,
+    ),
+    # The built-in scenario's limit sits between what a model that follows "two short sentences" writes
+    # (105 characters in the good run) and a run-on answer (176): too tight fails the good run, too loose
+    # lets the run-on through.
+    (
+        "sc preferences: a limit a compliant answer exceeds",
+        "src/personal_agent/evals/scenarios/preferences-are-followed.yaml",
+        "max_chars: 160",
+        "max_chars: 100",
+        ["tests/test_eval_builtin.py"],
+    ),
+    (
+        "sc preferences: a limit nothing exceeds",
+        "src/personal_agent/evals/scenarios/preferences-are-followed.yaml",
+        "max_chars: 160",
+        "max_chars: 400",
+        ["tests/test_eval_builtin.py"],
+    ),
+    # The progress file must say where the job stands and not that it is finished. The good run waits
+    # for the owner (a wording a list of "open" words missed in a live run); the bad runs say it is
+    # done, in other words, or leave the status empty.
+    (
+        "sc progress: a finished job passes",
+        "src/personal_agent/evals/scenarios/progress-file-across-conversations.yaml",
+        r"(?!(?:complete[d]?|done|finished|closed|resolved|cancell?ed|archived)\b|已完成|完成|已结束|已关闭|已取消)",
+        "",
+        ["tests/test_eval_builtin.py"],
+    ),
+    (
+        "sc progress: an empty status passes",
+        "src/personal_agent/evals/scenarios/progress-file-across-conversations.yaml",
+        r")[^\s*]'",
+        ")'",
+        ["tests/test_eval_builtin.py"],
+    ),
+    (
+        "sc progress: only the word completed is refused",
+        "src/personal_agent/evals/scenarios/progress-file-across-conversations.yaml",
+        r"(?:complete[d]?|done|finished|closed|resolved|cancell?ed|archived)\b",
+        r"(?:completed)\b",
+        ["tests/test_eval_builtin.py"],
+    ),
     (
         "ck memory: text unfolded",
         CK_,
