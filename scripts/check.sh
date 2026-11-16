@@ -42,7 +42,7 @@ if [ "$fast" -eq 0 ]; then
   step "tests"; HYPOTHESIS_PROFILE=ci uv run pytest tests -q -p no:cacheprovider -n 4
   step "web page"
   if command -v node >/dev/null 2>&1; then
-    node --test tests/js/*.test.mjs
+    node --test --test-reporter=tap tests/js/*.test.mjs
   else
     echo "node is not installed: the page's tests were skipped"
   fi
