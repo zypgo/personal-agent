@@ -9,7 +9,6 @@ run stops when the spending ceiling is reached.
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, get_args
 
@@ -17,10 +16,11 @@ import typer
 from rich.markup import escape
 
 from personal_agent.commands.common import USAGE, fail, home, say, warn
-from personal_agent.config import ConfigError, ReasoningEffort, api_key, load_config
+from personal_agent.config import ConfigError, ReasoningEffort, load_config
 from personal_agent.evals import report as reports
 from personal_agent.evals.checks import describe
 from personal_agent.evals.spec import Catalog, Scenario, load_catalog
+from personal_agent.harness.endpoints import model_endpoint
 from personal_agent.paths import Paths
 
 if TYPE_CHECKING:
@@ -237,9 +237,10 @@ def run(
         owner = load_config(paths)
     except ConfigError as exc:
         fail(str(exc), code=USAGE)
-    if not api_key() and not (owner.model.base_url or os.environ.get("OPENAI_BASE_URL")):
+    if model_endpoint(owner.model).missing_key:
         fail(
-            f"OPENAI_API_KEY is not set. Put it in {paths.env_file}; nothing was spent.", code=USAGE
+            f"{owner.model.api_key_env} is not set. Put it in {paths.env_file}; nothing was spent.",
+            code=USAGE,
         )
     used = model or owner.model.main
     say(
