@@ -417,6 +417,24 @@ class IdentityStore:
             if principal.id != row["issued_by"]:
                 raise InvalidInvite("Invitation is unavailable.")
             self._consume(row)
+            # A recovery code is for the day every device is lost or suspect. Whatever was signed
+            # in, and whatever a signed-in device had prepared (a spare pairing, channel, member
+            # or node code), ends here, in the same transaction that spends the code. The caller
+            # then issues the one replacement session. Devices, nodes and channel bindings that
+            # were already completed stay: the owner reviews those in the settings.
+            now = self.clock.now()
+            self.db.execute(
+                "UPDATE web_sessions SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL",
+                (now, principal.id),
+            )
+            self.db.execute(
+                "UPDATE collaboration_invites SET revoked_at = ? WHERE issued_by = ? AND kind != 'recovery' AND used_at IS NULL AND revoked_at IS NULL",
+                (now, principal.id),
+            )
+            self.db.execute(
+                "UPDATE node_pairings SET used_at = ? WHERE owner_id = ? AND used_at IS NULL",
+                (now, principal.id),
+            )
             self._audit(principal.id, "identity_recovered")
             return principal.id
 
