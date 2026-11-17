@@ -304,7 +304,7 @@ M = [
     (
         "wa download: no sign-in is needed",
         WA,
-        '        if app.web_auth.lookup(request.cookies.get("pa_session", "")) is None:',
+        "        if session is None:",
         "        if False:",
         ROUTE,
     ),

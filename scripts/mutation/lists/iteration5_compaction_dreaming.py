@@ -338,7 +338,7 @@ M = [
     (
         "ru compaction: never",
         RU,
-        "            await Compactor(app).compact(key, run_id)",
+        "            await Compactor(app).compact(key, run_id, authorize=ctx.require_authorized)",
         "            pass",
         ["tests/test_compaction.py"],
     ),
@@ -692,8 +692,8 @@ M = [
     (
         "cp compact: cost not charged",
         CP,
-        "        self._record(run_id, summary)\n        text = clean_summary(summary.text)",
-        "        text = clean_summary(summary.text)",
+        "        if not accounted:\n            self._record(run_id, summary)\n        if authorize is not None:",
+        "        if authorize is not None:",
         TC,
     ),
     (

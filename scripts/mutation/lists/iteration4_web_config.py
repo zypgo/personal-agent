@@ -219,8 +219,8 @@ M = [
     (
         "web: link in the query",
         W,
-        'url = f"{agent.config.web.address}/#pair={invite.code}"\n    minutes =',
-        'url = f"{agent.config.web.address}/?pair={invite.code}"\n    minutes =',
+        'url = f"{agent.config.web.address}/#pair={code}"\n    minutes =',
+        'url = f"{agent.config.web.address}/?pair={code}"\n    minutes =',
         WEBCLI,
     ),
     (
@@ -233,8 +233,8 @@ M = [
     (
         "web: pair works when off",
         W,
-        "        _require_enabled(agent)\n        _pair_link(agent, label, qr)",
-        "        _pair_link(agent, label, qr)",
+        "        _require_enabled(agent)\n        _pair_link(agent, label, qr, principal=principal)",
+        "        _pair_link(agent, label, qr, principal=principal)",
         WEBCLI,
     ),
     (
