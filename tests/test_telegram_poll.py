@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 import telegram_fake as tg
+from channel_identity_helpers import bind_owner
 from personal_agent.channels.base import ChannelError
 from personal_agent.channels.ingress import Ingress
 from personal_agent.channels.telegram.api import TelegramApi
@@ -73,6 +74,7 @@ def rig(make_app) -> Rig:
 @pytest.fixture
 def paired(rig) -> Rig:
     rig.app.pairing.allow("telegram", "7", "me")
+    bind_owner(rig.app, "telegram", "7")
     return rig
 
 
@@ -84,7 +86,7 @@ async def test_a_stranger_is_told_how_to_pair_once_and_costs_the_agent_nothing(r
     )
     [reply] = rig.replies()
     [request] = rig.app.pairing.pending("telegram")
-    assert f"pa channels approve telegram {request.code}" in reply
+    assert "/bind" in reply
     assert request.notified_at is not None and request.label == "Eve"
     assert events(rig.app) == [] and rig.app.transcript.latest() == []
     assert rig.app.inbox.counts()["pending"] == 0
@@ -110,6 +112,7 @@ async def test_once_approved_the_same_person_gets_through(rig):
     await rig.poll([tg.text(1, "let me in", sender=99)])
     code = rig.app.pairing.pending("telegram")[0].code
     rig.app.pairing.approve(code)
+    bind_owner(rig.app, "telegram", "99")
     await rig.poll([tg.text(2, "now?", sender=99)])
     [event] = events(rig.app)
     assert event["payload"]["text"] == "now?" and event["payload"]["recipient"] == "99"
@@ -126,7 +129,13 @@ async def test_the_owners_text_becomes_an_event_and_wakes_the_worker(paired):
     daemon = await paired.poll([tg.text(5, "what's next?")])
     [event] = events(paired.app)
     assert (event["source"], event["external_id"]) == ("telegram", "tg:5")
-    assert event["payload"] == {"text": "what's next?", "recipient": "7"}
+    assert event["payload"] == {
+        "text": "what's next?",
+        "recipient": "7",
+        "principal_id": "owner",
+        "membership_version": 1,
+        "principal_version": 1,
+    }
     assert daemon.woken == 1
     assert [t.text for t in paired.app.transcript.latest()] == ["what's next?"]
     assert paired.replies() == []  # the answer comes later, through the outbox
@@ -140,6 +149,7 @@ async def test_an_update_delivered_twice_is_handled_once(paired):
 
 async def test_the_last_person_heard_from_is_where_background_messages_go(paired):
     paired.app.pairing.allow("telegram", "8")
+    bind_owner(paired.app, "telegram", "8")
     paired.app.clock.advance(60)
     await paired.poll([tg.text(1, "hi", sender=8)])
     assert paired.app.pairing.recent_sender("telegram").sender == "8"

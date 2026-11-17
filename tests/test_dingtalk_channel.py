@@ -8,6 +8,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from channel_identity_helpers import bind_owner, revoke_owner
 from personal_agent.channels.base import ChannelError
 from personal_agent.channels.dingtalk.api import (
     MESSAGE_TOPIC,
@@ -89,6 +90,7 @@ async def rig(make_app):
 def paired(rig):
     app, _, _ = rig
     app.pairing.allow("dingtalk", OWNER, "Owner")
+    bind_owner(app, "dingtalk", OWNER)
     return rig
 
 
@@ -107,11 +109,18 @@ async def test_unpaired_private_chat_only_gets_one_local_pairing_code_and_no_mod
     [request] = app.pairing.pending("dingtalk")
     [sent] = fake.sent()
     assert request.sender == OWNER and request.notified_at is not None
-    assert f"pa channels approve dingtalk {request.code}" in json.loads(sent["msgParam"])["content"]
+    assert "/bind" in json.loads(sent["msgParam"])["content"]
     assert not events(app) and not app.transcript.latest()
     assert app.pairing.approve(request.code).sender == OWNER
+    bind_owner(app, "dingtalk", OWNER)
     await channel._message(incoming("now authorized", message_id="message-3"), ingress)
-    assert events(app)[0]["payload"] == {"text": "now authorized", "recipient": OWNER}
+    assert events(app)[0]["payload"] == {
+        "text": "now authorized",
+        "recipient": OWNER,
+        "principal_id": "owner",
+        "membership_version": 1,
+        "principal_version": 1,
+    }
 
 
 @pytest.mark.parametrize(
@@ -138,6 +147,7 @@ async def test_configured_corp_is_enforced_even_when_staff_id_matches_an_approva
     channel.cfg = DingTalkConfig(enabled=True, corp_id="corp")
     foreign = recipient_key("offline-app", "foreign", "owner")
     app.pairing.allow("dingtalk", foreign)
+    bind_owner(app, "dingtalk", foreign)
     await channel._message(incoming(senderCorpId="foreign", chatbotCorpId="foreign"), Ingress(app))
     assert not events(app) and not fake.requests
 
@@ -252,6 +262,7 @@ async def test_replies_and_proactive_notifications_use_only_current_approved_sta
     await channel.send(queue(app, "proactive", recipient=None))
     assert [sent["userIds"] for sent in fake.sent()] == [["owner"], ["owner"]]
     app.pairing.revoke("dingtalk", OWNER)
+    revoke_owner(app, "dingtalk", OWNER)
     with pytest.raises(ChannelError) as caught:
         await channel.send(queue(app, "after revoke"))
     assert caught.value.permanent and len(fake.sent()) == 2

@@ -100,8 +100,9 @@ def test_a_name_that_looks_like_markup_is_shown_as_typed(ready):
     assert "[bold red]Eve[/bold red]" in out
 
 
-def test_approving_a_code_lets_the_account_in(ready):
+def test_approving_a_code_lets_the_account_in(ready, monkeypatch):
     app = ready()
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", TOKEN)
     request = app.pairing.request("telegram", "99", "Eve")
     result = invoke("channels", "approve", "telegram", request.code.lower().replace("-", ""))
     assert result.exit_code == 0 and "Approved Eve on telegram" in result.output
@@ -142,8 +143,9 @@ def test_denying_discards_a_code(ready):
     assert invoke("channels", "deny", request.code).exit_code == 1
 
 
-def test_an_account_can_be_approved_by_id_without_a_code(ready):
+def test_an_account_can_be_approved_by_id_without_a_code(ready, monkeypatch):
     app = ready()
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", TOKEN)
     result = invoke("channels", "allow", "Telegram", "12345", "--label", "me")
     assert result.exit_code == 0
     assert app.pairing.is_approved("telegram", "12345")
@@ -153,6 +155,30 @@ def test_an_account_can_be_approved_by_id_without_a_code(ready):
 def test_senders_says_when_nobody_is_approved(ready):
     ready()
     assert "No account is approved" in invoke("channels", "senders").output
+
+
+def test_senders_includes_explicit_collaborator_binding_without_legacy_allow(ready):
+    app = ready()
+    project = app.identities.create_project("owner", "Research")
+    invite = app.identities.create_member_invite("owner", project.id)
+    member = app.identities.redeem_member(invite.code, label="Teammate")
+    code = app.identities.create_channel_binding(member.principal.id, project.id).code
+    app.identities.bind_channel(code, "telegram", "bot", "123", "123")
+    assert app.pairing.senders() == []
+    result = invoke("channels", "senders")
+    assert result.exit_code == 0
+    assert "Teammate" in result.output and "Research" in result.output
+    assert "123" in result.output and "bound" in result.output and code not in result.output
+    assert invoke("channels", "revoke", "telegram", "123").exit_code == 0
+    assert app.identities.lookup_channel("telegram", "bot", "123") is None
+
+
+def test_senders_does_not_describe_new_bare_approval_as_owner(ready):
+    app = ready()
+    app.pairing.allow("telegram", "7", "Pending identity")
+    output = flat(invoke("channels", "senders").output)
+    assert "binding required" in output
+    assert "owner personal" not in output and "legacy owner" not in output
 
 
 def test_revoking_takes_access_away(ready):
