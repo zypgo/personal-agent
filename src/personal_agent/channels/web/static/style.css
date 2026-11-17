@@ -1,3 +1,9 @@
+.streaming .body { border-inline-start: 2px solid var(--pencil); padding-inline-start: 12px; }
+.streaming .words { white-space: pre-wrap; overflow-wrap: anywhere; }
+.artifact { display: grid; gap: 6px; margin-block: 12px; padding: 12px; border: 1px solid var(--pencil); border-radius: 8px; }
+.artifact-download { text-align: start; overflow-wrap: anywhere; }
+.artifact-status { font-size: .85em; opacity: .75; }
+
 /* A logbook. Warm paper by day, a desk lamp at night; the agent writes in a book hand, the machine
    in monospace. Fonts are whatever the phone already has (the page may load nothing from outside),
    chosen so that Apple devices get Iowan Old Style / New York and SF Mono. */
