@@ -41,6 +41,53 @@ test("an empty store has no ids", () => {
   assert.deepEqual(store.timeline, []);
 });
 
+test("reconnecting replaces draft snapshots without touching the durable history cursor", () => {
+  const store = new Store();
+  store.addTurns([turn(17)]);
+  store.replaceDrafts([{ run_id: "r1", sequence: 1, text: "First" }]);
+  store.replaceDrafts([{ run_id: "r1", sequence: 5, text: "First words" }]);
+  assert.equal(store.drafts.get("r1").text, "First words");
+  assert.equal(store.lastId, 17);
+  store.replaceDrafts([]);
+  assert.equal(store.drafts.size, 0);
+  assert.equal(store.lastId, 17);
+});
+
+test("a committed answer replaces its draft and replaying it does not duplicate history", () => {
+  const store = new Store();
+  store.replaceDrafts([{ run_id: "r1", sequence: 2, text: "First words" }]);
+  const answer = turn(2, { text: "Complete answer", meta: { run_id: "r1", final_response: true } });
+  store.addTurns([answer, answer]);
+  assert.equal(store.drafts.size, 0);
+  assert.deepEqual(store.order, [2]);
+  assert.equal(store.turns.get(2).text, "Complete answer");
+  store.replaceDrafts([{ run_id: "r1", sequence: 1, text: "old snapshot" }]);
+  assert.equal(store.drafts.size, 0);
+});
+
+test("replaying an old approval or intermediate message does not erase a resumed answer", () => {
+  const store = new Store();
+  store.replaceDrafts([{ run_id: "r1", sequence: 8, text: "The approved work is done" }]);
+  store.addTurns([
+    turn(1, { kind: "approval_request", meta: { run_id: "r1" } }),
+    turn(2, { kind: "artifact", meta: { run_id: "r1" } }),
+    turn(3, { meta: { run_id: "r1" } }),
+  ]);
+  assert.equal(store.drafts.get("r1").text, "The approved work is done");
+});
+
+test("bad or excessive preview data is bounded without creating history", () => {
+  const store = new Store();
+  store.replaceDrafts([null, 1, {}, { run_id: "r", sequence: 1, text: "x".repeat(40000) }]);
+  assert.equal(store.drafts.size, 1);
+  assert.equal(store.drafts.get("r").text.length, 32000);
+  store.replaceDrafts(Array.from({ length: 50 }, (_, i) => ({ run_id: `r${i}`, sequence: i, text: "hi" })));
+  assert.equal(store.drafts.size, 16);
+  assert.equal(store.lastId, 0);
+  store.replaceDrafts(undefined);
+  assert.equal(store.drafts.size, 0);
+});
+
 test("older history can be added after newer", () => {
   const store = new Store();
   store.addTurns([turn(10), turn(11)]);
