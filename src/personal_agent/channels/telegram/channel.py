@@ -21,11 +21,12 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from personal_agent.channels.base import ChannelError
+from personal_agent.channels.base import ChannelCapabilities, ChannelError
 from personal_agent.channels.ingress import Accepted, Ingress, Upload
 from personal_agent.channels.pairing import PAIRING_TTL_S
 from personal_agent.channels.telegram.api import NotSent, TelegramApi, TelegramApiError
 from personal_agent.channels.telegram.render import Piece, render
+from personal_agent.core.artifacts import ArtifactError
 from personal_agent.core.outbox import OutMessage
 from personal_agent.core.sessions import DEFAULT_SESSION
 
@@ -85,6 +86,14 @@ def approval_markup(ids: list[int], *, all_button: bool = True) -> dict[str, Any
 
 class TelegramChannel:
     name = "telegram"
+    capabilities = ChannelCapabilities(
+        markdown=True,
+        images_in=True,
+        audio_in=True,
+        documents_out=True,
+        proactive=True,
+        approval_buttons=True,
+    )
 
     def __init__(
         self,
@@ -144,6 +153,9 @@ class TelegramChannel:
 
     async def send(self, message: OutMessage) -> None:
         chat = self._chat_for(message)
+        if message.kind == "artifact" or message.payload.get("artifacts"):
+            await self._send_document(chat, message)
+            return
         pieces = render(message.text)
         ids = [int(i) for i in message.payload.get("approval_ids") or []]
         markup = None
@@ -160,6 +172,48 @@ class TelegramChannel:
                         f"{index} of {len(pieces)} parts were delivered before: {exc}"
                     ) from exc
                 raise
+
+    async def _send_document(self, chat: str, message: OutMessage) -> None:
+        """A file and its caption are one operation, so no text is sent ahead of the upload."""
+        artifacts = message.payload.get("artifacts")
+        if (
+            not isinstance(artifacts, list)
+            or len(artifacts) != 1
+            or not isinstance(artifacts[0], dict)
+            or not isinstance(artifacts[0].get("id"), str)
+        ):
+            raise ChannelError(
+                "A file notification must contain exactly one artifact.", permanent=True
+            )
+        try:
+            artifact, content = await asyncio.to_thread(self.app.artifacts.read, artifacts[0]["id"])
+        except ArtifactError as exc:
+            raise ChannelError(str(exc), permanent=True) from None
+        if artifact.session_key != message.session_key or artifact.outbox_id != message.id:
+            raise ChannelError("The artifact does not belong to this notification.", permanent=True)
+        # Reading/hashing the snapshot yields to other work. A revocation or a different most
+        # recently active recipient during that await must take effect before bytes leave.
+        if self._chat_for(message) != chat:
+            raise ChannelError("The Telegram recipient changed before upload.", permanent=True)
+        try:
+            await self.api.send_document(
+                chat,
+                content,
+                filename=artifact.name,
+                mime=artifact.mime,
+                caption=message.text,
+                silent=message.urgency == "low",
+            )
+        except NotSent as exc:
+            raise ChannelError(str(exc)) from None
+        except TelegramApiError as exc:
+            if exc.status == 429:
+                raise ChannelError(str(exc), retry_after=exc.retry_after or 1.0) from None
+            if exc.permanent or exc.status in (413, 422):
+                raise ChannelError(str(exc), permanent=True) from None
+            # A server error or ambiguous reply may arrive after Telegram accepted the file.
+            # Let Dispatcher park it as maybe_sent; retrying here could upload a duplicate.
+            raise
 
     async def _send_piece(
         self, chat: str, piece: Piece, markup: dict[str, Any] | None, silent: bool
