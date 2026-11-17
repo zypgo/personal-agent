@@ -17,6 +17,7 @@ import hashlib
 import html
 import json
 import logging
+import os
 import re
 import uuid
 from collections import deque
@@ -37,6 +38,7 @@ from personal_agent.channels.web.artifacts import artifact_routes
 from personal_agent.channels.web.connect import connection_info
 from personal_agent.channels.web.probe import probe_signature
 from personal_agent.channels.web.security import Guard
+from personal_agent.collaboration.models import AccessDenied
 from personal_agent.core.activity import activity_snapshot
 from personal_agent.core.approvals import Approval, plain
 from personal_agent.core.transcript import Turn
@@ -224,6 +226,10 @@ class WebApi:
         session = self.auth.lookup(self._token(request))
         if session is None:
             raise HTTPException(401, "Not signed in.")
+        try:
+            self.app.require_actor(session.principal_id, write=False)
+        except AccessDenied as exc:
+            raise HTTPException(403, "Space is unavailable.") from exc
         return session
 
     @staticmethod
@@ -306,6 +312,8 @@ class WebApi:
         cfg = self.app.config
         return self._json(
             {
+                "principal_id": session.principal_id,
+                "space_id": self.app.space_id,
                 "agent": cfg.agent.name,
                 "owner": cfg.agent.owner_name,
                 "label": session.label,
@@ -377,17 +385,29 @@ class WebApi:
             return Sent(text_field("text"), client_id, images, voice)
 
     async def messages(self, request: Request) -> Response:
-        self._need(request)  # before the body is read: a stranger's upload is never parsed
+        session = self._need(request)  # before parsing uploads
+        try:
+            authority = self.app.actor_snapshot(session.principal_id)
+        except AccessDenied as exc:
+            raise HTTPException(403, "Space is unavailable.") from exc
         if not request.headers.get("content-type", "").startswith("multipart/form-data"):
             raise HTTPException(415, "Send the message as a form.")
         sent = await self._read_message(request)
-        accepted = await self.ingress.owner_message(
-            channel="web",
-            text=sent.text,
-            images=sent.images,
-            voice=sent.voice,
-            external_id=f"web:{sent.client_id}",
-        )
+        self._need(request)  # Upload reading can overlap device or membership revocation.
+        try:
+            accepted = await self.ingress.owner_message(
+                channel="web",
+                text=sent.text,
+                images=sent.images,
+                voice=sent.voice,
+                external_id=f"web:{session.principal_id}:{sent.client_id}",
+                principal_id=session.principal_id,
+                client_request_id=sent.client_id,
+                membership_version=authority.get("membership_version"),
+                principal_version=authority.get("principal_version"),
+            )
+        except AccessDenied as exc:
+            raise HTTPException(403, "Authorization changed; send a new message.") from exc
         if accepted.status == "rejected":
             return self._json({"status": "rejected", "error": accepted.reply}, 422)
         return self._json(
@@ -407,7 +427,7 @@ class WebApi:
             data,
             media_type=mime,
             headers={
-                "Cache-Control": "private, max-age=31536000, immutable",
+                "Cache-Control": "private, no-store",
                 "Content-Disposition": "inline",
                 # Whatever the bytes turn out to be, they may not run anything or load anything.
                 "Content-Security-Policy": "default-src 'none'; sandbox",
@@ -420,7 +440,11 @@ class WebApi:
         return self._json({"pending": [approval_json(a) for a in self.app.approvals.pending()]})
 
     async def decide(self, request: Request) -> Response:
-        self._need(request)
+        session = self._need(request)
+        try:
+            self.app.require_approval_actor(session.principal_id)
+        except AccessDenied as exc:
+            raise HTTPException(403, "Only this space's owners can approve actions.") from exc
         try:
             approval_id = int(request.path_params["approval_id"])
             body = await request.json()
@@ -429,9 +453,17 @@ class WebApi:
         decision = body.get("decision") if isinstance(body, dict) else None
         if decision not in ("approve", "deny"):
             raise HTTPException(400, 'decision is "approve" or "deny".')
+        session = self._need(request)
+        try:
+            self.app.require_approval_actor(session.principal_id)
+        except AccessDenied as exc:
+            raise HTTPException(403, "Only this space's owners can approve actions.") from exc
         note = body.get("note") if isinstance(body.get("note"), str) else None
         result = self.app.approvals.decide(
-            approval_id, decision == "approve", by="owner:web", note=(note or "")[:500] or None
+            approval_id,
+            decision == "approve",
+            by=f"{session.principal_id}:web",
+            note=(note or "")[:500] or None,
         )
         if result.resume_queued:
             self.wake()
@@ -462,6 +494,10 @@ class WebApi:
     async def activity(self, request: Request) -> Response:
         self._need(request)
         return self._json(activity_snapshot(self.app))
+
+    async def ready(self, request: Request) -> Response:
+        self.app.db.one("SELECT 1")
+        return self._json({"ok": True})
 
     async def health(self, request: Request) -> Response:
         # A local setup command proves the listener belongs to its home before configuring a
@@ -499,6 +535,7 @@ class WebApi:
         token = self._token(request)
         sub = app.live.subscribe()
         try:
+            self._need(request)
             yield b"retry: 3000\n\n"
             approvals = self._recent_approvals()
             drafts = app.live.response_drafts()
@@ -513,11 +550,19 @@ class WebApi:
             )
             last_sent = after
             quiet_s = 0.0
-            checked_at = app.clock.now()
             while not self.stop.is_set():
                 event = await sub.next(TICK_S)
                 if self.stop.is_set():
                     break
+                # Recheck before emitting any new content, including previews and approvals.
+                fresh = self.auth.lookup(token)
+                if (
+                    fresh is None
+                    or app.identities is None
+                    or not app.identities.authorized(fresh.principal_id, app.space_id, write=False)
+                ):
+                    yield sse("signout", {})
+                    return
                 spoke = False
                 for turn in app.transcript.after(last_sent):
                     last_sent = turn.id
@@ -547,11 +592,6 @@ class WebApi:
                     approvals = current
                     yield sse("approvals", {"approvals": approvals})
                     spoke = True
-                if app.clock.now() - checked_at >= SESSION_CHECK_S:
-                    checked_at = app.clock.now()
-                    if self.auth.lookup(token) is None:
-                        yield sse("signout", {})
-                        return
                 if await request.is_disconnected():
                     return
                 quiet_s = 0.0 if spoke else quiet_s + TICK_S
@@ -581,6 +621,7 @@ class WebApi:
             Route("/api/status", self.status),
             Route("/api/activity", self.activity),
             Route("/api/health", self.health),
+            Route("/healthz", self.ready),
         ]
 
 
@@ -591,6 +632,8 @@ def body_limit_for(app: App) -> Callable[[str, str], int]:
     message = MAX_IMAGES * media.max_image_bytes + media.max_voice_bytes + 256 * 1024
 
     def limit(method: str, path: str) -> int:
+        if method == "POST" and path.startswith("/api/v3/nodes/attempts/"):
+            return 16 * 1024 * 1024
         return message if method == "POST" and path == "/api/messages" else 64 * 1024
 
     return limit
@@ -627,4 +670,15 @@ def build_web_app(
         routes=api.routes(),
         exception_handlers={HTTPException: _error, Exception: _error},
     )
-    return Guard(inner, hosts=hosts, origins=origins, body_limit=body_limit_for(app))
+    routed: Any = inner
+    if app.collaboration is not None and app.collaboration.root is app:
+        from personal_agent.channels.web.collaboration import SpaceRouter
+
+        routed = SpaceRouter(inner, app, api)
+    return Guard(
+        routed,
+        hosts=hosts,
+        origins=origins,
+        body_limit=body_limit_for(app),
+        health_host="healthcheck.railway.app" if os.environ.get("RAILWAY_SERVICE_ID") else None,
+    )
