@@ -49,7 +49,7 @@ GROUP = "personal_agent.plugins"
 API_VERSION = 1
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,23}")
 CHANNEL_NAME = re.compile(r"[a-z][a-z0-9-]{1,23}")
-RESERVED_CHANNELS = frozenset({"cli", "web", "telegram", "webhooks", "auto"})
+RESERVED_CHANNELS = frozenset({"cli", "web", "telegram", "dingtalk", "webhooks", "auto"})
 _NOT_NAME = re.compile(r"[^A-Za-z0-9_-]")
 
 
