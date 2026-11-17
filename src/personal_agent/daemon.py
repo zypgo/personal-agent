@@ -105,6 +105,8 @@ class Daemon:
         self.app = app
         self.channels = channels
         self.services = list(services)
+        if app.collaboration is not None and app.collaboration.root is app:
+            self.services.append(app.collaboration)
         self.grace_s = grace_s
         self.poll_s = app.config.runtime.poll_s
         self.dispatcher = Dispatcher(app, channels)
@@ -140,6 +142,7 @@ class Daemon:
     async def run(self) -> None:
         if not self.lock.acquire():
             raise AlreadyRunning(self.lock.holder_pid())
+        tasks: list[asyncio.Task[Any]] = []
         try:
             report = self.app.recover()
             if any(report.values()):
@@ -169,12 +172,38 @@ class Daemon:
                 while not self._stopping:
                     event.clear()
                     await self._nap(event, 3600)
+        finally:
+            # Cancellation and a failed service startup take the same shutdown path as stop().
+            # Releasing the engine lock while its workers survive would let a replacement
+            # recover their leases and execute the same work concurrently.
+            self.stop()
+            shutdown = asyncio.create_task(
+                self._finish_shutdown(tasks), name=f"shutdown-{self.app.space_id}"
+            )
+            cancelled = False
+            while True:
+                try:
+                    # A parent may cancel a child that already entered its own finally block.
+                    # The engine lock remains held until that child's workers actually stop.
+                    await asyncio.shield(shutdown)
+                    break
+                except asyncio.CancelledError:
+                    if shutdown.done():
+                        raise
+                    cancelled = True
+            if cancelled:
+                raise asyncio.CancelledError
+
+    async def _finish_shutdown(self, tasks: list[asyncio.Task[Any]]) -> None:
+        try:
             await self._shutdown(tasks)
         finally:
-            await self.app.stop_services()  # also on a failed start: never leave programs running
-            self.lock.release()
-            self._ready.clear()
-            log.info("daemon stopped")
+            try:
+                await self.app.stop_services()
+            finally:
+                self.lock.release()
+                self._ready.clear()
+                log.info("daemon stopped")
 
     async def _start_mcp(self) -> None:
         """Connect the MCP servers in the background, so the first run does not wait for them."""
@@ -275,6 +304,8 @@ class Daemon:
                     if expired:
                         self.stats.approvals_expired += len(expired)
                         self.wake()
+                    if self.app.jobs is not None:
+                        self.app.jobs.reconcile()
                     self._beat()
                 except Exception:
                     self.stats.errors += 1

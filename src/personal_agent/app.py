@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import tzinfo
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from personal_agent.channels.base import PULL_ONLY
 from personal_agent.channels.pairing import PairingStore
@@ -48,6 +48,12 @@ from personal_agent.security.ssrf import NetPolicy
 from personal_agent.skills.store import SkillStore
 from personal_agent.tools.base import ToolRegistry
 from personal_agent.tools.builtin import register_builtin
+
+if TYPE_CHECKING:
+    from personal_agent.collaboration.runtime import SpaceManager
+    from personal_agent.collaboration.store import IdentityStore
+    from personal_agent.execution.store import ExecutionStore
+    from personal_agent.nodes.registry import NodeRegistry
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +101,44 @@ class App:
     janitor: Janitor
     plugins: list[PluginInfo] = field(default_factory=list)
     plugin_channels: dict[str, ChannelSpec] = field(default_factory=dict)
+
+    space_id: str = "personal-owner"
+    space_owner_id: str = "owner"
+    identities: IdentityStore | None = None
+    collaboration: SpaceManager | None = None
+    jobs: ExecutionStore | None = None
+    nodes: NodeRegistry | None = None
+
+    def require_actor(
+        self,
+        principal_id: str,
+        *,
+        write: bool = True,
+        version: int | None = None,
+        principal_version: int | None = None,
+    ) -> None:
+        if self.identities is not None:
+            from personal_agent.collaboration.models import AccessDenied
+
+            if not self.identities.authorized(
+                principal_id,
+                self.space_id,
+                write=write,
+                version=version,
+                principal_version=principal_version,
+            ):
+                raise AccessDenied("Authorization changed; request a new action.")
+
+    def require_approval_actor(self, principal_id: str) -> None:
+        if self.identities is not None:
+            self.identities.require_access(principal_id, self.space_id, manage=True)
+
+    def actor_snapshot(self, principal_id: str) -> dict[str, int]:
+        if self.identities is None:
+            return {}
+        member = self.identities.require_access(principal_id, self.space_id, write=True)
+        principal = self.identities.principal(principal_id)
+        return {"membership_version": member.version, "principal_version": principal.authz_version}
 
     def push_channels(self) -> set[str]:
         """Chat channels that are switched on and can reach the owner without them looking: a
@@ -159,6 +203,10 @@ class App:
         """Close what was opened for the running event loop: the MCP connections and the programs
         behind them, and the connections to the model and speech services. Every place that runs
         a loop to its end calls this first; calling it again does no harm."""
+        if self.collaboration is not None and self.collaboration.root is self:
+            # An HTTP request may have opened a child App before its daemon's first poll.
+            # Close those clients too, even when no child daemon was ever started for them.
+            await self.collaboration.stop_services()
         try:
             await self.mcp.stop()
         except Exception:
@@ -179,6 +227,8 @@ class App:
         return limit, self.inbox.expedite("%budget reached%")
 
     def close(self) -> None:
+        if self.collaboration is not None and self.collaboration.root is self:
+            self.collaboration.close()
         self.db.close()
 
     def __enter__(self) -> App:
@@ -201,12 +251,15 @@ def build_app(
     mcp_factory: ServerFactory | None = None,
     plugin_entry_points: Iterable[Any] | None = None,
     transcriber: Transcriber | None = None,
+    collaboration: bool = True,
 ) -> App:
     paths = Paths.resolve(home)
     paths.ensure()
     if read_env:
         load_env(paths)
     cfg = config or load_config(paths)
+    if os.environ.get("PA_CONTROL_ONLY") == "1":
+        cfg = cfg.model_copy(update={"tools": cfg.tools.model_copy(update={"shell": False})})
     register_secret_envs(
         [cfg.model.api_key_env, cfg.media.transcribe_api_key_env or cfg.model.api_key_env]
     )
@@ -233,7 +286,7 @@ def build_app(
     runs = RunStore(database, clock)
     factory = model_factory or OpenAIModels(cfg.model)
     live = LiveBus()
-    return App(
+    app = App(
         paths=paths,
         config=cfg,
         db=database,
@@ -292,3 +345,25 @@ def build_app(
         plugins=plugins,
         plugin_channels=plugin_channels,
     )
+
+    from personal_agent.collaboration.store import IdentityStore
+    from personal_agent.execution.store import ExecutionStore
+    from personal_agent.nodes.registry import NodeRegistry
+
+    app.identities = IdentityStore(database, clock)
+    app.jobs = ExecutionStore(
+        database,
+        clock,
+        inbox=app.inbox,
+        outbox=app.outbox,
+        artifacts=app.artifacts,
+        workspace=app.paths.workspace_dir,
+    )
+    app.jobs.authorization_snapshot = app.actor_snapshot
+    app.nodes = NodeRegistry(database, clock)
+    if collaboration:
+        from personal_agent.collaboration.runtime import SpaceManager
+
+        app.collaboration = SpaceManager(app)
+        app.budget.instance_guard = app.collaboration.check_instance_budget
+    return app

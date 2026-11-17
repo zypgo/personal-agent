@@ -11,6 +11,7 @@ import ipaddress
 import os
 import re
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -1065,9 +1066,33 @@ def load_config(paths: Paths) -> Config:
         except tomllib.TOMLDecodeError as exc:
             raise ConfigError(f"cannot read {paths.config_file}: {exc}") from exc
     try:
-        return Config.model_validate(data)
+        return apply_environment(Config.model_validate(data), os.environ)
     except ValidationError as exc:
         raise ConfigError(f"invalid {paths.config_file}:\n{_describe(exc)}") from None
+
+
+def apply_environment(config: Config, environ: Mapping[str, str]) -> Config:
+    """Apply the explicit deployment environment without changing the owner's TOML file.
+
+    A public address is also used by administrative CLI commands, so a pairing link generated
+    inside the container points at the same exact HTTPS origin as the web server. An unrelated
+    PORT variable never turns an ordinary local installation into a public listener.
+    """
+    public_url = environ.get("PA_WEB_PUBLIC_URL")
+    if not public_url and environ.get("RAILWAY_PUBLIC_DOMAIN"):
+        public_url = "https://" + environ["RAILWAY_PUBLIC_DOMAIN"]
+    control_only = environ.get("PA_CONTROL_ONLY") == "1"
+    if not public_url and not control_only:
+        return config
+    data = config.model_dump()
+    if control_only:
+        data["tools"]["shell"] = False
+    if public_url:
+        data["web"].update(enabled=True, public_url=public_url)
+    if control_only and public_url:
+        data["web"]["host"] = "0.0.0.0"  # noqa: S104 - behind the configured HTTPS proxy
+        data["web"]["port"] = environ.get("PORT", str(config.web.port))
+    return Config.model_validate(data)
 
 
 def _describe(exc: ValidationError) -> str:

@@ -17,6 +17,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from personal_agent.collaboration.schema import migrate as migrate_collaboration
+from personal_agent.execution.schema import migrate as migrate_execution
+from personal_agent.nodes.schema import migrate as migrate_nodes
 from personal_agent.parsing import loads_json
 from personal_agent.security.sanitize import scrub_tree
 
@@ -421,6 +424,8 @@ MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     """,
 ]
 
+
+MIGRATIONS.extend([migrate_collaboration, migrate_execution, migrate_nodes])
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
