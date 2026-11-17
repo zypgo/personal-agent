@@ -1,6 +1,8 @@
 # 架构设计
 
-本项目是一个**本机常驻的个人 agent**：模型能力来自 OpenAI（一把通用的 `OPENAI_API_KEY`，可选自定义 `base_url`），工程理念来自 Anthropic 最新的 always-on / automations / memory / managed-agents 指南（提炼见 [research/anthropic-guidance.md](research/anthropic-guidance.md)，同类项目对比见 [research/reference-analysis.md](research/reference-analysis.md)）。
+本项目是一个**本机常驻的个人 agent**：模型默认来自 OpenAI，也可使用兼容端点及独立的语音转写服务。工程理念来自 Anthropic 的 always-on / automations / memory / managed-agents 指南（提炼见 [research/anthropic-guidance.md](research/anthropic-guidance.md)）。
+
+**当前 0.2.0 的能力边界、云请求、可替换接口与架构图见 [V0_2.md](V0_2.md)**。新增钉钉、Web 流式正文和文件成果；详细契约见 [DINGTALK.md](DINGTALK.md)、[ARTIFACTS.md](ARTIFACTS.md)、[PROVIDERS.md](PROVIDERS.md)。下文保留各迭代的设计记录；其中“待做”只描述对应迭代。最新 OpenClaw / DeepSeek Harness / Grok 重建项目的固定版本审阅见 [REFERENCE_REVIEW.md](REFERENCE_REVIEW.md)。
 
 ## 设计原则
 
