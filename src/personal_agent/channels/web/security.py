@@ -120,12 +120,14 @@ class Guard:
         origins: frozenset[str],
         body_limit: Callable[[str, str], int] = lambda method, path: DEFAULT_BODY_LIMIT,
         api_prefix: str = "/api/",
+        health_host: str | None = None,
     ) -> None:
         self.app = app
         self.hosts = hosts
         self.origins = origins
         self.body_limit = body_limit
         self.api_prefix = api_prefix
+        self.health_host = health_host
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -148,7 +150,13 @@ class Guard:
 
     def _check(self, scope: Scope) -> tuple[int, bytes] | None:
         headers = Headers(scope=scope)
-        if hostname(headers.get("host")) not in self.hosts:
+        health = (
+            self.health_host is not None
+            and hostname(headers.get("host")) == self.health_host
+            and scope["path"] == "/healthz"
+            and scope["method"] in ("GET", "HEAD")
+        )
+        if hostname(headers.get("host")) not in self.hosts and not health:
             return _refuse(421, "This address is not served here.")
         origin = headers.get("origin")
         if origin is not None and origin.lower() not in self.origins:
