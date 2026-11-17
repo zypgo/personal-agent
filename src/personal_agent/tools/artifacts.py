@@ -47,6 +47,7 @@ async def publish_artifact_tool(
             description=description,
             web_enabled=rc.app.config.web.enabled,
             interactive=rc.origin.interactive,
+            authority=rc.authority(),
         )
     except ArtifactError as exc:
         return ToolResult(f"Error: {exc}", error=True)
