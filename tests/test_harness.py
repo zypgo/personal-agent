@@ -206,8 +206,11 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
     await Worker(app).run_once()
 
     assert tool_names(model) == [
+        "ask_task_input",
+        "cancel_job",
         "edit_file",
         "http_request",
+        "job_status",
         "list_files",
         "memory",
         "publish_artifact",
@@ -216,6 +219,7 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
         "search_history",
         "search_tool_history",
         "send_message",
+        "submit_job",
         "web_fetch",
         "web_search",
         "write_file",

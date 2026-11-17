@@ -295,8 +295,15 @@ def test_a_message_is_queued_for_the_agent_and_comes_back_as_a_turn(web):
     assert body["status"] == "queued" and body["turn"]["text"] == "what is on today?"
     [event] = web.events()
     assert (event["source"], event["kind"], event["trust"]) == ("web", "message", "owner")
-    assert event["external_id"] == "web:client-0001"
-    assert event["payload"] == {"text": "what is on today?", "recipient": None}
+    assert event["external_id"] == "web:owner:client-0001"
+    assert event["payload"] == {
+        "text": "what is on today?",
+        "recipient": None,
+        "principal_id": "owner",
+        "membership_version": 1,
+        "principal_version": 1,
+        "client_request_id": "client-0001",
+    }
     assert web.woken == 1
 
 
@@ -424,7 +431,7 @@ def test_a_picture_is_served_with_its_real_type_and_cannot_run_anything(web):
     assert response.headers["content-security-policy"] == "default-src 'none'; sandbox"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert (
-        "immutable" in response.headers["cache-control"]
+        "no-store" in response.headers["cache-control"]
         and "private" in response.headers["cache-control"]
     )
 
@@ -599,7 +606,7 @@ def test_only_the_pages_own_files_are_served(stranger, path):
 
 
 def test_unknown_api_paths_are_an_error_not_the_page(stranger):
-    assert stranger.client.get("/api/nope").status_code == 404
+    assert stranger.client.get("/api/nope").status_code == 401
 
 
 def test_the_set_of_files_is_fixed_when_the_server_starts(tmp_path):

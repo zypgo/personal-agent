@@ -9,6 +9,7 @@ import pytest
 from websockets.asyncio.server import serve
 from websockets.exceptions import InvalidStatus
 
+from channel_identity_helpers import bind_owner
 from personal_agent.channels.dingtalk.api import DingTalkApi, DingTalkApiError
 from personal_agent.channels.dingtalk.channel import DingTalkChannel, open_stream
 from personal_agent.channels.dingtalk.config import DingTalkConfig
@@ -40,6 +41,7 @@ async def test_real_websocket_reconnects_with_a_fresh_ticket_dedupes_and_closes_
 ):
     app = make_app(config=Config(dingtalk=DingTalkConfig(enabled=True)))
     app.pairing.allow("dingtalk", OWNER)
+    bind_owner(app, "dingtalk", OWNER)
     daemon = FakeDaemon()
     fake = FakeDingTalk()
     ready, all_closed = asyncio.Event(), asyncio.Event()

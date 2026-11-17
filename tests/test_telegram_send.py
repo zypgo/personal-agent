@@ -5,6 +5,7 @@ import re
 import httpx
 import pytest
 
+from channel_identity_helpers import bind_owner, revoke_owner
 from personal_agent.channels.base import ChannelError
 from personal_agent.channels.telegram.api import TelegramApi, TelegramApiError
 from personal_agent.channels.telegram.channel import (
@@ -34,6 +35,7 @@ def rig(make_app):
     sleeps = Sleeps()
     channel = TelegramChannel(app, api=TelegramApi(TOKEN, client=fake.client()), sleep=sleeps)
     app.pairing.allow("telegram", "7", "me")
+    bind_owner(app, "telegram", "7")
     return app, channel, fake, sleeps
 
 
@@ -63,6 +65,7 @@ async def test_low_priority_messages_arrive_without_a_sound(rig):
 async def test_a_background_message_goes_to_whoever_wrote_most_recently(rig):
     app, channel, fake, _ = rig
     app.pairing.allow("telegram", "8", "partner")
+    bind_owner(app, "telegram", "8")
     app.clock.advance(5)
     app.pairing.touch("telegram", "8")
     await channel.send(queue(app, recipient=None))
@@ -76,7 +79,7 @@ async def test_with_nobody_paired_a_background_message_fails_for_good(make_app):
     with pytest.raises(ChannelError) as caught:
         await channel.send(queue(app, recipient=None))
     assert caught.value.permanent and "pa channels approve" in str(caught.value)
-    assert fake.calls == []
+    assert fake.sent() == []
 
 
 async def test_nothing_is_ever_sent_to_an_account_that_is_not_approved(rig):
@@ -84,11 +87,12 @@ async def test_nothing_is_ever_sent_to_an_account_that_is_not_approved(rig):
     with pytest.raises(ChannelError) as caught:
         await channel.send(queue(app, recipient="666"))
     assert caught.value.permanent
-    assert fake.calls == []
+    assert fake.sent() == []
     app.pairing.revoke("telegram", "7")
+    revoke_owner(app, "telegram", "7")
     with pytest.raises(ChannelError):
         await channel.send(queue(app))  # revoked since the message was queued
-    assert fake.calls == []
+    assert fake.sent() == []
 
 
 # ---- when the markup is refused ----------------------------------------------------------------
@@ -207,7 +211,10 @@ async def test_approval_requests_carry_buttons_on_the_last_piece_only(rig):
     sent = fake.sent()
     assert all("reply_markup" not in s for s in sent[:-1])
     keyboard = sent[-1]["reply_markup"]["inline_keyboard"]
-    assert [b["callback_data"] for row in keyboard for b in row] == ["ap:3:y", "ap:3:n"]
+    assert [b["callback_data"] for row in keyboard for b in row] == [
+        "ap3:personal-owner:1:3:y",
+        "ap3:personal-owner:1:3:n",
+    ]
 
 
 def test_several_requests_get_buttons_each_and_one_for_all():

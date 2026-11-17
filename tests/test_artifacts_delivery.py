@@ -8,6 +8,7 @@ import threading
 import httpx
 import pytest
 
+from channel_identity_helpers import bind_owner, revoke_owner
 from personal_agent.channels.telegram.api import TelegramApi
 from personal_agent.channels.telegram.channel import TelegramChannel
 from personal_agent.channels.web.channel import WebChannel
@@ -91,6 +92,8 @@ class DocumentApi:
         self.api = TelegramApi("12345:offline-test-token", client=self.client)
 
     def handle(self, request):
+        if request.url.path.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"id": 1, "is_bot": True}})
         self.calls.append((request.url.path, request.headers, request.content))
         if isinstance(self.response, Exception):
             raise self.response
@@ -105,6 +108,7 @@ class DocumentApi:
 async def deliver(app, response=200):
     transport = DocumentApi(response)
     app.pairing.allow("telegram", "7", "owner")
+    bind_owner(app, "telegram", "7")
     channel = TelegramChannel(app, api=transport.api)
     try:
         report = await Dispatcher(app, {"telegram": channel}).deliver_once()
@@ -231,6 +235,7 @@ async def test_recipient_is_rechecked_after_snapshot_read(make_app, monkeypatch,
     app = make_app()
     source(app)
     app.pairing.allow("telegram", "7", "owner")
+    bind_owner(app, "telegram", "7")
     artifact = publish(
         app, channel="telegram", recipient="7" if change == "revoke" else None
     ).artifact
@@ -253,9 +258,11 @@ async def test_recipient_is_rechecked_after_snapshot_read(make_app, monkeypatch,
         await asyncio.wait_for(ready.wait(), 3)
         if change == "revoke":
             app.pairing.revoke("telegram", "7")
+            revoke_owner(app, "telegram", "7")
         else:
             app.clock.advance(1)
             app.pairing.allow("telegram", "8", "new recipient")
+            bind_owner(app, "telegram", "8")
             app.pairing.touch("telegram", "8")
         release.set()
         report = await task

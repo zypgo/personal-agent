@@ -30,6 +30,8 @@ def assets():
 def url_to_name(url: str) -> str | None:
     """Which asset a root-relative URL asks for, the way the server routes them."""
     path = url.split("#")[0].split("?")[0]
+    if path == "/workspace":
+        return "workbench.html"
     if path == "/":
         return "index.html"
     if path in ("/sw.js", "/manifest.webmanifest"):
@@ -91,6 +93,9 @@ def test_the_page_is_made_of_exactly_the_expected_files(assets):
         "store.js",
         "style.css",
         "sw.js",
+        "workbench.css",
+        "workbench.html",
+        "workbench.js",
     ]
 
 
@@ -235,7 +240,8 @@ FORBIDDEN_CODE = [
 
 
 @pytest.mark.parametrize(
-    "name", ["api.js", "app.js", "format.js", "md.js", "media.js", "store.js", "sw.js"]
+    "name",
+    ["api.js", "app.js", "format.js", "md.js", "media.js", "store.js", "sw.js", "workbench.js"],
 )
 def test_the_scripts_never_turn_text_into_markup_or_code(assets, name):
     code = COMMENTS.sub(" ", assets[0][name].body.decode())

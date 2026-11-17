@@ -5,6 +5,7 @@ from __future__ import annotations
 from agents.testing import ScriptedModel, assistant_message, function_call
 
 import telegram_fake as tg
+from channel_identity_helpers import bind_owner
 from personal_agent.channels.telegram.api import TelegramApi
 from personal_agent.channels.telegram.channel import TelegramChannel
 from personal_agent.config import Config, RuntimeConfig, TelegramConfig
@@ -27,6 +28,7 @@ async def test_the_owner_asks_on_telegram_and_the_answer_comes_back_there(make_a
         make_app, ScriptedModel([[assistant_message("Hello **Frank**, it is sunny.")]])
     )
     app.pairing.allow("telegram", "7", "Frank")
+    bind_owner(app, "telegram", "7")
     fake.deliver(tg.text(1, "how is the weather?"))
 
     async with running(app, {"telegram": channel}, services=[channel]):
@@ -56,8 +58,9 @@ async def test_a_new_person_pairs_then_talks_and_nobody_else_ever_costs_a_model_
         await eventually(lambda: fake.sent(), what="the pairing code")
         assert not model.calls  # nothing reached the model
         [request] = app.pairing.pending("telegram")
-        assert f"pa channels approve telegram {request.code}" in fake.texts()[0]
-        app.pairing.approve(request.code)  # what `pa channels approve` does, at the computer
+        assert "/bind" in fake.texts()[0]
+        app.pairing.approve(request.code)
+        bind_owner(app, "telegram", "99")  # Explicit owner-device link at the trusted computer.
         fake.deliver(tg.text(3, "it is me, Eve", sender=99))
         await eventually(lambda: len(fake.sent()) >= 2, what="the first real answer")
 
@@ -71,6 +74,7 @@ async def test_an_action_that_needs_approval_is_asked_with_buttons_and_resumes_o
     app, channel, fake = build(make_app, model)
     spy = install(app, Spy())
     app.pairing.allow("telegram", "7", "Frank")
+    bind_owner(app, "telegram", "7")
     fake.deliver(tg.text(1, "push my work"))
 
     async with running(app, {"telegram": channel}, services=[channel]):
@@ -80,8 +84,8 @@ async def test_an_action_that_needs_approval_is_asked_with_buttons_and_resumes_o
         request = next(s for s in fake.sent() if "reply_markup" in s)
         buttons = [b for row in request["reply_markup"]["inline_keyboard"] for b in row]
         assert [b["callback_data"] for b in buttons] == [
-            f"ap:{app.approvals.pending()[0].id}:y",
-            f"ap:{app.approvals.pending()[0].id}:n",
+            f"ap3:personal-owner:1:{app.approvals.pending()[0].id}:y",
+            f"ap3:personal-owner:1:{app.approvals.pending()[0].id}:n",
         ]
         assert spy.ran("shell") == []  # nothing ran yet
         fake.deliver(tg.callback(2, buttons[0]["callback_data"], message_id=77))
@@ -99,6 +103,7 @@ async def test_a_denied_action_never_runs(make_app):
     app, channel, fake = build(make_app, model)
     spy = install(app, Spy())
     app.pairing.allow("telegram", "7")
+    bind_owner(app, "telegram", "7")
     fake.deliver(tg.text(1, "push my work"))
 
     async with running(app, {"telegram": channel}, services=[channel]):
@@ -115,6 +120,7 @@ async def test_a_command_gets_an_immediate_answer_without_the_model(make_app):
     model = ScriptedModel([])
     app, channel, fake = build(make_app, model)
     app.pairing.allow("telegram", "7")
+    bind_owner(app, "telegram", "7")
     fake.deliver(tg.text(1, "/status"))
 
     async with running(app, {"telegram": channel}, services=[channel]):
@@ -134,6 +140,7 @@ async def test_background_news_reaches_the_phone_the_owner_last_used(make_app):
     )
     app, channel, fake = build(make_app, model)
     app.pairing.allow("telegram", "7")
+    bind_owner(app, "telegram", "7")
     app.transcript.add_in("telegram", "good morning")  # the owner last wrote from Telegram
 
     async with running(app, {"telegram": channel}, services=[channel]):
