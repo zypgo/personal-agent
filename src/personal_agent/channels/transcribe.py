@@ -22,6 +22,7 @@ from typing import Any, Protocol
 import openai
 
 from personal_agent.config import MediaConfig, ModelConfig
+from personal_agent.harness.endpoints import transcription_endpoint
 from personal_agent.harness.errors import ModelUnavailable
 from personal_agent.harness.models import make_client
 
@@ -131,7 +132,12 @@ class OpenAITranscriber:
     def _client_or_raise(self) -> openai.AsyncOpenAI:
         if self._client is None:
             try:
-                self._client = make_client(self.model_cfg, timeout=60.0, max_retries=2)
+                self._client = make_client(
+                    self.model_cfg,
+                    endpoint=transcription_endpoint(self.model_cfg, self.media_cfg),
+                    timeout=60.0,
+                    max_retries=2,
+                )
             except ModelUnavailable as exc:
                 raise TranscriptionError(f"I cannot transcribe voice messages: {exc}") from exc
         return self._client
@@ -159,8 +165,9 @@ class OpenAITranscriber:
                 **options,
             )
         except openai.AuthenticationError as exc:
+            key_env = transcription_endpoint(self.model_cfg, self.media_cfg).api_key_env
             raise TranscriptionError(
-                "OpenAI refused the API key for speech-to-text. Check OPENAI_API_KEY."
+                f"The speech service refused the API key. Check {key_env}."
             ) from exc
         except openai.BadRequestError as exc:
             hint = (
