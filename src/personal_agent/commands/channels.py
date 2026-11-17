@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 app = typer.Typer(help="Chat channels and who may use them.", invoke_without_command=True)
 
-ChannelArg = Annotated[str, typer.Argument(help="telegram")]
+ChannelArg = Annotated[str, typer.Argument(help="telegram or dingtalk")]
 
 
 @app.callback()
@@ -54,6 +54,24 @@ def _list(ctx: typer.Context) -> None:
             str(len(agent.web_auth.sessions())),
             str(len(agent.web_auth.pending_invites())),
         )
+        missing = [
+            name
+            for name in (cfg.dingtalk.client_id_env, cfg.dingtalk.client_secret_env)
+            if not os.environ.get(name, "").strip()
+        ]
+        state = "[dim]off[/dim] (\\[dingtalk] enabled = true)"
+        if cfg.dingtalk.enabled:
+            state = (
+                "[red]on, but missing " + escape(", ".join(missing)) + "[/red]"
+                if missing
+                else "[green]on[/green] (configured; connection not probed)"
+            )
+        rows.add_row(
+            "dingtalk",
+            state,
+            str(len(agent.pairing.senders("dingtalk"))),
+            str(len(agent.pairing.pending("dingtalk"))),
+        )
         for name, spec in sorted(agent.plugin_channels.items()):
             rows.add_row(
                 escape(name), f"[green]on[/green] (plugin {escape(spec.plugin)})", "-", "-"
@@ -61,6 +79,51 @@ def _list(ctx: typer.Context) -> None:
         console.print(rows)
         if agent.pairing.pending():
             say("[yellow]Someone is waiting to be approved:[/yellow] `pa channels pending`")
+        say(
+            "Supported features: `pa channels capabilities`. This table shows configuration, not live connectivity."
+        )
+
+
+@app.command("capabilities")
+def capabilities() -> None:
+    """Show the built-in channels' features without connecting to any service."""
+    from dataclasses import asdict
+
+    from personal_agent.channels.dingtalk.channel import DingTalkChannel
+    from personal_agent.channels.telegram import TelegramChannel
+    from personal_agent.channels.web.channel import WebChannel
+
+    labels = {
+        "text": "text",
+        "markdown": "Markdown",
+        "images_in": "images in",
+        "audio_in": "voice in",
+        "documents_out": "files out",
+        "proactive": "push",
+        "approval_buttons": "approval buttons",
+        "streaming": "live answer",
+    }
+    with opened() as agent:
+        cfg = agent.config
+        rows = table("channel", "enabled", "supported features")
+        rows.add_row("cli", "yes", "text, local commands")
+        for channel in (TelegramChannel, WebChannel, DingTalkChannel):
+            channel_cfg = getattr(cfg, channel.name)
+            flags = asdict(channel.capabilities)
+            flags["images_in"] &= cfg.media.images
+            flags["audio_in"] &= cfg.media.voice
+            flags["documents_out"] &= cfg.artifacts.enabled
+            if channel.name == "web":
+                flags["streaming"] &= cfg.web.stream_responses
+            rows.add_row(
+                channel.name,
+                "yes" if channel_cfg.enabled else "no",
+                ", ".join(labels[key] for key, enabled in flags.items() if enabled),
+            )
+        for name in sorted(agent.plugin_channels):
+            rows.add_row(escape(name), "yes", "plugin-defined; metadata not inspected")
+        console.print(rows)
+        say("A supported feature still needs valid credentials, pairing and platform permissions.")
 
 
 @app.command("pending")
@@ -121,7 +184,12 @@ def deny(code: Annotated[str, typer.Argument(help="The code to throw away.")]) -
 @app.command("allow")
 def allow(
     channel: ChannelArg,
-    sender: Annotated[str, typer.Argument(help="The account id (a Telegram user id).")],
+    sender: Annotated[
+        str,
+        typer.Argument(
+            help="The full account id from `pa channels senders`; prefer pairing codes for DingTalk."
+        ),
+    ],
     label: Annotated[
         str, typer.Option("--label", "-l", help="A name for your own reference.")
     ] = "",
@@ -167,13 +235,35 @@ def revoke(
 
 @app.command("test")
 def test(
-    channel: Annotated[str, typer.Argument(help="telegram")] = "telegram",
+    channel: ChannelArg = "telegram",
 ) -> None:
-    """Check that a channel can reach its service (Telegram: asks the bot who it is)."""
-    if channel.lower() != "telegram":
+    """Probe Telegram identity or DingTalk gateway authentication; never send a chat message."""
+    if channel.lower() not in {"telegram", "dingtalk"}:
         fail(f"No test for {channel}.", code=USAGE)
     with opened() as agent:
-        raise typer.Exit(asyncio.run(_test_telegram(agent)))
+        probe = _test_dingtalk if channel.lower() == "dingtalk" else _test_telegram
+        raise typer.Exit(asyncio.run(probe(agent)))
+
+
+async def _test_dingtalk(agent: App) -> int:
+    from personal_agent.channels.base import ChannelError
+    from personal_agent.channels.dingtalk.channel import DingTalkChannel
+
+    channel = DingTalkChannel(agent)
+    try:
+        await channel.api.open_connection()
+    except ChannelError as exc:
+        say(f"[red]{escape(str(exc))}[/red] See docs/DINGTALK.md.")
+        return 1
+    finally:
+        await channel.close()
+    say(
+        "[green]DingTalk gateway authentication passed.[/green] "
+        "This does not prove the daemon is connected or the bot has permission to send."
+    )
+    if not agent.pairing.senders("dingtalk"):
+        say("Start `pa serve`, message the private bot, then `pa channels approve dingtalk CODE`.")
+    return 0
 
 
 async def _test_telegram(agent: App) -> int:

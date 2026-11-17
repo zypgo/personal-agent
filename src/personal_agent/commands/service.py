@@ -19,7 +19,8 @@ import typer
 from rich.markup import escape
 
 from personal_agent.commands.common import USAGE, console, echo, fail, home, opened, say, warn
-from personal_agent.config import ConfigError, api_key, load_config
+from personal_agent.config import ConfigError, load_config
+from personal_agent.harness.endpoints import model_endpoint
 from personal_agent.launchd import (
     THROTTLE_S,
     ServiceError,
@@ -220,6 +221,12 @@ def install(
     manager = manager_for(paths, python=python)
     try:
         chosen = pass_env(copy_env or [], os.environ, paths.env_file)
+        for name in chosen:
+            if name in {cfg.model.api_key_env, cfg.media.transcribe_api_key_env}:
+                raise ServiceError(
+                    f"{name} is a configured provider credential. Put it in {paths.env_file}; "
+                    "it cannot be copied into the job file."
+                )
         planned = manager.plan(
             grace_s=cfg.runtime.shutdown_grace_s, env=chosen, keep_awake=keep_awake
         )
@@ -259,9 +266,9 @@ def install(
         say(f"  copied     {', '.join(sorted(chosen))} (the values are in the job file)")
     for warning in done.warnings:
         warn(warning)
-    if not api_key() and not (cfg.model.base_url or os.environ.get("OPENAI_BASE_URL")):
+    if model_endpoint(cfg.model).missing_key:
         say(
-            f"[yellow]OPENAI_API_KEY is not set in {escape(str(paths.env_file))} yet[/yellow]: "
+            f"[yellow]{cfg.model.api_key_env} is not set in {escape(str(paths.env_file))} yet[/yellow]: "
             "the service will run, but it cannot answer until it is."
         )
     if done.loaded:
