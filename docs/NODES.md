@@ -1,0 +1,77 @@
+# 自有 Runner：执行、恢复和撤销
+
+Runner 是运行在自己 Mac/Linux 上的出站轮询进程。控制面负责身份、空间、模型 API、任务规划、审批和投递；Runner 只收到经过授权的命令、固定输入文件快照、输出文件名和截止时间。模型密钥、渠道凭证、控制面数据库以及个人主目录不会随任务发送或挂进容器。
+
+## 配对与运行
+
+从控制面管理员终端生成一个短时、单次节点邀请：
+
+```bash
+pa node invite --space personal-owner --label laptop
+```
+
+在电脑上安装同版本项目，准备运行中的 Docker 和工作镜像，然后执行：
+
+```bash
+docker pull python:3.12-slim
+pa node pair --url https://agent.example.test
+pa node run
+pa node status
+```
+
+配对码通过隐藏提示输入。默认节点目录是 `~/.personal-agent-node`；`pair`、`run`、`status` 支持 `--node-home`。目录权限为 `0700`，凭据文件为 `0600`，控制面只保存 token 的哈希。节点 token 仅可操作被分配的执行尝试，不能当作浏览器登录或访问一般数据 API。
+
+`run` 支持 `--image`、`--memory-mb`、`--poll-s`。镜像由操作员预先拉取，Runner 不自动下载；镜像需有 `/bin/sh`、`date` 和 `/usr/bin/timeout`。生产使用可以指定镜像 digest，避免同名 tag 变化。Docker 使用本机/本机 Docker Desktop 的文件系统：远端 Docker context 若无法访问本机工作目录，不适用此 backend。
+
+电脑睡眠或离线时，尚未派发的任务保持等待；控制面不会把状态未知的尝试自动换到另一节点重跑。保留 `pa node run` 运行，或用自己已有的进程服务管理器启动这个命令。按 Ctrl-C 退出 Runner 不会丢失收据；已启动容器仍受自身截止时间约束，重开 Runner 会检查原容器。
+
+### 自托管局域网 / Tailscale
+
+节点默认要求 HTTPS。若控制面在家中电脑，可通过已有 Tailscale Serve 地址连接，例如 `https://computer.example-tailnet.ts.net`；Web 控制端也应设置相同的 `web.public_url`。同机开发支持 `http://127.0.0.1:8765` / `http://localhost:8765`。跨机器的裸 HTTP 不接受，以免传输持久节点凭证；局域网可以使用你已有的 HTTPS 反向代理。浏览器手机连接方式仍见现有 Web/Tailscale 文档。
+
+## 为什么不会因丢失响应重复执行
+
+1. 控制面先持久化尝试 ID、generation 和计划摘要，才把工作交给节点。
+2. 节点先把固定资源名和输入计划写入本地 SQLite，再向控制面确认受理。
+3. 确认受理后才创建固定名称的 Docker 容器；开始前再记录启动意图。
+4. 重启只检查同一个资源的标签、状态和日志。已经退出的容器不再 `start`；启动过却找不到的资源进入 `uncertain`，不会新建替代品。
+5. 最终结果先落本地 SQLite，再重复上传，直到控制面返回持久接受确认。
+6. 得到确认才删除容器/工作目录；清理失败保留记录继续重试，成功后保留轻量去重收据。
+
+这是一套重复交付安全与不确定性保留机制，不是对任意外部副作用承诺 exactly-once。当前默认任务没有网络，因此不能直接向外部系统发送请求；未来有网能力需要单独的权限、代理和副作用协议。
+
+## 当前隔离与限制
+
+| 项目 | 实现 |
+| --- | --- |
+| 同时执行 | 每节点 1 个；未确认清理或不确定尝试仍占容量 |
+| 网络 | Docker `--network none` |
+| 身份 | 容器内非 root UID/GID，drop all capabilities，no-new-privileges |
+| 文件系统 | 只读容器根；只挂当前 attempt 的工作目录；不挂主目录或 Docker socket |
+| CPU / 内存 | 默认 1 CPU、512 MiB；128 个进程上限、受限 `/tmp` |
+| 时间 | 最长 3600 秒；容器内 `timeout`，节点掉线或退出后仍有效 |
+| 输入 / 输出 | 显式 manifest；最多 64 文件、每文件 2 MiB、总计 8 MiB |
+| 传输 | 16 MiB JSON 上限；检查相对路径、大小、SHA-256，拒绝符号链接与凭证目录 |
+| 日志 | 有界快照和单调序号；发送前脱敏；Docker local 日志按 5 MiB × 2 文件轮转 |
+| 磁盘 | 低于 128 MiB 剩余空间时停止领任务并请求停止执行；单文件进程写入限制 64 MiB |
+
+工作目录是 Docker bind mount，低磁盘水位检查并不是文件系统硬配额。频繁创建大量小文件仍可能耗尽节点磁盘；使用专用磁盘目录或操作系统配额，并只批准必要命令。Docker 隔离也不提供独立虚拟机内核；当前面向个人与受信任的小团队，不作为对陌生租户开放的执行平台。
+
+日志轮转使用 [Docker local driver](https://docs.docker.com/engine/logging/drivers/local/) 的容器级配置，不修改宿主 Docker daemon 的默认设置。
+
+上传产物只来自计划明确列出的路径。路径穿越、绝对路径、符号链接、校验和不符或超限都使收集失败。节点不接收 tar 包、不解压服务器提供的归档。修改后的输出不会自动覆盖控制面的工作区文件，需在产品的产物流程中明确查看和应用。
+
+## 撤销和故障处理
+
+```bash
+pa node revoke NODE_ID
+pa node status
+```
+
+撤销立即停止控制面为这个 token 授权新请求；在线节点下次请求被拒时请求停止容器。网络完全隔断时不能即时远程停止，依靠本地截止时间和容器超时完成最终停止。未获服务器确认的结果与容器记录保留，不会伪造“已清理”。
+
+`uncertain` 表示控制面或节点无法证明原执行的最终结果。先恢复 Docker/网络并用原节点目录启动 Runner，核对原容器及收据；不要删除 `receipts.db` 后重新领任务。凭据泄露后先撤销，手动检查仍运行的固定容器，再重新配对新的节点目录。配对不会覆盖现有身份或收据。Runner 不提供跨机器恢复同一个本地 SQLite 和 bind mount 的自动迁移。
+
+### 从控制面快照恢复
+
+`pa db restore-all` 会撤销快照中的节点授权及未使用的节点邀请，避免较早快照使后来撤销的设备重新生效。恢复前先停 Runner，并核对原容器；恢复后重新生成邀请，用新的 `--node-home` 配对。旧目录与收据保留用于核对，旧 attempt 不会自动转给新节点。旧 token 被拒绝时，仍在线的旧 Runner 会请求停止其原容器，未确认结果不会被标成已清理。
