@@ -1253,29 +1253,29 @@ M = [
     (
         "sv install: key warning always",
         SV,
-        '    if not api_key() and not (cfg.model.base_url or os.environ.get("OPENAI_BASE_URL")):',
+        "    if model_endpoint(cfg.model).missing_key:",
         "    if True:",
         CT,
     ),
     (
         "sv install: key warning never",
         SV,
-        '    if not api_key() and not (cfg.model.base_url or os.environ.get("OPENAI_BASE_URL")):',
+        "    if model_endpoint(cfg.model).missing_key:",
         "    if False:",
         CT,
     ),
     (
         "sv install: base url ignored",
         SV,
-        '    if not api_key() and not (cfg.model.base_url or os.environ.get("OPENAI_BASE_URL")):',
-        "    if not api_key():",
+        "    if model_endpoint(cfg.model).missing_key:",
+        "    if model_endpoint(cfg.model).key is None:",
         CT,
     ),
     (
         "sv install: env var url ignored",
-        SV,
-        '(cfg.model.base_url or os.environ.get("OPENAI_BASE_URL"))',
-        "(cfg.model.base_url)",
+        "src/personal_agent/harness/endpoints.py",
+        '    return Endpoint(cfg.base_url or os.environ.get("OPENAI_BASE_URL") or None, cfg.api_key_env)',
+        "    return Endpoint(cfg.base_url, cfg.api_key_env)",
         CT,
     ),
     (
@@ -1295,8 +1295,8 @@ M = [
     (
         "sv install: warnings hidden",
         SV,
-        "    for warning in done.warnings:\n        warn(warning)\n    if not api_key()",
-        "    for warning in []:\n        warn(warning)\n    if not api_key()",
+        "    for warning in done.warnings:\n        warn(warning)\n    if model_endpoint(cfg.model).missing_key:",
+        "    for warning in []:\n        warn(warning)\n    if model_endpoint(cfg.model).missing_key:",
         CT,
     ),
     (

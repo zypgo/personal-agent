@@ -116,7 +116,7 @@ M = [
     (
         "doctor: plugin notify wording",
         D,
-        'if cfg.plugins.enabled and notify not in {"telegram", "web"}:',
+        'if cfg.plugins.enabled and notify not in {"telegram", "web", "dingtalk"}:',
         "if False:",
         DOC,
     ),
