@@ -220,3 +220,48 @@ def vacuum() -> None:
         finally:
             lock.release()
         say(f"{size(before.total_bytes)} -> {size(after.total_bytes)}")
+
+
+@app.command("backup-all")
+def backup_all(
+    where: Annotated[Path, typer.Argument(help="A new directory outside PA_HOME.")],
+) -> None:
+    """Snapshot all spaces, data files and configuration while every engine is stopped."""
+    from personal_agent.collaboration.backup import SnapshotError, create_snapshot
+
+    with opened() as agent:
+        try:
+            result = create_snapshot(agent, where)
+        except (SnapshotError, OSError, sqlite3.Error) as exc:
+            fail(str(exc))
+        say(
+            f"Saved {len(result['databases'])} databases and {len(result['files'])} files to {escape(str(where))}."
+        )
+        say(
+            "This private backup includes credentials stored under PA_HOME. Keep it on trusted storage."
+        )
+        say("Process environment and Railway Variables are not included; retain them separately.")
+
+
+@app.command("restore-all")
+def restore_all(
+    snapshot: Annotated[Path, typer.Argument(help="A complete backup-all snapshot.")],
+    to: Annotated[
+        Path, typer.Option("--to", help="A new home directory; never overwrites an existing home.")
+    ],
+) -> None:
+    """Check every checksum/database and restore into a separate new home."""
+    from personal_agent.collaboration.backup import SnapshotError, restore_snapshot
+
+    try:
+        result = restore_snapshot(snapshot, to)
+    except (SnapshotError, OSError, sqlite3.Error) as exc:
+        fail(str(exc))
+    say(f"Restored {len(result['databases'])} databases into {escape(str(to))}.")
+    say(
+        "Old device, node and channel credentials are revoked; pending work and timers are held for review."
+    )
+    say("Pair devices again with pa web pair (or --principal ID for an existing member).")
+    say(
+        "Start exactly one control process using the restored PA_HOME; retain the old home until verified."
+    )
