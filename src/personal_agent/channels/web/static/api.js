@@ -1,5 +1,25 @@
 // Talking to the server: requests, and the stream of what happens while the page is open.
 
+let requestEpoch = 0;
+const activeRequests = new Set();
+export function invalidateRequests() {
+  requestEpoch += 1;
+  for (const controller of activeRequests) controller.abort();
+  activeRequests.clear();
+}
+function epochCheck(epoch) {
+  if (epoch !== requestEpoch) throw new DOMException("Session changed", "AbortError");
+}
+
+export function scopedURL(path) {
+  if (typeof location === "undefined") return path;
+  const space = new URLSearchParams(location.search).get("space");
+  if (!space) return path;
+  const url = new URL(path, location.origin);
+  url.searchParams.set("space", space);
+  return url.pathname + url.search;
+}
+
 export class ApiError extends Error {
   constructor(status, message, data = null) {
     super(message);
@@ -14,6 +34,13 @@ export class ApiError extends Error {
  * server could not be reached at all.
  */
 export async function api(path, { method = "GET", json, form, signal } = {}) {
+  const epoch = requestEpoch;
+  const controller = new AbortController();
+  activeRequests.add(controller);
+  const abort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  signal?.addEventListener("abort", abort, {once:true});
+  try {
   const headers = { Accept: "application/json", "X-PA": "1" };
   let body;
   if (json !== undefined) {
@@ -24,7 +51,7 @@ export async function api(path, { method = "GET", json, form, signal } = {}) {
   }
   let response;
   try {
-    response = await fetch(path, { method, headers, body, signal, credentials: "same-origin", cache: "no-store" });
+    response = await fetch(scopedURL(path), { method, headers, body, signal: controller.signal, credentials: "same-origin", cache: "no-store" });
   } catch (error) {
     if (error?.name === "AbortError") throw error;
     throw new ApiError(0, "Cannot reach the agent. Is the computer awake and the agent running?");
@@ -37,18 +64,24 @@ export async function api(path, { method = "GET", json, form, signal } = {}) {
       data = null;
     }
   }
+  epochCheck(epoch);
   if (!response.ok) {
     throw new ApiError(response.status, data?.error ?? `The agent answered ${response.status}.`, data);
   }
   return data;
+  } finally {
+    activeRequests.delete(controller);
+    signal?.removeEventListener("abort", abort);
+  }
 }
 
 /** Fetch an immutable result through the paired browser session, never a public bearer link. */
 export async function artifactBlob(id) {
+  const epoch = requestEpoch;
   if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) throw new ApiError(400, "Invalid file reference.");
   let response;
   try {
-    response = await fetch(`/api/artifacts/${id}`, {
+    response = await fetch(scopedURL(`/api/artifacts/${id}`), {
       headers: { "X-PA": "1" }, credentials: "same-origin", cache: "no-store",
     });
   } catch {
@@ -63,7 +96,9 @@ export async function artifactBlob(id) {
     throw new ApiError(response.status, messages[response.status] ?? "The file could not be downloaded.");
   }
   try {
-    return await response.blob();
+    const blob = await response.blob();
+    epochCheck(epoch);
+    return blob;
   } catch {
     throw new ApiError(0, "The download was interrupted. Please try again.");
   }
@@ -89,7 +124,7 @@ export class Live {
   start() {
     this.stop();
     const url = `/api/stream?after=${encodeURIComponent(this.after())}`;
-    const source = new EventSource(url);
+    const source = new EventSource(scopedURL(url));
     this.source = source;
     this._set("connecting");
     source.addEventListener("hello", (e) => {
@@ -138,7 +173,7 @@ export class Live {
       await api("/api/session");
     } catch (error) {
       if (this.source !== source) return;
-      if (error.status === 401) {
+      if ([401, 403].includes(error.status)) {
         this.stop();
         this.on.onSignout();
         return;

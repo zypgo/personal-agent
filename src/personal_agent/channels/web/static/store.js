@@ -6,6 +6,7 @@
 
 export class Store {
   constructor() {
+    this.principalId = null;
     this.turns = new Map(); // id -> turn
     this.order = []; // ids, oldest first
     this.pending = []; // messages typed here that the server has not confirmed yet
@@ -109,6 +110,14 @@ export class Store {
    */
   matchIncoming(turn) {
     if (turn.direction !== "in" || turn.channel !== "web") return null;
+    if (turn.meta?.client_request_id) {
+      if (this.principalId && turn.meta.principal_id !== this.principalId) return null;
+      const match = this.pending.find(p => p.clientId === turn.meta.client_request_id);
+      if (!match) return null;
+      this.dropPending(match.clientId);
+      return match;
+    }
+    // A legacy server lacks request IDs; retain its single-user compatibility path.
     const count = turn.meta?.attachments?.length ?? 0;
     const spoken = Boolean(turn.meta?.voice);
     const match = this.pending.find(

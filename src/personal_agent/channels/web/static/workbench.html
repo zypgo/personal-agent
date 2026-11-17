@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f4ecd8">
+    <title>工作空间 · Personal Agent</title>
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/workbench.css">
+    <script type="module" src="/static/workbench.js"></script>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="masthead">
+        <a class="brand" href="/" aria-label="返回对话">Personal Agent<span>你的任务与共同项目</span></a>
+        <a id="chat-link" class="button ghost" href="/">打开对话 ↗</a>
+      </header>
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+      <main id="login" class="login" hidden>
+        <p class="eyebrow">欢迎回来</p>
+        <h1>从你的空间开始。</h1>
+        <p class="muted">新成员使用项目邀请加入。已有账号请先配对设备或使用恢复码，避免建立重复账号。</p>
+        <div class="two-columns">
+          <section class="card">
+            <h2>接受项目邀请</h2>
+            <form id="enroll-form">
+              <label>邀请代码<input id="enroll-code" name="code" type="password" autocomplete="off" required maxlength="200"></label>
+              <label>你的昵称<input name="display_name" autocomplete="nickname" maxlength="60" placeholder="在项目中显示的名字" required></label>
+              <button class="primary" type="submit">创建账号并加入</button>
+            </form>
+          </section>
+          <section class="card">
+            <h2>恢复已有账号</h2>
+            <form id="recover-form">
+              <label>一次性恢复码<input name="code" type="password" autocomplete="off" required maxlength="200"></label>
+              <button type="submit">恢复访问</button>
+            </form>
+            <p class="hint">还有已登录的设备？在那台设备的「设备」页面生成配对链接，在这里打开。</p>
+          </section>
+        </div>
+      </main>
+
+      <main id="workspace" hidden>
+        <div class="space-heading">
+          <div><p class="eyebrow" id="identity-name">工作空间</p><label class="sr-only" for="space-select">切换空间</label><select id="space-select"></select></div>
+          <span id="space-role" class="badge"></span>
+        </div>
+        <section id="join-banner" class="card invite-banner" hidden>
+          <div><h2>加入新的项目</h2><p class="muted">使用当前账号接受邀请，你的个人空间保持独立。</p></div>
+          <button id="accept-invite" class="primary">接受邀请</button>
+        </section>
+        <nav class="tabs" aria-label="工作空间导航">
+          <button type="button" class="tab selected" data-tab="tasks" aria-current="page">任务</button>
+          <button type="button" class="tab" data-tab="spaces">项目与成员</button>
+          <button type="button" class="tab" data-tab="knowledge">资料</button>
+          <button type="button" class="tab" data-tab="devices">设备</button>
+        </nav>
+
+        <section id="panel-tasks" class="panel">
+          <div class="section-title"><div><h1>把事情交办出去。</h1><p class="muted">任务在电脑上执行，你可以继续聊天或离开页面。</p></div><button id="refresh-tasks" class="ghost">刷新</button></div>
+          <section id="task-diagnostics" class="card diagnostics" aria-label="任务与额度状态"></section>
+          <section id="review-card" class="card" hidden><h2>等待我批准的执行</h2><p class="hint">这里只展示需要你授权的命令和文件清单。审批将绑定当前这份计划。</p><div id="review-list" class="stack"></div></section>
+          <details class="card compose" id="task-compose">
+            <summary>＋ 新建电脑任务</summary>
+            <form id="task-form">
+              <label>任务名称<input name="title" required maxlength="200" placeholder="例如：整理项目数据并生成报告"></label>
+              <label>执行命令<textarea name="command" required maxlength="16000" rows="4" spellcheck="false" placeholder="填写在隔离工作区内执行的命令"></textarea></label>
+              <div class="two-columns">
+                <label>输入文件<textarea name="input_paths" rows="2" placeholder="工作区相对路径，每行一个"></textarea></label>
+                <label>需要保留的输出文件<textarea name="output_paths" rows="2" placeholder="例如：report.md"></textarea></label>
+              </div>
+              <label class="short-field">最长执行时间（秒）<input name="timeout_s" type="number" min="1" max="3600" value="900" required></label>
+              <p class="hint">任务使用独立文件快照，默认无网络。提交后由资源审批人确认；电脑离线时等待上线。</p>
+              <button class="primary" type="submit">提交任务</button>
+            </form>
+          </details>
+          <div class="task-layout"><div id="tasks-list" class="stack"></div><section id="task-detail" class="card task-detail" hidden aria-live="polite"></section></div>
+        </section>
+
+        <section id="panel-spaces" class="panel" hidden>
+          <div class="section-title"><div><h1>一起做事，边界清楚。</h1><p class="muted">个人空间只属于你。项目空间中的对话、任务和资料对项目成员可见。</p></div></div>
+          <div class="two-columns">
+            <section class="card"><h2>创建共享项目</h2><form id="space-form"><label>项目名称<input name="name" required maxlength="60" placeholder="例如：每周研究"></label><button class="primary" type="submit">创建项目</button></form></section>
+            <section class="card" id="member-invite-card"><h2>邀请到当前项目</h2><form id="invite-form"><label>邀请备注<input name="label" maxlength="60" placeholder="可选"></label><label>项目角色<select name="role"><option value="member">成员 · 发起任务、编辑资料</option><option value="viewer">访客 · 查看项目内容</option><option value="owner">负责人 · 同时管理成员与规则</option></select></label><button type="submit">生成一次性邀请</button></form></section>
+          </div>
+          <section class="card"><h2>当前成员</h2><div id="members-list" class="stack"></div></section>
+        </section>
+
+        <section id="panel-knowledge" class="panel" hidden>
+          <div class="section-title"><div><h1>留下能继续使用的资料。</h1><p class="muted">当前空间的资料与其他空间分开保存。</p></div><button id="refresh-knowledge" class="ghost">刷新</button></div>
+          <form id="knowledge-search-form" class="knowledge-search"><label class="sr-only" for="knowledge-search">搜索资料标题或内容</label><input id="knowledge-search" name="q" type="search" maxlength="200" placeholder="搜索资料名称或正文"><button type="submit">搜索资料</button></form>
+          <div class="two-columns knowledge-layout">
+            <section class="card"><h2>资料目录</h2><div id="knowledge-list" class="stack"></div></section>
+            <section class="card"><h2 id="knowledge-editor-title">新增或编辑资料</h2><form id="knowledge-form"><label>资料名称<input name="path" required maxlength="94" pattern="[A-Za-z0-9_\-][A-Za-z0-9_.\-]*\.md" placeholder="project-notes.md"></label><label>正文<textarea name="text" rows="14" required maxlength="30000" placeholder="项目背景、资料来源或需要共同记住的结论"></textarea></label><div class="actions"><button class="primary" type="submit">保存到当前空间</button><button id="knowledge-new" type="button" class="ghost">新建</button><button id="knowledge-history" type="button" class="ghost" disabled>查看历史版本</button></div></form></section>
+          </div>
+        </section>
+
+        <section id="panel-devices" class="panel" hidden>
+          <div class="section-title"><div><h1>让自己的设备参与工作。</h1><p class="muted">手机查看和审批；已授权电脑承担执行。</p></div><button id="refresh-devices" class="ghost">刷新</button></div>
+          <section id="device-diagnostics" class="card diagnostics" aria-label="设备与额度状态"></section>
+          <div class="two-columns">
+            <section class="card"><h2>执行电脑</h2><div id="nodes-list" class="stack"></div><form id="node-invite-form" hidden><label>设备名称<input name="label" required maxlength="60" placeholder="例如：我的笔记本"></label><button type="submit">为当前空间连接电脑</button></form></section>
+            <section class="card"><h2>我的登录设备</h2><div id="devices-list" class="stack"></div><form id="device-pair-form"><label>新设备名称<input name="label" required maxlength="60" placeholder="例如：我的手机"></label><button type="submit">生成本人配对链接</button></form></section>
+          </div>
+          <section id="channel-card" class="card"><h2>从聊天软件访问当前空间</h2><p class="muted">生成代码后，在 Telegram 或钉钉与机器人私聊发送绑定命令。账号与当前空间会绑定，后续消息只进入这个空间。</p><div id="channel-bindings-list" class="stack"></div><button id="channel-pair-button" type="button">生成渠道绑定代码</button></section>
+          <section class="card"><h2>恢复访问</h2><p class="muted">所有设备失效后，可用一次性恢复码重新登录。重新生成会让原恢复码失效，请离线保存。</p><button id="recovery-button" type="button">生成新的恢复码</button></section>
+          <div class="actions footer-actions"><a href="/" class="button ghost" id="device-chat-link">返回对话</a><button id="logout-button" type="button" class="danger ghost">退出当前设备</button></div>
+        </section>
+      </main>
+      <footer class="footer">Personal Agent · 资料与任务由当前空间管理</footer>
+    </div>
+
+    <dialog id="secret-dialog" aria-labelledby="secret-title">
+      <h2 id="secret-title"></h2><p id="secret-description" class="muted"></p>
+      <label class="sr-only" for="secret-value">一次性代码或链接</label><textarea id="secret-value" readonly rows="3" spellcheck="false"></textarea>
+      <p id="secret-extra" class="hint"></p><div class="actions"><button id="secret-copy" class="primary" type="button">复制</button><button id="secret-close" type="button">我已保存</button></div>
+    </dialog>
+    <dialog id="knowledge-history-dialog" class="history-dialog" aria-labelledby="knowledge-history-title">
+      <h2 id="knowledge-history-title">资料历史</h2><p class="muted">最近二十个历史版本，可查看并复制需要的内容。</p>
+      <div id="knowledge-history-list" class="stack"></div><div class="actions"><button id="knowledge-history-close" type="button">关闭</button></div>
+    </dialog>
+  </body>
+</html>
