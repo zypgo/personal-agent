@@ -55,6 +55,10 @@ def build_channels(app: App, *, terminal: Channel | None = None) -> ChannelSet:
         from personal_agent.channels.telegram import TelegramChannel
 
         chosen.add(TelegramChannel(app))
+    if app.config.dingtalk.enabled:
+        from personal_agent.channels.dingtalk.channel import DingTalkChannel
+
+        chosen.add(DingTalkChannel(app))
     if app.config.web.enabled:
         from personal_agent.channels.web.channel import WebChannel
 
