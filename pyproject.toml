@@ -1,6 +1,6 @@
 [project]
 name = "personal-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "A local, always-on personal agent: OpenAI models, Anthropic's agent-engineering practices."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,6 +13,8 @@ dependencies = [
     # rebuilds httpx's connection pool, so both are pinned: an upgrade must pass tests/test_ssrf.py.
     "httpx[socks]>=0.28.1,<0.29",   # [socks]: Telegram is often reached through a SOCKS proxy
     "httpcore>=1.0.9,<1.1",
+    # DingTalk Stream uses the async client; explicit even when the model SDK also needs it.
+    "websockets>=16.1.1,<17",
     # Web channel (starlette is already a transitive dependency of the SDK). python-multipart is
     # what starlette's request.form() needs for the page's message and picture uploads.
     "starlette>=1.3.1",

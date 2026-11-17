@@ -2,7 +2,7 @@
 
 一个**跑在你自己电脑上的常驻个人 agent**：
 
-- **模型**：OpenAI（一把通用的 `OPENAI_API_KEY`；可选 `OPENAI_BASE_URL` 指向兼容端点）。
+- **模型**：默认 OpenAI；支持兼容端点、自定义密钥变量，以及独立的语音转写服务。托管搜索按 Provider 能力启用。
 - **引擎**：[OpenAI Agents SDK](https://github.com/openai/openai-agents-python)，封装在 `harness/` 端口之后。
 - **理念**：Anthropic 最新的 always-on / agent automations / agent memory / Managed Agents / trustworthy agents 指南——事件收件箱、计时器、记忆、权限、发件箱五个原语；大脑 / 双手 / 会话解耦；默认安静、默认安全、默认私密。
 - **可插拔**：MCP 服务器、Agent Skills、渠道适配器、沙箱后端、模型端点。
@@ -11,6 +11,16 @@
 > 架构：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)（含各能力的实现状态）
 > 手机连接：[docs/MOBILE.md](docs/MOBILE.md) · 本轮修复与升级：[docs/RELIABILITY.md](docs/RELIABILITY.md)
 > 监测 GitHub 新 PR 并回收：[docs/PR_PLAYBOOK.md](docs/PR_PLAYBOOK.md)
+> **0.2.0**：[功能、架构与升级](docs/V0_2.md) · [钉钉](docs/DINGTALK.md) · [文件交付](docs/ARTIFACTS.md) · [Provider 配置](docs/PROVIDERS.md) · [最新参考项目复核](docs/REFERENCE_REVIEW.md)
+
+## 0.2.0 新增
+
+- **钉钉私聊**：Stream 出站长连接，无需公网回调地址；本机批准配对后才能进入 agent，支持主动通知及聊天命令审批。
+- **手机流式回复**：Web 页面在生成中显示正文；断线重连恢复当前预览，最终答复仍经持久发件箱入历史。可关闭以兼容不支持流式的端点。
+- **文件成果**：`publish_artifact` 为工作区文件创建不可变快照，Web 鉴权下载、Telegram 文档上传；具备配额、有效期和未知投递防重发。
+- **服务解耦**：模型与语音可使用不同端点/密钥；`pa channels capabilities` 查看实际支持的渠道能力，`pa doctor` 检查配置。
+
+钉钉、Telegram 和模型服务均需要你自己的配置。自动化测试验证协议与故障行为；真实企业应用权限、手机网络和模型兼容性仍需按文档验收。
 
 ## 当前进度
 
@@ -28,6 +38,7 @@
 | 7 | 系统性优化：整个包在 mypy strict 下；属性测试与模糊测试；崩溃一致性（在每一次落盘之后把进程杀掉，再看会不会少答、多答、重复动手）与真实进程的端到端；CLI 按主题拆开、延迟加载；数据的生命周期（`pa db`、`[retention]`、每天一次的整理） | ✅ |
 | 8 | 一次全新的代码复盘与修复（每条结论先核实、先写会失败的测试再修）：审批看到的就是批准的（不被截断、不被改写、带上载荷）、读过外部内容后请求头也带不走数据、安全读文件、`deny` 看得见链式命令里的每一条、run 进行中租约不会被收走、跨站重定向只带白名单里的头、Python 3.11 真的能跑 | ✅ |
 | 9 | 在一个活了很久的进程里会怎样——量出来再改：空闲时每秒问的几个查询在大库上从扫全表变成走索引（23 ms → 4 µs）；测试不再碰得到正在运行的 agent（顺着日志发现测试曾真的往你的 webhook 端口 POST 过）；重定向的决定与任务进度索引各拆成可单独测试的小块（拆完做变异时抓到一个旧缺陷：调用方写的 `Accept` 与我们自己的 `accept` 两行一起发出）；删掉两个没人用的可选依赖 | ✅ |
+| 10 / 0.2.0 | 钉钉私聊、显式渠道能力、独立模型/语音服务、Web 真流式预览、持久文件成果交付；参考源码复核、配置/升级/故障文档 | ✅ |
 
 ## 快速开始
 

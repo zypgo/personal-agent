@@ -1256,7 +1256,7 @@ wheels = [
 
 [[package]]
 name = "personal-agent"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -1274,6 +1274,7 @@ dependencies = [
     { name = "tomlkit" },
     { name = "typer" },
     { name = "uvicorn" },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -1307,6 +1308,7 @@ requires-dist = [
     { name = "tomlkit", specifier = ">=0.13" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.30" },
+    { name = "websockets", specifier = ">=16.1.1,<17" },
 ]
 
 [package.metadata.requires-dev]
