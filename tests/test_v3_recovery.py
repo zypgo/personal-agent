@@ -8,9 +8,9 @@ anything that device prepared while it was still trusted.
 from __future__ import annotations
 
 import pytest
-from web_fake import Web
 
 from personal_agent.collaboration.models import OWNER_SPACE, InvalidInvite
+from web_fake import Web
 
 
 def post(web, path, data):
