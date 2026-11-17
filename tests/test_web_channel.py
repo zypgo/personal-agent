@@ -160,7 +160,7 @@ async def test_a_stream_starts_with_what_the_page_needs_to_catch_up(make_app):
         async with browser.stream() as stream:
             hello = await stream.next()
             assert hello.name == "hello"
-            assert hello.data == {"working": False, "last_id": 0, "approvals": []}
+            assert hello.data == {"working": False, "last_id": 0, "approvals": [], "drafts": []}
             assert stream.retry == 3000  # how soon a dropped connection tries again
 
 

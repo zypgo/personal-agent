@@ -209,6 +209,16 @@ async def test_without_a_key_voice_is_refused_with_a_clear_message(monkeypatch):
         await OpenAITranscriber(ModelConfig(), MediaConfig()).transcribe(b"x", mime="audio/webm")
 
 
+async def test_speech_authentication_error_names_the_selected_credential():
+    speech = transcriber(
+        FakeSpeech(error=api_error(openai.AuthenticationError, 401)),
+        transcribe_api_key_env="PA_SPEECH_AUTH",
+    )
+    with pytest.raises(TranscriptionError, match="PA_SPEECH_AUTH") as error:
+        await speech.transcribe(b"x", mime="audio/webm")
+    assert "OPENAI_API_KEY" not in str(error.value)
+
+
 async def test_a_missing_text_field_is_silence_not_a_crash():
     client = FakeSpeech()
     client.text = None

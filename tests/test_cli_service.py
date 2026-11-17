@@ -217,6 +217,33 @@ def test_the_base_url_variable_needs_no_openai_key_either(service, monkeypatch):
     assert "OPENAI_API_KEY is not set" not in invoke("service", "install").output
 
 
+def test_service_preflight_uses_the_selected_model_key(service, monkeypatch):
+    service.paths.config_file.write_text('[model]\napi_key_env = "PA_MODEL_AUTH"\n')
+    monkeypatch.setenv("OPENAI_API_KEY", "wrong-provider-credential")
+    missing = invoke("service", "install").output
+    assert "PA_MODEL_AUTH is not set" in flat(missing)
+    monkeypatch.setenv("PA_MODEL_AUTH", "selected-provider-credential")
+    present = invoke("service", "install").output
+    assert "PA_MODEL_AUTH is not set" not in flat(present)
+    assert "selected-provider-credential" not in present
+
+
+@pytest.mark.parametrize(
+    "section, field", [("model", "api_key_env"), ("media", "transcribe_api_key_env")]
+)
+def test_selected_provider_credentials_cannot_be_copied_to_the_service_job(
+    service, monkeypatch, section, field
+):
+    service.paths.config_file.write_text(f'[{section}]\n{field} = "PA_VALUE"\n')
+    monkeypatch.setenv("PA_VALUE", "opaque-service-value")
+    for flags in (["--dry-run"], []):
+        result = invoke("service", "install", *flags, "--pass-env", "PA_VALUE")
+        assert result.exit_code == 1
+        assert "configured provider credential" in flat(result.output)
+        assert "opaque-service-value" not in result.output
+        assert service.fake.calls == [] and not service.agents.exists()
+
+
 def test_a_job_that_cannot_be_read_from_the_desktop_is_warned_about(service, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     program = tmp_path / "Desktop" / "project" / "bin" / "python"

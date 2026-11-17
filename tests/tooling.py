@@ -12,7 +12,7 @@ from personal_agent.core.worker import Worker
 from personal_agent.harness.runctx import RunContext
 from personal_agent.tools.base import ALL_PROFILES, Category, ToolDef
 
-FILE_TOOLS = {"list_files", "read_file", "write_file", "edit_file"}
+FILE_TOOLS = {"list_files", "read_file", "write_file", "edit_file", "publish_artifact"}
 WEB_TOOLS = {"web_fetch", "http_request", "web_search"}  # web_search is hosted by OpenAI
 
 

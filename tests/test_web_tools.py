@@ -418,6 +418,36 @@ async def test_hosted_search_is_only_offered_on_the_responses_api(make_app):
     assert "web_search" not in tools_of(model) and "web_fetch" in tools_of(model)
 
 
+@pytest.mark.parametrize("declared, offered", [(None, False), (False, False), (True, True)])
+async def test_compatible_endpoints_only_receive_hosted_tools_when_explicitly_supported(
+    make_app, declared, offered
+):
+    model = ScriptedModel([[assistant_message("hi")]])
+    app = make_app(
+        model,
+        config=cfg(
+            model=ModelConfig(
+                base_url="http://127.0.0.1:8000/v1",
+                capabilities={"hosted_web_search": declared},
+            )
+        ),
+    )
+    await run(app)
+    assert ("web_search" in tools_of(model)) is offered
+    includes = model.calls[0].model_settings.response_include or []
+    assert ("web_search_call.action.sources" in includes) is offered
+
+
+async def test_an_endpoint_from_the_environment_does_not_inherit_native_hosted_search(
+    make_app, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8000/v1")
+    model = ScriptedModel([[assistant_message("hi")]])
+    app = make_app(model, config=cfg())
+    await run(app)
+    assert "web_search" not in tools_of(model)
+
+
 async def test_cached_search_mode_does_not_open_live_pages(make_app):
     model = ScriptedModel([[assistant_message("hi")]])
     app = make_app(model, config=cfg(tools=ToolsConfig(web_search="cached")))
