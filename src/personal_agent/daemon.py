@@ -48,6 +48,8 @@ UPKEEP_CHECK_S = 60.0
 """How often the running agent looks whether the daily upkeep is due."""
 LOG_CHECK_S = 3600.0
 """How often it looks whether a log that nothing rotates has grown too long."""
+ARTIFACT_CHECK_S = 86400.0
+"""File retention is independent of whether old database rows are automatically pruned."""
 
 
 class _Wakeups:
@@ -284,6 +286,7 @@ class Daemon:
         logs nothing rotates. It runs on a thread, in small batches, so that nothing else waits for
         it for long, and apart from housekeeping so that the heartbeat does not stop while it works."""
         logs_checked = float("-inf")
+        artifacts_checked = float("-inf")
         with self._wake.listener() as event:
             while not self._stopping:
                 event.clear()
@@ -294,6 +297,13 @@ class Daemon:
                         cut = await asyncio.to_thread(trim_logs, self.app.paths)
                         if cut:
                             log.info("cut back logs that nothing rotates: %s", cut)
+                    if now - artifacts_checked >= ARTIFACT_CHECK_S or now < artifacts_checked:
+                        reclaimed = await asyncio.to_thread(self.app.artifacts.sweep)
+                        artifacts_checked = now
+                        if reclaimed:
+                            log.info(
+                                "artifact upkeep removed %d expired/uncommitted file(s)", reclaimed
+                            )
                     if self.app.janitor.due():
                         tidy = await asyncio.to_thread(
                             self.app.janitor.maintain, stop=lambda: self._stopping
