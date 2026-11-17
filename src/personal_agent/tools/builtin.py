@@ -325,6 +325,7 @@ def _schedule_category(_rc: RunContext, args: dict[str, Any]) -> Category:
 
 def register_builtin(registry: ToolRegistry, config: Config | None = None) -> None:
     """The tools every agent has. `config.tools` switches the optional families on and off."""
+    from personal_agent.tools.artifacts import register_artifacts
     from personal_agent.tools.files import register_files
     from personal_agent.tools.history import register_history
     from personal_agent.tools.shell import register_shell
@@ -367,6 +368,7 @@ def register_builtin(registry: ToolRegistry, config: Config | None = None) -> No
     register_skills(registry)  # offered only when skills are installed
     if switches.files:
         register_files(registry)
+        register_artifacts(registry)
     if switches.shell:
         register_shell(registry)
     if switches.web_fetch or switches.http_request:

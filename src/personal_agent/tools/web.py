@@ -25,6 +25,7 @@ from agents import RunContextWrapper, WebSearchTool, function_tool
 from pydantic import BaseModel
 
 from personal_agent.config import Config
+from personal_agent.harness.endpoints import supports_hosted_search
 from personal_agent.harness.instructions import wrap_untrusted
 from personal_agent.harness.runctx import RunContext
 from personal_agent.parsing import loads_json
@@ -481,7 +482,7 @@ def hosted_tools(app: App, profile: str) -> list[Any]:
     mode = app.config.tools.web_search
     if mode == "off" or profile not in (FULL, SCHEDULED):
         return []
-    if app.config.model.api != "responses":
+    if not supports_hosted_search(app.config.model):
         return []
     if app.policy.blocks_entirely(HOSTED_SEARCH, Category.READ):
         return []
