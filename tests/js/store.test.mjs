@@ -196,3 +196,13 @@ test("two identical messages are matched one at a time", () => {
   assert.equal(store.matchIncoming(turn(1, { direction: "in", text: "again" })).clientId, "a");
   assert.deepEqual(store.pending.map((p) => p.clientId), ["b"]);
 });
+
+test("V3 receipts match request and principal, never another member's identical text", () => {
+  const store = new Store();
+  store.principalId = "alice";
+  store.addPending({clientId:"request-1",text:"same",at:1});
+  assert.equal(store.matchIncoming({direction:"in",channel:"web",text:"same",meta:{client_request_id:"request-1",principal_id:"bob"}}),null);
+  assert.equal(store.pending.length,1);
+  assert.equal(store.matchIncoming({direction:"in",channel:"web",text:"same",meta:{client_request_id:"request-1",principal_id:"alice"}}).clientId,"request-1");
+  assert.equal(store.pending.length,0);
+});
