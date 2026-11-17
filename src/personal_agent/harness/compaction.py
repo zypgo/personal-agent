@@ -426,13 +426,21 @@ class Compactor:
         crowded = len(rows) >= app.config.agent.history_items * CROWDED
         return tokens >= app.config.context.compact_at_tokens or crowded
 
-    async def compact(self, key: str, run_id: str) -> Compaction | None:
+    async def compact(
+        self,
+        key: str,
+        run_id: str,
+        *,
+        authorize: Callable[[], None] | None = None,
+    ) -> Compaction | None:
         """Summarise the old part of `key` if it has grown too long. Returns what was done, or
         None when nothing was needed or possible. A conversation that cannot be summarised carries
         on with the window it already had, so a failure here is a log line and never a failed run."""
         app, cfg = self.app, self.app.config.context
         if not cfg.compact or self._waiting(key) or not self.wanted(key):
             return None
+        if authorize is not None:
+            authorize()
         if app.approvals.suspended_call_ids(key):
             # A call waiting for the owner may be answered after the summary is written; its
             # result would then have no call in front of it.
@@ -454,6 +462,12 @@ class Compactor:
             render_conversation(head, result_chars=cfg.result_chars, max_chars=cfg.input_max_chars)
         )
         accounted = isinstance(app.summarizer, LLMSummarizer)
+
+        def before_attempt() -> None:
+            if authorize is not None:
+                authorize()
+            app.budget.check_run(run_id)
+
         try:
             async with asyncio.timeout(cfg.timeout_s):
                 if isinstance(app.summarizer, LLMSummarizer):
@@ -461,11 +475,15 @@ class Compactor:
                         previous,
                         conversation,
                         on_usage=lambda spent: self._record(run_id, spent),
-                        before_attempt=lambda: app.budget.check_run(run_id),
+                        before_attempt=before_attempt,
                     )
                 else:
                     summary = await app.summarizer.summarize(previous, conversation)
         except Exception as exc:
+            from personal_agent.collaboration.models import AccessDenied
+
+            if isinstance(exc, AccessDenied):
+                raise
             if isinstance(exc, SummaryRejected) and not accounted:
                 self._record(run_id, exc.spent)
             # Not even the exception text goes to the log: it can quote the conversation.
@@ -474,6 +492,8 @@ class Compactor:
             return None
         if not accounted:
             self._record(run_id, summary)
+        if authorize is not None:
+            authorize()  # A revoked run may account paid usage, but cannot rewrite shared history.
         text = clean_summary(summary.text)
         if len(text) < MIN_SUMMARY_CHARS:
             log.warning("compaction of %s gave no usable summary", key)
