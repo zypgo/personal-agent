@@ -175,10 +175,31 @@ test("a link with an unsafe address keeps its words and loses the link", () => {
   assert.equal(find(fragment("[x](javascript:alert(1))"), "a").length, 0);
 });
 
-test("a link's words may be formatted but cannot hold another link", () => {
-  const out = html("[**bold** and [inner](https://b.example)](https://a.example)");
-  assert.equal((out.match(/<a /g) ?? []).length, 1);
-  assert.match(out, /href="https:\/\/a.example\/"/);
+test("nested link syntax follows CommonMark and never creates nested links", () => {
+  const root = fragment("[**bold** and [inner](https://b.example)](https://a.example)");
+  const out = toHtml(root);
+  const links = find(root, "a");
+  // CommonMark recognizes the inner link; linkify recognizes the now-bare outer URL. They are
+  // separate siblings, never nested anchors, and both destinations pass the DOM URL whitelist.
+  assert.deepEqual(links.map(link => link.getAttribute("href")), ["https://b.example/", "https://a.example/"]);
+  for (const link of links) assert.equal(find(link, "a").length, 0);
+  assert.match(out, /<strong>bold<\/strong>/);
+  assert.match(root.textContent, /\]\(https:\/\/a.example\)/);
+});
+
+test("a linked image is an inert label inside one validated link", () => {
+  const root = fragment("[![diagram](https://tracker.example/image.png)](https://docs.example/)");
+  assert.equal(find(root, "img").length, 0);
+  assert.equal(find(root, "a").length, 1);
+  assert.equal(find(root, "a")[0].getAttribute("href"), "https://docs.example/");
+  assert.match(root.textContent, /image: diagram/);
+});
+
+test("reference links and entities are parsed without enabling HTML", () => {
+  const out = html("[说明][docs] &amp; <b>literal</b>\n\n[docs]: https://docs.example/guide");
+  assert.match(out, /href="https:\/\/docs.example\/guide"/);
+  assert.match(out, /说明<\/a>/);
+  assert.match(out, /&amp; &lt;b&gt;literal&lt;\/b&gt;/);
 });
 
 test("pictures are never loaded, only named", () => {

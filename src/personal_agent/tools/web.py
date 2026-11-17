@@ -13,6 +13,7 @@ and may use `{{secret:name}}` placeholders resolved by `security/broker.py`.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import ipaddress
 import json
@@ -33,7 +34,7 @@ from personal_agent.security.broker import PLACEHOLDER, SecretProblem
 from personal_agent.security.sanitize import clipped
 from personal_agent.security.ssrf import Blocked, Fetched, check_url, fetch, origin_of
 from personal_agent.tools.base import FULL, SCHEDULED, Category, ToolDef, ToolRegistry
-from personal_agent.tools.htmltext import html_to_text
+from personal_agent.tools.extraction import Extractor, extract_html
 from personal_agent.tools.urls import find_urls
 
 if TYPE_CHECKING:
@@ -129,11 +130,11 @@ def _decode(response: Fetched) -> str:
     return body.decode("utf-8", "replace")
 
 
-def _readable(response: Fetched) -> str | None:
+def _readable(response: Fetched, extractor: Extractor = "auto") -> str | None:
     """The body as text, or None when it is not something a model can read."""
     kind = response.content_type
     if kind in ("text/html", "application/xhtml+xml"):
-        return html_to_text(_decode(response), response.url)
+        return extract_html(_decode(response), response.url, backend=extractor)
     if kind.startswith(TEXT_TYPES) or kind.endswith(("+json", "+xml")) or not kind:
         text = _decode(response)
         if "\0" in text[:2000]:
@@ -375,7 +376,7 @@ async def web_fetch_tool(
         # outside content, so nothing a server wrote may reach the model through it.
         # (`http_request` is for APIs whose error bodies matter; its results always taint.)
         return f"Error: the server answered HTTP {response.status} for {clipped(url, 200)}"
-    text = _readable(response)
+    text = await asyncio.to_thread(_readable, response, rc.app.config.tools.html_extractor)
     if text is None:
         return (
             f"Error: {clipped(url, 200)} is {_plain_type(response)} ({len(response.body)} bytes), "
@@ -415,7 +416,7 @@ async def http_request_tool(
     lines += [f"{k}: {response.headers[k]}" for k in SHOWN_HEADERS if k in response.headers]
     if method == "HEAD":
         return "\n".join(lines)
-    text = _readable(response)
+    text = await asyncio.to_thread(_readable, response, rc.app.config.tools.html_extractor)
     if text is None:
         lines.append(f"(binary body, {len(response.body)} bytes, not shown)")
         return "\n".join(lines)

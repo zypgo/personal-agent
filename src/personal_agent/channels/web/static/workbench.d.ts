@@ -1,6 +1,6 @@
 /** V3 HTTP boundaries. Secrets are ephemeral responses, never persistent browser state. */
 export type Role = "owner" | "member" | "viewer";
-export interface Principal { id: string; display_name: string; is_admin: boolean; }
+export interface Principal { id: string; display_name: string; is_admin: boolean; authz_version?: number; }
 export interface Space { id: string; name: string; kind: "personal" | "project"; }
 export interface IdentityResponse { principal: Principal; spaces: Space[]; space_id: string; role: Role; }
 export interface Member { principal_id: string; display_name: string; role: Role; version: number; }

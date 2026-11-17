@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { FakeElement, elements, find, toHtml } from "./fake_dom.mjs";
+import { RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest } from "../../src/personal_agent/channels/web/static/query.js";
 
 // Execute the real renderer and form handlers without browser startup/network or a new dependency.
 // The same fake DOM used by the Markdown tests rejects turning untrusted text into HTML.
@@ -45,10 +46,15 @@ class Element extends FakeElement {
     controls.namedItem = name => controls.find(item => item.name === name) || null;
     return controls;
   }
+  reset() { for (const item of this.elements) item.value = ""; }
 }
 
 const source = readFileSync(new URL("../../src/personal_agent/channels/web/static/workbench.js", import.meta.url), "utf8");
-const definitions = source.slice(0, source.indexOf('bindForm("enroll-form"'));
+// The VM has a deliberately tiny DOM. Inject the actual bundled request adapter; only its module
+// import is removed, so these tests exercise the same networking implementation as the browser.
+const requestImport = 'import { RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest } from "./query.js";\n';
+assert.ok(source.startsWith(requestImport));
+const definitions = source.slice(0, source.indexOf('bindForm("enroll-form"')).replace(requestImport, "");
 const taskFixture = () => ({
   id: "task-a", actor_id: "alice", title: "Report", state: "awaiting_approval", revision: 2,
   jobs: [{id: "job-a", task_id: "task-a", task_revision: 2, step_id: "1", state: "awaiting_approval",
@@ -57,7 +63,7 @@ const taskFixture = () => ({
   questions: [],
 });
 
-function setup(task = taskFixture(), {principal = "alice", role = "member"} = {}) {
+function setup(task = taskFixture(), {principal = "alice", role = "member", respond} = {}) {
   const ids = new Map();
   const get = id => {
     if (!ids.has(id)) { const item = new Element("div"); item.root = true; ids.set(id, item); }
@@ -65,12 +71,14 @@ function setup(task = taskFixture(), {principal = "alice", role = "member"} = {}
   };
   const document = {createElement: tag => new Element(tag), getElementById: get, activeElement: null};
   const calls = [];
-  const context = {document, URL, URLSearchParams, AbortController, DOMException, crypto: webcrypto,
+  const context = {document, URL, URLSearchParams, AbortController, DOMException, RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest, crypto: webcrypto,
     location: {href: "https://example.invalid/workspace", origin: "https://example.invalid", hash: ""},
     history: {replaceState() {}}, fetch: async (url, options) => {
       const path = new URL(url, "https://example.invalid").pathname;
       const body = options.body ? JSON.parse(options.body) : null;
       calls.push({path, body});
+      const override = respond?.(new URL(url, "https://example.invalid"), options);
+      if (override !== undefined) return await override;
       if (path.endsWith("/answer")) {
         task.questions[0].state = "answered"; task.questions[0].answer = body.answer;
       }
@@ -79,7 +87,7 @@ function setup(task = taskFixture(), {principal = "alice", role = "member"} = {}
       return {ok: true, status: 200, json: async () => data};
     },
   };
-  runInNewContext(definitions + "\nglobalThis.ui={state,renderTask,loadTasks,editingTask};", context);
+  runInNewContext(definitions + "\nglobalThis.ui={state,renderTask,loadTasks,editingTask,showLogin};", context);
   context.ui.state.me = {principal: {id: principal, is_admin: false}, role, spaces: []};
   context.ui.state.space = "space-a"; context.ui.state.taskId = task.id;
   context.ui.renderTask(task);
@@ -143,4 +151,30 @@ test("step submission preserves explicit inputs and revision instead of interpol
   await settled();
   const sent = calls.find(call => call.path.endsWith("/steps"));
   assert.deepEqual(sent.body, {expected_revision: 2, step_id: "2", command: "printf explicit", input_paths: ["input.txt", "data.csv"], output_paths: ["report.txt"], timeout_s: 60});
+});
+
+test("a revoked project is cleared when a parallel request is cancelled before the forbidden response propagates", async () => {
+  let releaseOld;
+  const oldDiagnostics = new Promise(resolve => { releaseOld = resolve; });
+  const {ui, detail, get} = setup(taskFixture(), { respond: url => {
+    if (url.searchParams.get("space") === "space-a") {
+      if (url.pathname.endsWith("/tasks")) return { ok: false, status: 403, json: async () => ({error: "Membership revoked"}) };
+      if (url.pathname.endsWith("/diagnostics")) return oldDiagnostics;
+    }
+    if (url.pathname.endsWith("/me")) return { ok: true, status: 200, json: async () => ({
+      principal: {id: "alice", is_admin: false, display_name: "Alice"}, role: "owner", space_id: "personal-a",
+      spaces: [{id: "personal-a", kind: "personal", name: "Personal"}],
+    }) };
+    if (url.pathname.endsWith("/tasks")) return { ok: true, status: 200, json: async () => ({ tasks: [] }) };
+  } });
+  assert.match(detail.textContent, /Report/);
+  await assert.rejects(ui.loadTasks());
+  await settled();
+  assert.equal(detail.textContent, "");
+  assert.equal(detail.hidden, true);
+  assert.equal(ui.state.space, "personal-a");
+  assert.equal(ui.state.taskId, null);
+  releaseOld({ ok: true, status: 200, json: async () => ({ budget: {space_spent_usd: 999} }) });
+  await settled();
+  assert.doesNotMatch(get("task-diagnostics").textContent, /999/);
 });

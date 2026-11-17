@@ -6,7 +6,7 @@
 // file, and none may be added: the page's policy forbids inline code, and the answers it shows can
 // repeat text that someone else wrote.
 
-import { Live, api, artifactBlob, scopedURL, invalidateRequests } from "./api.js";
+import { Live, api, artifactBlob, scopedURL, invalidateRequests, setRequestContext, onAccessLost } from "./api.js";
 import { activityLabel, connectionLabel } from "./activity.js";
 import { audioDuration } from "./audio-metadata.js";
 import {
@@ -39,6 +39,7 @@ let unread = 0;
 let pinned = true; // the log was at its end the last time it moved
 const rendered = new Map(); // key -> { node, signature }
 const nowSeconds = () => Date.now() / 1000;
+onAccessLost(() => { if (ui) signedOut(); });
 
 // ---- small helpers --------------------------------------------------------------------------
 function h(tag, props = {}, ...kids) {
@@ -247,6 +248,7 @@ function teardownChat() {
 
 async function showChat(notice) {
   store.principalId = session.principal_id;
+  setRequestContext(session.principal_id);
   buildChat();
   if (notice) toast(notice, { error: true });
   try {
@@ -991,13 +993,13 @@ async function openSettings() {
       h("h3", { text: "This browser" }),
       h("p", { class: "about", text: `Paired as “${session.label}”. Version ${session.version}.` }),
       h("button", { type: "button", class: "danger", text: "Sign out of this browser", onclick: async () => {
+        dialog.close();
+        signedOut();
         try {
           await api("/api/logout", { method: "POST" });
         } catch (error) {
-          if (error.status !== 401) return toast(error.message, { error: true });
+          if (error.status !== 401) showPairing("This page was cleared, but the server could not confirm sign-out. Reconnect to finish signing out.");
         }
-        dialog.close();
-        signedOut();
       } }),
     ),
     hints.length ? h("section", {}, h("h3", { text: "Good to know" }), hints.map((hint) => h("p", { class: "about", text: hint }))) : null,

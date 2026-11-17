@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -12,6 +13,11 @@ from personal_agent.commands.common import echo, fail, opened
 
 app = typer.Typer(help="Owned execution computers: pair, run, inspect and revoke.")
 DEFAULT_NODE_HOME = "~/.personal-agent-node"
+
+
+class BackendChoice(StrEnum):
+    sdk = "sdk"
+    cli = "cli"
 
 
 @app.command("invite")
@@ -99,6 +105,10 @@ def run(
     ] = "python:3.12-slim",
     memory_mb: Annotated[int, typer.Option(min=128, max=4096)] = 512,
     poll_s: Annotated[float, typer.Option(min=0.1, max=60)] = 2,
+    backend: Annotated[
+        BackendChoice,
+        typer.Option(help="Docker API adapter; cli preserves the legacy implementation."),
+    ] = BackendChoice.sdk,
 ) -> None:
     """Run a single outbound worker; Docker is required and cloud resources are not created."""
     from personal_agent.nodes.agent import Runner
@@ -116,16 +126,27 @@ def run(
         credentials = load_credentials(home)
         with NodeStore(home) as store:
             async with HttpTransport(credentials.url, credentials.token) as client:
-                backend = DockerBackend(image, memory_mb=memory_mb)
-                await backend.probe()
-                runner = Runner(
-                    store,
-                    backend,
-                    client,
-                    known_secrets=(credentials.token,),
-                )
-                echo(f"Node {credentials.node_id} is polling; press Ctrl-C to stop the Runner.")
-                await runner.run(poll_s=poll_s)
+                selected: DockerBackend
+                if backend is BackendChoice.sdk:
+                    from personal_agent.nodes.docker_sdk import DockerSDKBackend
+
+                    selected = DockerSDKBackend(image, memory_mb=memory_mb)
+                else:
+                    selected = DockerBackend(image, memory_mb=memory_mb)
+                try:
+                    await selected.probe()
+                    runner = Runner(
+                        store,
+                        selected,
+                        client,
+                        known_secrets=(credentials.token,),
+                    )
+                    echo(
+                        f"Node {credentials.node_id} is polling using {backend.value}; press Ctrl-C to stop the Runner."
+                    )
+                    await runner.run(poll_s=poll_s)
+                finally:
+                    await selected.aclose()
 
     try:
         asyncio.run(serve())

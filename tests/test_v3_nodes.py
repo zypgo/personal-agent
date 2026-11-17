@@ -274,6 +274,63 @@ async def test_restarted_runner_never_recreates_missing_started_container(tmp_pa
         assert transport.observations[-1]["state"] == "uncertain"
 
 
+@pytest.mark.parametrize("state", ["starting", "running", "uncertain"])
+async def test_restarted_runner_never_repeats_an_ambiguous_start(tmp_path, state):
+    backend, transport = FakeBackend(), FakeTransport()
+    backend.state = "created"
+    with NodeStore(tmp_path) as store:
+        receipt = store.accept(envelope(), now=1000)
+        store.update(receipt.attempt_id, state=state, admitted=True)
+    with NodeStore(tmp_path) as store:
+        worker = Runner(store, backend, transport, clock=lambda: 1001, min_free_bytes=0)
+        await worker.tick()
+        await worker.tick()
+        pending = store.get(receipt.attempt_id)
+        assert pending.state == "uncertain" and pending.result is None
+        assert len(store.pending()) == 1
+        assert backend.starts == backend.creates == 0
+        assert not transport.completed
+        assert transport.observations[-1]["state"] == "uncertain"
+
+
+async def test_lost_start_reply_can_be_reconciled_but_never_replayed(tmp_path):
+    class LateStart(FakeBackend):
+        async def start(self, receipt):
+            self.starts += 1
+            raise BackendError("start response lost; daemon outcome unknown")
+
+    backend, transport = LateStart(finish=False), FakeTransport()
+    with NodeStore(tmp_path) as store:
+        worker = Runner(store, backend, transport, clock=lambda: 1000, min_free_bytes=0)
+        with pytest.raises(BackendError):
+            await worker.tick()
+        assert store.get("attempt_123").state == "starting"
+        await worker.tick()
+        assert backend.starts == 1 and not transport.completed
+        assert store.get("attempt_123").state == "uncertain"
+        # The delayed original start is discovered; it is not submitted a second time.
+        backend.state = "running"
+        await worker.tick()
+        assert backend.starts == 1 and store.get("attempt_123").state == "running"
+
+
+async def test_cancel_ambiguous_created_resource_requires_removal_before_success(tmp_path):
+    backend, transport = FakeBackend(), FakeTransport()
+    backend.state, backend.cleanup_fails, transport.cancel = "created", True, True
+    with NodeStore(tmp_path) as store:
+        receipt = store.accept(envelope(), now=1000)
+        store.update(receipt.attempt_id, state="starting", admitted=True)
+        worker = Runner(store, backend, transport, clock=lambda: 1001, min_free_bytes=0)
+        await worker.tick()
+        assert not transport.completed
+        assert store.get(receipt.attempt_id).state == "uncertain"
+        backend.cleanup_fails = False
+        await worker.tick()
+        assert transport.completed[-1]["status"] == "cancelled"
+        assert backend.state == "missing" and backend.starts == 0
+        assert not store.pending()
+
+
 async def test_cancellation_and_offline_deadline_stop_running_container(tmp_path):
     backend, transport = FakeBackend(finish=False), FakeTransport()
     now = [1000.0]

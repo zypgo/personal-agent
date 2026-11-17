@@ -43,6 +43,9 @@ class DockerBackend:
             raise ValueError("invalid node resource limits")
         self.image, self.memory_mb, self.cpus = image, memory_mb, cpus
 
+    async def aclose(self) -> None:
+        """The CLI backend keeps no persistent client or background worker."""
+
     @staticmethod
     def _env() -> dict[str, str]:
         env = {

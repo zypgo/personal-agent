@@ -13,7 +13,16 @@
 > 监测 GitHub 新 PR 并回收：[docs/PR_PLAYBOOK.md](docs/PR_PLAYBOOK.md)
 > **0.2.0**：[功能、架构与升级](docs/V0_2.md) · [钉钉](docs/DINGTALK.md) · [文件交付](docs/ARTIFACTS.md) · [Provider 配置](docs/PROVIDERS.md) · [最新参考项目复核](docs/REFERENCE_REVIEW.md)
 
-## V3.0（包版本 0.3.0）
+## 0.3.1：基础组件升级
+
+V3 API 使用 FastAPI/Pydantic 严格契约；浏览器引入 TanStack Query、markdown-it 和可复现 TypeScript/Vite 构建；正文提取采用本地 Trafilatura；自有 Runner 默认 Docker 官方 SDK；整实例一致快照可交给 restic 加密归档。保留原有权限、收据和恢复撤权机制，运行服务无需 Node，也不新增云资源。
+
+- [实现、配置、备份与回退](docs/OPEN_SOURCE_ADAPTERS.md)
+- [0.3.1 验证记录与部署边界](docs/RELEASE_0_3_1.md)
+- 更新：`uv sync --frozen`；启动：`uv run pa serve`；节点兼容回退：`pa node run --backend cli`
+- 维护前端：`npm ci && npm run check`；Python 安装包已包含浏览器 bundle。
+
+## V3.0
 
 面向个人与约 2–5 名可信协作者：私人/项目空间、独立成员与设备、手机工作台、持久后台任务、步骤和补充回答、自有 Docker 执行节点、固定渠道绑定及整实例备份恢复。
 

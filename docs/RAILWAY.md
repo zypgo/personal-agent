@@ -73,13 +73,23 @@ pa node run
 
 ## 4. 备份、升级与回滚
 
-升级前停止提交新任务，等待正在运行的任务完成，或在网页请求取消并等待节点确认。备份整个 `/data` 的一致快照，包含根数据库、各空间自己的数据库、记忆文件、工作区与产物；单独拷贝一个正在使用的 `state.db` 会漏掉 WAL 和其它空间。在线 `pa db backup` 只处理当前 App 数据库，不能替代整个控制面的卷备份。可使用已有卷的备份功能，或停止控制进程后执行 `pa db backup-all /trusted-backups/snapshot`，再用 `pa db restore-all /trusted-backups/snapshot --to /trusted-restores/home` 校验并恢复到新目录。管理员命令使用上面的 `python -m personal_agent.deploy admin ...` 入口；完整说明见 [V3.md](V3.md)。
+升级前停止提交新任务，等待正在运行的任务完成，或在网页请求取消并等待节点确认。备份整个 `/data` 的一致快照，包含根数据库、各空间自己的数据库、记忆文件、工作区与产物；单独拷贝一个正在使用的 `state.db` 会漏掉 WAL 和其它空间。在线 `pa db backup` 只处理当前 App 数据库，不能替代整个控制面的卷备份。Railway 上优先使用已有卷的备份功能。
+
+`backup-all` 要求控制进程已经停止，且目标位于 `PA_HOME` 外。在本镜像中控制进程是 PID 1，停止它会结束容器，因此 **SSH 进入正常运行的服务后执行一条 `backup-all` 不是完整维护流程**。本版本未提供在线整实例快照或自动切换维护容器。需要 restic 时，在自有主机上处理已安全取得的离线数据副本；自托管部署则可停服务后执行 `pa db backup-all /trusted-backups/snapshot`，再用 `pa db restore-all /trusted-backups/snapshot --to /trusted-restores/home` 校验恢复到新目录。示例目标的父目录须预先创建并由服务账号可写，不能当作镜像中已经存在的挂载。完整说明见 [V3.md](V3.md)。
 
 恢复后仍只启动一个控制实例。正常重启由节点检查同一个固定容器并继续上传收据；若将控制数据库回滚到较早快照，必须先停止 Runner 并核对仍存活的容器，不能将旧快照误认为最新执行事实。数据库迁移后回退代码时，旧代码可能拒绝更高 schema 版本；应成套恢复升级前备份，而不是只切换 Git 版本。
 
 `restore-all` 默认使快照中的浏览器会话、节点和未使用邀请失效，并更新身份授权版本。恢复后从管理员终端重新配对浏览器，检查成员与渠道授权，再为 Runner 签发新邀请。旧任务、执行资源和收据仍保留供核对，旧批准不会因回滚自动恢复执行。这里的重新授权与普通重启不同：正常重启继续使用原有有效凭据。
 
+部署入口的 `admin` 子命令也会先校验当前配置。若当前 `config.toml` 已损坏或缺少有效 HTTPS 配置，这个入口不能直接用于恢复；应在明确使用服务 UID/GID 的独立维护环境处理离线副本，再按现有卷恢复流程切换，不能用 root 在正在运行的卷内直接写入新数据库。
+
 恢复非管理员成员的原身份时，在可信服务终端先运行 `python -m personal_agent.deploy admin web principals`，核对 ID 与 active/disabled 状态；然后运行 `python -m personal_agent.deploy admin web pair --principal EXISTING_PRINCIPAL_ID --no-qr`。设备链接仅登录该既有有效身份，不创建新人或修改项目角色；交给对应成员一次性打开。具体流程见 [COLLABORATION.md](COLLABORATION.md)。
+
+### 0.3.1 的加密归档
+
+镜像内置 restic 0.19.1 和 OpenSSH 客户端。对于已经创建好的离线一致快照，可用 `python -m personal_agent.deploy admin db restic ...` 加密归档；这不会使运行中主目录自动成为一致快照。恢复必须经过本项目的 `restic restore`，继续执行撤权和任务冻结。命令、密码文件和保留策略见 [基础组件升级](OPEN_SOURCE_ADAPTERS.md#加密备份与恢复)。
+
+归档支持已有本地磁盘或自有 SFTP，不创建存储服务、不自动上传。使用 SFTP 时先为服务账号配置 SSH 主机校验和凭据，账号 home 为 `/data`。只留在同一卷内的归档不能抵御整卷丢失。浏览器 bundle 已随镜像打包，不需要 Node 或运行时 CDN。
 
 ## 验证范围
 

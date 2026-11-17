@@ -1,11 +1,12 @@
+import { RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest } from "./query.js";
 // API boundaries are documented in workbench.d.ts. No credential is stored in browser storage.
-/** @typedef {{id:string, display_name:string, is_admin:boolean}} Principal */
+/** @typedef {{id:string, display_name:string, is_admin:boolean, authz_version?:number}} Principal */
 /** @typedef {{id:string,name:string,kind:'personal'|'project'}} Space */
 /** @typedef {{principal:Principal,spaces:Space[],space_id:string,role:string}} Me */
 /** @typedef {import('./workbench').Task} Task */
 
-/** @type {{me:Me|null,space:string,tab:string,epoch:number,requests:Set<AbortController>,pendingInvite:string,taskId:string|null,knowledgeRevision:number|null}} */
-const state = {me:null,space:new URL(location.href).searchParams.get("space") || "",tab:"tasks",epoch:0,requests:new Set(),pendingInvite:"",taskId:null,knowledgeRevision:null};
+/** @type {{me:Me|null,space:string,tab:string,epoch:number,pendingInvite:string,taskId:string|null,knowledgeRevision:number|null}} */
+const state = {me:null,space:new URL(location.href).searchParams.get("space") || "",tab:"tasks",epoch:0,pendingInvite:"",taskId:null,knowledgeRevision:null};
 const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 const input = (id) => /** @type {HTMLInputElement} */ (document.getElementById(id));
 const form = (id) => /** @type {HTMLFormElement} */ (document.getElementById(id));
@@ -33,17 +34,20 @@ function notice(text, error = false) {
   $("notice").hidden = !text;
 }
 function readable(error) { return error instanceof Error ? error.message : "操作未完成，请重试。"; }
-function run(action) { Promise.resolve().then(action).catch(async error => {
+function run(action) { Promise.resolve().then(action).catch(error => {
   if (error?.name === "AbortError") return;
-  if (error?.status === 403 && state.me && !restoringAccess) {
-    // A revoked membership must immediately discard its rendered content. The account and its
-    // other spaces remain usable; recover to its own personal space without keeping stale data.
-    restoringAccess = true;
-    try { await switchSpace(""); } catch (refreshError) { if (refreshError?.status === 401) showLogin(); }
-    finally { restoringAccess = false; }
-  }
   notice(readable(error),true);
 }); }
+async function restoreAccess() {
+  if (restoringAccess) return;
+  // Discard the revoked space synchronously, even when a parallel request is cancelled first.
+  restoringAccess = true;
+  try { await switchSpace(""); }
+  catch (error) {
+    if (error?.status === 401) showLogin();
+    else if (error?.name !== "AbortError") notice(readable(error),true);
+  } finally { restoringAccess = false; }
+}
 function date(value) {
   if (!value) return "";
   const result = new Date(Number(value) > 1e12 ? Number(value) : Number(value) * 1000);
@@ -61,31 +65,20 @@ function scopedUrl(path) {
   if (state.space) url.searchParams.set("space",state.space);
   return url.pathname + url.search;
 }
+const requests = new RequestScope({
+  resolve: scopedUrl,
+  fetcher: (...args) => fetch(...args),
+  onAccessLost: status => {
+    if (!state.me) return;
+    if (status === 401) showLogin(); else void restoreAccess();
+  },
+});
 async function api(path, options = {}) {
-  const epoch = state.epoch;
-  const controller = new AbortController();
-  state.requests.add(controller);
-  try {
-    const response = await fetch(scopedUrl(path),{
-      method:options.method || "GET",credentials:"same-origin",cache:"no-store",signal:controller.signal,
-      headers:{"X-PA":"1",...(options.body === undefined ? {} : {"Content-Type":"application/json"})},
-      body:options.body === undefined ? undefined : JSON.stringify(options.body),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (epoch !== state.epoch) throw new DOMException("Space changed","AbortError");
-    if (!response.ok) {
-      const detail = typeof data.error === "string" ? data.error : typeof data.detail === "string" ? data.detail : `请求未完成（${response.status}）`;
-      const error = Object.assign(new Error(detail),{status:response.status});
-      if (response.status === 401 && state.me) showLogin();
-      throw error;
-    }
-    return data;
-  } finally { state.requests.delete(controller); }
+  return await requests.request(path, {method:options.method, json:options.body, signal:options.signal});
 }
 function cancelRequests() {
   state.epoch += 1;
-  for (const request of state.requests) request.abort();
-  state.requests.clear();
+  requests.clear();
 }
 function clearSpace() {
   state.taskId = null;
@@ -110,10 +103,13 @@ function showLogin() {
   input("enroll-code").value = state.pendingInvite;
 }
 async function loadMe() {
+  const previous = state.me;
+  const previousSpace = state.space;
+  const epoch = state.epoch;
   try { state.me = await api("/api/v3/me"); }
   catch (error) {
     if (error.status === 401) {showLogin();return false;}
-    if (error.status === 403 && state.space) {
+    if (error.status === 403 && state.space && epoch === state.epoch) {
       cancelRequests();clearSpace();state.space="";
       state.me=await api("/api/v3/me");
     } else throw error;
@@ -121,6 +117,8 @@ async function loadMe() {
   const me = state.me;
   if (!me || !me.principal || !Array.isArray(me.spaces)) throw new Error("账号信息暂时不可用。");
   state.space = me.space_id || me.spaces[0]?.id || "";
+  if (previous && (previous.principal.id !== me.principal.id || previousSpace !== state.space || previous.role !== me.role || previous.principal.authz_version !== me.principal.authz_version)) clearSpace();
+  requests.setContext(`${me.principal.id}:${state.space}:${me.role}:${me.principal.authz_version ?? 0}`);
   const select = /** @type {HTMLSelectElement} */ ($("space-select"));
   select.replaceChildren();
   for (const space of me.spaces) {
@@ -268,6 +266,9 @@ function submitButton(editor, text) {
   actions.append(button,discard);editor.append(actions);
 }
 function taskPaths(editor, name) { return field(editor,name).value.split(/\r?\n/).map(value=>value.trim()).filter(Boolean); }
+function planFields(editor) {
+  return Object.fromEntries(["command","input_paths","output_paths","timeout_s"].map(name=>[name,field(editor,name).value]));
+}
 async function finishTaskEdit(editor, message) {
   delete editor.dataset.dirty;delete editor.dataset.requestId;
   notice(message);await loadTasks(true);
@@ -294,7 +295,7 @@ function renderQuestions(panel, task, canWrite) {
       submitButton(editor,"提交回答");
       bindFormElement(editor,async f=>{
         await api(`/api/v3/tasks/${encodeURIComponent(task.id)}/questions/${encodeURIComponent(question.id)}/answer`,{
-          method:"POST",body:{expected_revision:task.revision,answer:field(f,"answer").value},
+          method:"POST",body:buildAnswerRequest(field(f,"answer").value,task.revision),
         });
         await finishTaskEdit(f,"回答已保存，任务可以继续。");
       });section.append(editor);
@@ -323,10 +324,8 @@ function renderTaskEditors(panel, task, jobs) {
   if(canContinue && currentJobs.length<8) {
     const step=String(currentJobs.reduce((maximum,job)=>Math.max(maximum,Number(job.step_id)||0),0)+1);
     const editor=taskEditor(panel,`＋ 添加第 ${step} 步`,async f=>{
-      await api(`/api/v3/tasks/${encodeURIComponent(task.id)}/steps`,{method:"POST",body:{
-        expected_revision:task.revision,step_id:step,command:field(f,"command").value,
-        input_paths:taskPaths(f,"input_paths"),output_paths:taskPaths(f,"output_paths"),timeout_s:Number(field(f,"timeout_s").value),
-      }});await finishTaskEdit(f,"新步骤已保存，等待审批；前一步成功后才会执行。");
+      await api(`/api/v3/tasks/${encodeURIComponent(task.id)}/steps`,{method:"POST",body:buildStepRequest(planFields(f),task.revision,step)});
+      await finishTaskEdit(f,"新步骤已保存，等待审批；前一步成功后才会执行。");
     });
     taskField(editor,"command","执行命令",{kind:"textarea",maxLength:16000});
     taskField(editor,"input_paths","输入文件",{kind:"textarea",required:false,placeholder:"当前工作区的相对路径，每行一个"});
@@ -577,8 +576,7 @@ bindForm("space-form",async f => {const data=await api("/api/v3/spaces",{method:
 bindForm("invite-form",async f => {const data=await api("/api/v3/invites",{method:"POST",body:{role:field(f,"role").value,label:field(f,"label").value.trim()}});showSecret("项目邀请",inviteLink(data.code,"invite"),"将此链接交给想邀请的人。链接只能使用一次。",`有效期至 ${date(data.expires_at)}`);});
 bindForm("task-form",async f => {
   if (!f.dataset.requestId) f.dataset.requestId=crypto.randomUUID();
-  const paths=name => field(f,name).value.split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
-  const data=await api("/api/v3/tasks",{method:"POST",body:{title:field(f,"title").value.trim(),command:field(f,"command").value,input_paths:paths("input_paths"),output_paths:paths("output_paths"),timeout_s:Number(field(f,"timeout_s").value),client_request_id:f.dataset.requestId}});
+  const data=await api("/api/v3/tasks",{method:"POST",body:buildTaskRequest({...planFields(f),title:field(f,"title").value},f.dataset.requestId)});
   state.taskId=data.task?.id || data.id;delete f.dataset.requestId;f.reset();/** @type {HTMLDetailsElement} */ ($("task-compose")).open=false;notice("任务已保存。审批和执行进度会显示在这里。");await loadTasks();
 });
 form("task-form").addEventListener("input",()=>{if(!form("task-form").dataset.busy) delete form("task-form").dataset.requestId;});
@@ -599,7 +597,7 @@ bindForm("device-pair-form",async f => {const data=await api("/api/v3/devices/pa
 bindForm("node-invite-form",async f => {const data=await api("/api/v3/node-invites",{method:"POST",body:{label:field(f,"label").value.trim(),space_ids:[state.space]}});f.reset();showSecret("连接执行电脑",data.code,"仅在你管理的执行电脑上使用此代码。电脑只获得所选空间的任务权限。",`在电脑终端运行 pa node pair --url ${location.origin}，按提示粘贴代码，然后运行 pa node run。有效期至 ${date(data.expires_at)}。`);});
 $("channel-pair-button").addEventListener("click",()=>run(async()=>{const data=await api("/api/v3/channel-binding",{method:"POST",body:{}});showSecret("绑定聊天账号",`/bind ${data.code}`,"复制命令，在 Telegram 或钉钉与机器人私聊发送。它会绑定你的账号与当前空间。",`仅能使用一次，有效期至 ${date(data.expires_at)}。`);}));
 $("recovery-button").addEventListener("click",()=>run(async()=>{const data=await api("/api/v3/recovery-code",{method:"POST",body:{}});showSecret("保存新的恢复码",data.code,"旧恢复码已经失效。请离线保存这个一次性恢复码。");}));
-$("logout-button").addEventListener("click",()=>run(async()=>{await api("/api/logout",{method:"POST",body:{}});showLogin();notice("已退出当前设备。");}));
+$("logout-button").addEventListener("click",()=>run(async()=>{showLogin();await api("/api/logout",{method:"POST",body:{}});notice("已退出当前设备。");}));
 $("space-select").addEventListener("change",event=>run(()=>switchSpace(event.target.value)));
 for (const button of document.querySelectorAll("[data-tab]")) button.addEventListener("click",()=>run(()=>selectTab(button.getAttribute("data-tab"))));
 for (const id of ["refresh-tasks","refresh-knowledge","refresh-devices"]) $(id).addEventListener("click",()=>run(refresh));

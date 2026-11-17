@@ -1,6 +1,6 @@
 [project]
 name = "personal-agent"
-version = "0.3.0"
+version = "0.3.1"
 description = "A local, always-on personal agent: OpenAI models, Anthropic's agent-engineering practices."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,6 +29,11 @@ dependencies = [
     "qrcode>=8",
     "mcp>=2.3,<3",
     "tomlkit>=0.13",
+    "fastapi>=0.163.1,<0.164",
+    "pydantic>=2.14.3,<3",
+    "docker>=7.2,<8",
+    "trafilatura>=2.3.1,<2.4",
+    "pysocks>=1.7.1,<2",
 ]
 
 [project.scripts]
@@ -44,6 +49,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff>=0.8",
     "types-croniter>=6.2.4.20261006",
+    "types-docker>=7.1,<8",
     "types-pyyaml>=6.0.12.20261113",
     "types-qrcode>=8.2.0.20260518",
 ]
@@ -60,7 +66,7 @@ packages = ["src/personal_agent"]
 # other people's projects (see its README): study material, whose `.env.example` files used to
 # end up in the archive because `.gitignore` re-includes that name and hatch lets it win over an
 # `exclude`.
-include = ["/src", "/tests", "/docs", "/scripts", "/README.md", "/uv.lock", "/.env.example", "/Dockerfile", "/.dockerignore", "/railway.toml"]
+include = ["/src", "/tests", "/docs", "/scripts", "/frontend", "/package.json", "/package-lock.json", "/tsconfig.json", "/README.md", "/uv.lock", "/.env.example", "/Dockerfile", "/.dockerignore", "/railway.toml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 from rich.markup import escape
 
+from personal_agent.commands import restic
 from personal_agent.commands.common import (
     USAGE,
     ago,
@@ -31,6 +32,7 @@ app = typer.Typer(
     help="The database: its size, what is removed from it and when, checks and backups.",
     invoke_without_command=True,
 )
+app.add_typer(restic.app, name="restic")
 
 BACKUP_NOTE = (
     "That is the database only. Notes and preferences are files in the memory folder, and "
