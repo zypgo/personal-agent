@@ -210,6 +210,7 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
         "http_request",
         "list_files",
         "memory",
+        "publish_artifact",
         "read_file",
         "schedule",
         "search_history",

@@ -376,6 +376,32 @@ def test_the_base_url_variable_stands_for_a_custom_endpoint_too(initialised, mon
     assert len(spy.calls) == 1
 
 
+def test_live_preflight_accepts_the_selected_model_key(initialised, monkeypatch):
+    (initialised / "config.toml").write_text('[model]\napi_key_env = "PA_MODEL_AUTH"\n')
+    monkeypatch.setenv("PA_MODEL_AUTH", "custom-credential-value")
+    spy = Spy([ScenarioResult("quiet-when-nothing-new", "Quiet", [good_trial()])])
+    monkeypatch.setattr(runner, "run_live", spy)
+    result = invoke("eval", "run", "quiet-when-nothing-new", "--live", "--no-report")
+    assert result.exit_code == 0, result.output
+    assert len(spy.calls) == 1
+    assert "custom-credential-value" not in result.output
+
+
+def test_live_preflight_refuses_a_missing_selected_key_even_with_a_custom_url(
+    initialised, monkeypatch
+):
+    (initialised / "config.toml").write_text(
+        '[model]\napi_key_env = "PA_MODEL_AUTH"\nbase_url = "http://127.0.0.1:9/v1"\n'
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "wrong-provider-credential")
+    spy = Spy([])
+    monkeypatch.setattr(runner, "run_live", spy)
+    result = invoke("eval", "run", "quiet-when-nothing-new", "--live", "--no-report")
+    assert result.exit_code == 2
+    assert "PA_MODEL_AUTH is not set" in flat(result.output)
+    assert spy.calls == []
+
+
 def test_a_config_that_cannot_be_read_stops_a_live_run_before_it_starts(initialised, monkeypatch):
     spy = Spy([])
     monkeypatch.setattr(runner, "run_live", spy)

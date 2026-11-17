@@ -95,7 +95,7 @@ def test_a_plugin_cannot_take_a_built_in_name(paths, name):
 
 
 def test_the_built_in_names_are_exactly_the_ones_the_agent_uses_itself():
-    assert {"cli", "web", "telegram", "webhooks", "auto"} == RESERVED_CHANNELS
+    assert {"cli", "web", "telegram", "dingtalk", "webhooks", "auto"} == RESERVED_CHANNELS
 
 
 def test_two_plugins_cannot_provide_the_same_channel(paths):
