@@ -100,26 +100,70 @@ def _status(ctx: typer.Context) -> None:
             say(f"[dim]{escape(TAILSCALE_HINT)}[/dim]")
 
 
+@app.command("principals")
+def principals() -> None:
+    """Local admin: list existing identity IDs for recovery, without credentials."""
+    from personal_agent.collaboration.models import OWNER_ID, IdentityError
+    from personal_agent.collaboration.store import IdentityStore
+
+    with opened() as agent:
+        try:
+            IdentityStore(agent.db, agent.clock).require_admin(OWNER_ID)
+        except IdentityError as exc:
+            fail(str(exc))
+        view = table("ID", "Label", "State")
+        for row in agent.db.query(
+            "SELECT id, display_name, disabled_at FROM principals ORDER BY created_at, id"
+        ):
+            view.add_row(
+                escape(row["id"]),
+                escape(row["display_name"]),
+                "disabled" if row["disabled_at"] is not None else "active",
+            )
+        console.print(view)
+
+
 @app.command("pair")
 def pair(
     label: Annotated[
         str, typer.Option("--label", "-l", help="A name for this browser, such as 'phone'.")
     ] = "",
     qr: Annotated[bool, typer.Option("--qr/--no-qr", help="Show the link as a QR code.")] = True,
+    principal: Annotated[
+        str | None,
+        typer.Option(
+            "--principal",
+            help="Local admin: pair a device for this existing active identity (no role changes).",
+        ),
+    ] = None,
 ) -> None:
     """Make a link that lets one browser in, once."""
     with opened() as agent:
         _require_enabled(agent)
-        _pair_link(agent, label, qr)
+        _pair_link(agent, label, qr, principal=principal)
 
 
-def _pair_link(agent: App, label: str, qr: bool) -> None:
+def _pair_link(agent: App, label: str, qr: bool, *, principal: str | None = None) -> None:
+    from personal_agent.collaboration.models import OWNER_ID, IdentityError
+    from personal_agent.collaboration.store import IdentityStore
+
     try:
-        invite = agent.web_auth.invite(label)
+        if principal is None:
+            invite = agent.web_auth.invite(label)
+            code, expires_at = invite.code, invite.expires_at
+        else:
+            device = IdentityStore(agent.db, agent.clock).create_admin_device_invite(
+                OWNER_ID, principal, label
+            )
+            code, expires_at = device.code, device.expires_at
     except TooManyInvites as exc:
         fail(f"{exc}.", "`pa web unpair` cancels them.")
-    url = f"{agent.config.web.address}/#pair={invite.code}"
-    minutes = max(1, round((invite.expires_at - agent.clock.now()) / 60))
+    except IdentityError as exc:
+        fail(str(exc))
+    url = f"{agent.config.web.address}/#pair={code}"
+    minutes = max(1, round((expires_at - agent.clock.now()) / 60))
+    if principal is not None:
+        echo(f"Pairing existing identity: {principal}")
     say(f"Open this link in the browser to pair (it works once, for {minutes} minutes):")
     say()
     say(f"  {escape(url)}")
