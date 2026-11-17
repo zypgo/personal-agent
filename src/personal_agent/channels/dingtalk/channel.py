@@ -28,6 +28,12 @@ from personal_agent.channels.dingtalk.api import (
 )
 from personal_agent.channels.ingress import Ingress
 from personal_agent.channels.pairing import PAIRING_TTL_S
+from personal_agent.collaboration.channel_routing import (
+    ChannelRoute,
+    incoming_route,
+    validate_delivery,
+)
+from personal_agent.collaboration.models import OWNER_ID, OWNER_SPACE, IdentityError
 from personal_agent.core.outbox import OutMessage
 from personal_agent.core.sessions import DEFAULT_SESSION
 
@@ -85,6 +91,12 @@ def recipient_key(client_id: str, corp_id: str, staff_id: str) -> str:
     return json.dumps([client_id, corp_id, staff_id], ensure_ascii=False, separators=(",", ":"))
 
 
+def account_key(client_id: str, corp_id: str) -> str:
+    """Stable account scope; staff IDs are only meaningful within this app and organization."""
+    value = json.dumps([client_id, corp_id], ensure_ascii=False, separators=(",", ":"))
+    return "dd:" + hashlib.sha256(value.encode()).hexdigest()
+
+
 def message_key(client_id: str, corp_id: str, message_id: str) -> str:
     value = json.dumps([client_id, corp_id, message_id], ensure_ascii=False, separators=(",", ":"))
     return "dd:" + hashlib.sha256(value.encode()).hexdigest()
@@ -133,6 +145,13 @@ class DingTalkChannel:
         self.last_connected_at: float | None = None
         self.last_received_at: float | None = None
 
+    def for_space(self, app: App) -> DingTalkChannel:
+        """A delivery-only view shares the transport, never root memory or artifacts."""
+        view = DingTalkChannel(app, api=self.api, connect_stream=self._connect, sleep=self._sleep)
+        view.cfg = self.cfg
+        view.robot_code = self.robot_code
+        return view
+
     @property
     def configured(self) -> bool:
         return self._api is not None or bool(self.client_id and self._secret)
@@ -174,8 +193,6 @@ class DingTalkChannel:
                     permanent=True,
                 )
             target = recent.sender
-        if not self.app.pairing.is_approved(self.name, target):
-            raise ChannelError("That DingTalk account is not approved", permanent=True)
         try:
             parts = json.loads(target)
         except (TypeError, ValueError):
@@ -192,6 +209,15 @@ class DingTalkChannel:
                 "That DingTalk pairing belongs to a different application or organization",
                 permanent=True,
             )
+        validate_delivery(
+            self.app,
+            message,
+            channel=self.name,
+            account=account_key(parts[0], parts[1]),
+            sender=parts[2],
+            recipient=target,
+            legacy_sender=target,
+        )
         return str(parts[2])
 
     async def send(self, message: OutMessage) -> None:
@@ -327,12 +353,41 @@ class DingTalkChannel:
         ):
             return
         recipient = recipient_key(self.client_id, corp, staff)
+        account = account_key(self.client_id, corp)
+        text = data.get("text")
+        content = text.get("content") if isinstance(text, dict) else None
+        if (
+            self.app.identities is not None
+            and data.get("msgtype") == "text"
+            and isinstance(content, str)
+            and content.strip().split(maxsplit=1)[0:1] == ["/bind"]
+        ):
+            parts = content.strip().split()
+            try:
+                if len(parts) != 2:
+                    raise IdentityError("Use /bind followed by the one-time code.")
+                self.app.identities.bind_channel(parts[1], self.name, account, staff, recipient)
+            except IdentityError:
+                reply = "The binding code is invalid or expired. Generate a new one in the workspace Devices page."
+            else:
+                reply = "This chat is now bound to your selected space. Your next message will be sent there."
+            # This capability is consumed locally and never enters the transcript, inbox or log.
+            await self.api.send_message(self.robot_code, staff, reply, markdown=False)
+            return
         pairing = self.app.pairing
-        if not pairing.is_approved(self.name, recipient):
+        route = incoming_route(
+            self.app,
+            ingress,
+            channel=self.name,
+            account=account,
+            sender=staff,
+            recipient=recipient,
+            legacy_sender=recipient,
+        )
+        if route is None:
             await self._stranger(recipient, staff, str(data.get("senderNick") or ""))
             return
         external_id = message_key(self.client_id, corp, mid)
-        text = data.get("text")
         if (
             data.get("msgtype") != "text"
             or not isinstance(text, dict)
@@ -342,33 +397,46 @@ class DingTalkChannel:
                 recipient,
                 external_id,
                 "This DingTalk channel accepts text. Use the web page for pictures and voice.",
+                route=route,
             )
-            ingress.wake()
+            route.ingress.wake()
             return
         # This branch is text-only: Ingress cannot perform transcription or other network work
         # inside the transaction. Commands, their dedupe marker and their reply commit together.
-        with self.app.db.tx():
-            pairing.touch(self.name, recipient)
-            result = await ingress.owner_message(
+        with route.app.db.tx():
+            if route.legacy or (
+                route.app.space_id == OWNER_SPACE and route.principal_id == OWNER_ID
+            ):
+                pairing.touch(self.name, recipient)
+            result = await route.ingress.owner_message(
                 channel=self.name,
                 text=text["content"],
                 external_id=external_id,
                 recipient=recipient,
+                **route.authority,
             )
             if result.status == "rejected" and result.reply:
-                self._notice(recipient, external_id, result.reply)
+                self._notice(recipient, external_id, result.reply, route=route)
         if result.status == "rejected":
-            ingress.wake()
+            route.ingress.wake()
 
-    def _notice(self, recipient: str, external_id: str, text: str) -> None:
-        self.app.outbox.enqueue(
+    def _notice(
+        self,
+        recipient: str,
+        external_id: str,
+        text: str,
+        *,
+        route: ChannelRoute | None = None,
+    ) -> None:
+        app = route.app if route else self.app
+        app.outbox.enqueue(
             session_key=DEFAULT_SESSION,
             channel=self.name,
             recipient=recipient,
             text=text,
             kind="notice",
             dedupe_key=f"dingtalk-notice:{external_id}",
-            extra={"interactive": True},
+            extra={"interactive": True, **(route.authority if route else {})},
         )
 
     async def _stranger(self, recipient: str, staff: str, label: str) -> None:
@@ -380,6 +448,12 @@ class DingTalkChannel:
             f"pa channels approve dingtalk {request.code}\n\n"
             f"The pairing code expires in {int(PAIRING_TTL_S // 60)} minutes."
         )
+        if self.app.identities is not None:
+            text = (
+                "Open your Personal Agent workspace, choose a space, and use Devices → "
+                "Generate channel binding code. Send /bind followed by that code here. "
+                "New collaborators must first accept a project invitation."
+            )
         try:
             await self.api.send_message(self.robot_code, staff, text, markdown=False)
         except (ChannelError, DeliveryUncertain):
