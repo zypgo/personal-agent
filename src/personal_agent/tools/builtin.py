@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
@@ -161,7 +162,7 @@ async def send_message_tool(
         run_id=rc.run_id,
         dedupe_key=f"{rc.work_id}:{digest}",
         on_sent=edits or None,
-        extra={"interactive": rc.origin.interactive},
+        extra={"interactive": rc.origin.interactive, **rc.authority()},
     )
     if message_id is None:
         return "That exact message was already queued for this task; not sending it twice."
@@ -274,16 +275,25 @@ async def schedule_tool(
             "cron": cron, "timezone": timezone, "session": session,
         }  # fmt: skip
         plan = _plan_create(rc, args)
-        if plan.cron is not None:
-            timer = timers.add_schedule(
-                name=plan.name, prompt=plan.prompt, cron=plan.cron, tz=plan.timezone,
-                session_key=plan.session_key, trust=plan.trust, created_by="agent",
-            )  # fmt: skip
-        else:
-            timer = timers.add_followup(
-                name=plan.name, prompt=plan.prompt, due_at=plan.due_at or 0.0,
-                session_key=plan.session_key, trust=plan.trust, created_by="agent",
-            )  # fmt: skip
+        rc.require_authorized()
+        # A timer without its initiating identity would later default to the space owner.
+        # Commit the scheduled work and its authority as one indivisible operation.
+        with rc.app.db.tx():
+            if plan.cron is not None:
+                timer = timers.add_schedule(
+                    name=plan.name, prompt=plan.prompt, cron=plan.cron, tz=plan.timezone,
+                    session_key=plan.session_key, trust=plan.trust, created_by="agent",
+                )  # fmt: skip
+            else:
+                timer = timers.add_followup(
+                    name=plan.name, prompt=plan.prompt, due_at=plan.due_at or 0.0,
+                    session_key=plan.session_key, trust=plan.trust, created_by="agent",
+                )  # fmt: skip
+            rc.app.db.kv_set(
+                f"timer_origin:{timer.id}",
+                json.dumps({**rc.authority(), "origin": rc.origin.to_json()}),
+                now=rc.app.clock.now(),
+            )
     except TimerError as exc:
         return f"Error: {exc}"
     note = (
@@ -324,6 +334,9 @@ def _schedule_category(_rc: RunContext, args: dict[str, Any]) -> Category:
 
 
 def register_builtin(registry: ToolRegistry, config: Config | None = None) -> None:
+    from personal_agent.tools.jobs import register_jobs
+
+    register_jobs(registry, config)
     """The tools every agent has. `config.tools` switches the optional families on and off."""
     from personal_agent.tools.artifacts import register_artifacts
     from personal_agent.tools.files import register_files

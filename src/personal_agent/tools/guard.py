@@ -116,6 +116,7 @@ class ToolGuard:
         self, tool: ToolDef, args: dict[str, Any], rc: RunContext, call_id: str
     ) -> Decision:
         """The policy's decision for one call (made once per call id, and audited)."""
+        rc.require_authorized()
         cached = rc.decisions.get(call_id)
         if cached is not None:
             return cached
@@ -183,6 +184,7 @@ class ToolGuard:
         """What the model gets back for one tool call: the tool's result if it was allowed and ran,
         otherwise the reason it did not. Decide, refuse or run; nothing else happens here."""
         rc: RunContext = tool_context.context
+        rc.require_authorized()
         call_id = tool_context.tool_call_id
         args = parse_args(raw_args)
 
@@ -197,6 +199,7 @@ class ToolGuard:
 
         if decision.verdict is not Verdict.ALLOW:
             return self._refusal(decision, rc, call_id)
+        rc.require_authorized()  # A remote policy review may have outlived the actor's grant.
         return await self._run(tool, original, tool_context, raw_args, args)
 
     def _after_approval(self, tool: ToolDef, args: dict[str, Any], rc: RunContext) -> Decision:
@@ -234,8 +237,14 @@ class ToolGuard:
         outcome = "ok"
         app.audit.set_outcome(rc.run_id, call_id, "running")  # durable marker: it may have started
         limit = tool.timeout_of(app, args) or app.config.runtime.tool_timeout_s
+
+        async def authorized_call() -> Any:
+            # wait_for schedules a separate task. Recheck when that task actually starts.
+            rc.require_authorized()
+            return await original.on_invoke_tool(tool_context, raw_args)
+
         try:
-            result = await asyncio.wait_for(original.on_invoke_tool(tool_context, raw_args), limit)
+            result = await asyncio.wait_for(authorized_call(), limit)
         except TimeoutError:
             outcome = "timeout"
             result = (
