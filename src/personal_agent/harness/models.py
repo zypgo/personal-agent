@@ -6,7 +6,6 @@ scripted model and users can point `base_url` at any OpenAI-compatible server.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from typing import Any
 
@@ -17,22 +16,24 @@ from openai import AsyncOpenAI
 from openai.types.shared import Reasoning
 
 from personal_agent.config import ModelConfig
+from personal_agent.harness.endpoints import Endpoint, model_endpoint
 from personal_agent.harness.errors import ModelUnavailable
 
 ModelFactory = Callable[[str], Model]
 
 
-def make_client(cfg: ModelConfig, **options: Any) -> AsyncOpenAI:
+def make_client(
+    cfg: ModelConfig, *, endpoint: Endpoint | None = None, **options: Any
+) -> AsyncOpenAI:
     """An OpenAI client for the configured endpoint (`options` are passed on: timeout, retries)."""
-    key = os.environ.get("OPENAI_API_KEY") or None
-    base_url = cfg.base_url or os.environ.get("OPENAI_BASE_URL") or None
-    if key is None:
-        if base_url is None:
-            raise ModelUnavailable(
-                "OPENAI_API_KEY is not set. Put it in ~/.personal-agent/.env (see .env.example)."
-            )
-        key = "not-needed"  # many local OpenAI-compatible servers ignore the key
-    return AsyncOpenAI(api_key=key, base_url=base_url, **options)
+    resolved = endpoint or model_endpoint(cfg)
+    if resolved.missing_key:
+        raise ModelUnavailable(
+            f"{resolved.api_key_env} is not set. Put it in the agent's .env (see `pa doctor`)."
+        )
+    # Many local OpenAI-compatible servers ignore the key. Passing one explicitly also stops the
+    # SDK from falling back to OPENAI_API_KEY when a different credential was selected.
+    return AsyncOpenAI(api_key=resolved.key or "not-needed", base_url=resolved.base_url, **options)
 
 
 class OpenAIModels:

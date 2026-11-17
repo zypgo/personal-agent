@@ -26,6 +26,7 @@ from agents import (
     RunHooks,
     Runner,
     RunResult,
+    RunResultStreaming,
     RunState,
     Tool,
     TResponseInputItem,
@@ -57,6 +58,7 @@ from personal_agent.harness.instructions import (
 from personal_agent.harness.models import cache_key_for, model_settings, shares_prompt_cache
 from personal_agent.harness.pricing import cost_usd
 from personal_agent.harness.runctx import Origin, RunContext
+from personal_agent.harness.streaming import consume_stream
 from personal_agent.memory.store import PreferencesUnavailable
 from personal_agent.tools.guard import ToolGuard, parse_args, summarize
 from personal_agent.tools.skills import shell_dir
@@ -486,9 +488,14 @@ class Harness:
         app, cfg = self.app, self.app.config
         resuming = isinstance(run_input, RunState)
         try:
-            result: RunResult = await Runner.run(
-                agent,
-                run_input,
+            stream = (
+                cfg.web.enabled
+                and cfg.web.stream_responses
+                and ctx.origin.channel == "web"
+                and ctx.origin.interactive
+                and ctx.profile == "full"
+            )
+            options: dict[str, Any] = dict(
                 session=SdkSession(
                     app.sessions,
                     ctx.session_key,
@@ -507,6 +514,12 @@ class Harness:
                     reasoning_item_id_policy=cfg.model.reasoning_item_ids,
                 ),
             )
+            result: RunResult | RunResultStreaming
+            if stream:
+                result = Runner.run_streamed(agent, run_input, **options)
+                await consume_stream(result, app.live, ctx.run_id)
+            else:
+                result = await Runner.run(agent, run_input, **options)
         except MaxTurnsExceeded:
             return self._finish_step_limit(ctx)
         except BudgetExceeded as exc:
@@ -519,7 +532,7 @@ class Harness:
         return self._finish(ctx, str(result.final_output or "").strip())
 
     # ---- waiting for the owner ----------------------------------------------------------------
-    def _suspend(self, ctx: RunContext, result: RunResult) -> RunOutcome:
+    def _suspend(self, ctx: RunContext, result: RunResult | RunResultStreaming) -> RunOutcome:
         """Save the run and ask the owner. Everything happens in one transaction: either the run
         is suspended *and* the owner has been queued a request, or neither."""
         app = self.app
@@ -651,7 +664,7 @@ class Harness:
                     kind="message" if final_text else "notice",
                     run_id=ctx.run_id,
                     dedupe_key=f"run:{ctx.run_id}:final",
-                    extra={"interactive": True},
+                    extra={"interactive": True, "final_response": True},
                 )
                 if message_id is not None:
                     queued.append(message_id)

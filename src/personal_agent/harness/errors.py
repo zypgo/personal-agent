@@ -55,7 +55,7 @@ def classify(exc: BaseException) -> Failure:
             True,
             300.0,
             text,
-            "There is no OpenAI API key yet. Run `pa doctor` to see where to put it.",
+            "The model API key is missing. Run `pa doctor` to see which variable to set.",
         )
     if isinstance(exc, BudgetExceeded) and exc.scope == "daily":
         return Failure(
@@ -86,7 +86,10 @@ def classify(exc: BaseException) -> Failure:
         )
     if isinstance(exc, openai.AuthenticationError | openai.PermissionDeniedError):
         return Failure(
-            True, 300.0, text, "OpenAI rejected the API key. Check OPENAI_API_KEY (`pa doctor`)."
+            True,
+            300.0,
+            text,
+            "The model provider rejected the API key. Run `pa doctor` to check the configured key.",
         )
     if isinstance(exc, openai.RateLimitError):
         quota = "insufficient_quota" in str(exc)
@@ -94,7 +97,7 @@ def classify(exc: BaseException) -> Failure:
             True,
             900.0 if quota else 60.0,
             text,
-            "The OpenAI account is out of quota or credit." if quota else None,
+            "The model provider account is out of quota or credit." if quota else None,
         )
     if isinstance(
         exc, openai.APITimeoutError | openai.APIConnectionError | openai.InternalServerError
