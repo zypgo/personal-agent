@@ -17,6 +17,7 @@ import contextlib
 import logging
 import os
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -26,6 +27,12 @@ from personal_agent.channels.ingress import Accepted, Ingress, Upload
 from personal_agent.channels.pairing import PAIRING_TTL_S
 from personal_agent.channels.telegram.api import NotSent, TelegramApi, TelegramApiError
 from personal_agent.channels.telegram.render import Piece, render
+from personal_agent.collaboration.channel_routing import (
+    incoming_route,
+    legacy_allowed,
+    validate_delivery,
+)
+from personal_agent.collaboration.models import OWNER_ID, OWNER_SPACE, IdentityError
 from personal_agent.core.artifacts import ArtifactError
 from personal_agent.core.outbox import OutMessage
 from personal_agent.core.sessions import DEFAULT_SESSION
@@ -63,22 +70,31 @@ class PartialDelivery(Exception):
     "not delivered": sending the whole message again would repeat the pieces that arrived."""
 
 
-def approval_markup(ids: list[int], *, all_button: bool = True) -> dict[str, Any]:
+def approval_markup(
+    ids: list[int],
+    *,
+    all_button: bool = True,
+    space_id: str | None = None,
+    membership_version: int | None = None,
+) -> dict[str, Any]:
     """Buttons under an approval request: one pair per request, and "all" when there are several
     (and `all_button`: "all" is what is waiting in the owner's own conversation, which is not what
     a timer's run or a webhook asked about)."""
+    # IDs are local to a space. Old buttons must never approve a coincidentally identical ID
+    # after this external account is rebound to a different space or membership generation.
+    prefix = f"ap3:{space_id}:{membership_version}:" if space_id is not None else "ap:"
     rows = [
         [
-            {"text": f"✅ Approve #{i}", "callback_data": f"ap:{i}:y"},
-            {"text": f"❌ Deny #{i}", "callback_data": f"ap:{i}:n"},
+            {"text": f"✅ Approve #{i}", "callback_data": f"{prefix}{i}:y"},
+            {"text": f"❌ Deny #{i}", "callback_data": f"{prefix}{i}:n"},
         ]
         for i in ids[:6]
     ]
     if len(ids) > 1 and all_button:
         rows.append(
             [
-                {"text": "✅ Approve all", "callback_data": "ap:all:y"},
-                {"text": "❌ Deny all", "callback_data": "ap:all:n"},
+                {"text": "✅ Approve all", "callback_data": f"{prefix}all:y"},
+                {"text": "❌ Deny all", "callback_data": f"{prefix}all:n"},
             ]
         )
     return {"inline_keyboard": rows}
@@ -108,6 +124,30 @@ class TelegramChannel:
         self._sleep = sleep
         self._owns_api = api is None
         self._token = os.environ.get(self.cfg.token_env, "").strip()
+        self._account_id = ""
+        self._account_lock = asyncio.Lock()
+        self._transport = self
+
+    def for_space(self, app: App) -> TelegramChannel:
+        """Delivery-only view: shared authenticated transport, space-local artifacts and guards."""
+        view = TelegramChannel(app, api=self.api, sleep=self._sleep)
+        view.cfg = self.cfg
+        view._transport = self._transport
+        return view
+
+    async def _account(self) -> str:
+        transport = self._transport
+        if not transport._account_id:
+            async with transport._account_lock:
+                if not transport._account_id:
+                    me = await transport.api.get_me()
+                    bot_id = str(me.get("id", ""))
+                    if not bot_id.isdigit() or bot_id == "0":
+                        raise ChannelError(
+                            "Telegram did not confirm the bot identity", permanent=True
+                        )
+                    transport._account_id = bot_id
+        return transport._account_id
 
     # ---- the connection ---------------------------------------------------------------
     @property
@@ -147,11 +187,20 @@ class TelegramChannel:
                     permanent=True,
                 )
             chat = recent.sender
-        if not pairing.is_approved(self.name, chat):
-            raise ChannelError("that Telegram account is not approved (any more)", permanent=True)
+        validate_delivery(
+            self.app,
+            message,
+            channel=self.name,
+            account=self._transport._account_id,
+            sender=str(chat),
+            recipient=str(chat),
+            legacy_sender=str(chat),
+        )
         return str(chat)
 
     async def send(self, message: OutMessage) -> None:
+        if self.app.identities is not None:
+            await self._account()
         chat = self._chat_for(message)
         if message.kind == "artifact" or message.payload.get("artifacts"):
             await self._send_document(chat, message)
@@ -160,12 +209,28 @@ class TelegramChannel:
         ids = [int(i) for i in message.payload.get("approval_ids") or []]
         markup = None
         if message.kind == "approval_request" and ids:
-            markup = approval_markup(ids, all_button=message.session_key == DEFAULT_SESSION)
+            scoped = self.app.identities is not None
+            actor = str(message.payload.get("principal_id") or self.app.space_owner_id)
+            versions = self.app.actor_snapshot(actor) if scoped else {}
+            markup = approval_markup(
+                ids,
+                all_button=message.session_key == DEFAULT_SESSION,
+                space_id=self.app.space_id if scoped else None,
+                membership_version=versions.get("membership_version"),
+            )
         silent = message.urgency == "low"
         for index, piece in enumerate(pieces):
             last = index == len(pieces) - 1
             try:
-                await self._send_piece(chat, piece, markup if last else None, silent)
+                if self._chat_for(message) != chat:
+                    raise ChannelError("The Telegram recipient changed", permanent=True)
+                await self._send_piece(
+                    chat,
+                    piece,
+                    markup if last else None,
+                    silent,
+                    authorize=lambda: self._chat_for(message),
+                )
             except ChannelError as exc:
                 if index:
                     raise PartialDelivery(
@@ -216,11 +281,19 @@ class TelegramChannel:
             raise
 
     async def _send_piece(
-        self, chat: str, piece: Piece, markup: dict[str, Any] | None, silent: bool
+        self,
+        chat: str,
+        piece: Piece,
+        markup: dict[str, Any] | None,
+        silent: bool,
+        *,
+        authorize: Callable[[], str],
     ) -> None:
         api = self.api
         for attempt in range(1, MAX_SEND_ATTEMPTS + 1):
             try:
+                if authorize() != chat:
+                    raise ChannelError("The Telegram recipient changed", permanent=True)
                 try:
                     await api.send_message(
                         chat, piece.html, parse_mode="HTML", reply_markup=markup, silent=silent
@@ -229,6 +302,10 @@ class TelegramChannel:
                     if not exc.unparsable:
                         raise
                     # Telegram did not like our markup: send the words, plain.
+                    if authorize() != chat:
+                        raise ChannelError(
+                            "The Telegram recipient changed", permanent=True
+                        ) from None
                     await api.send_message(chat, piece.plain, reply_markup=markup, silent=silent)
                 return
             except NotSent as exc:
@@ -267,6 +344,10 @@ class TelegramChannel:
                     log.error("Telegram rejected the bot token; the channel is off (%s)", exc)
                     return
                 raise
+            bot_id = str(me.get("id", ""))
+            if not bot_id.isdigit() or bot_id == "0":
+                raise ChannelError("Telegram did not confirm the bot identity", permanent=True)
+            self._account_id = bot_id
             log.info("Telegram bot @%s is listening", me.get("username", "?"))
             await self._poll(daemon, ingress)
         except asyncio.CancelledError:
@@ -367,16 +448,51 @@ class TelegramChannel:
         if chat.get("type") != "private" or sender.get("is_bot") or "id" not in sender:
             return
         sender_id, chat_id = str(sender["id"]), str(chat["id"])
+        if sender_id != chat_id:
+            return  # Only the provider-confirmed sender's own private conversation is trusted.
+        account = await self._account() if self.app.identities is not None else ""
+        text = str(message.get("text") or message.get("caption") or "")
+        if (
+            self.app.identities is not None
+            and isinstance(message.get("text"), str)
+            and not any(message.get(k) for k in _FORWARD_FIELDS)
+            and text.strip().split(maxsplit=1)[0:1] == ["/bind"]
+        ):
+            parts = text.strip().split()
+            try:
+                if len(parts) != 2:
+                    raise IdentityError("Use /bind followed by the one-time code.")
+                self.app.identities.bind_channel(parts[1], self.name, account, sender_id, chat_id)
+            except IdentityError:
+                await self._say(
+                    chat_id,
+                    "The binding code is invalid or expired. Generate a new one in the workspace Devices page.",
+                )
+            else:
+                await self._say(
+                    chat_id,
+                    "This chat is now bound to your selected space. Your next message will be sent there.",
+                )
+            return
         pairing = self.app.pairing
-        if not pairing.is_approved(self.name, sender_id):
+        route = incoming_route(
+            self.app,
+            ingress,
+            channel=self.name,
+            account=account,
+            sender=sender_id,
+            recipient=chat_id,
+            legacy_sender=sender_id,
+        )
+        if route is None:
             await self._stranger(sender, chat_id)
             return
-        pairing.touch(self.name, sender_id)
+        if route.legacy or (route.app.space_id == OWNER_SPACE and route.principal_id == OWNER_ID):
+            pairing.touch(self.name, sender_id)
 
-        text = str(message.get("text") or message.get("caption") or "")
         images: list[Upload] = []
         voice: Upload | None = None
-        media = self.app.config.media
+        media = route.app.config.media
         try:
             if photos := message.get("photo"):
                 images.append(await self._photo(photos))
@@ -419,7 +535,23 @@ class TelegramChannel:
             or replied.get("text")
             or replied.get("caption")
         )
-        result = await ingress.owner_message(
+        # File downloads yield to other requests. A membership or binding change while fetching
+        # must prevent this message from reaching even a newly valid but different identity.
+        current = incoming_route(
+            self.app,
+            ingress,
+            channel=self.name,
+            account=account,
+            sender=sender_id,
+            recipient=chat_id,
+            legacy_sender=sender_id,
+        )
+        if current is None or current.app is not route.app or current.authority != route.authority:
+            await self._say(
+                chat_id, "Your channel authorization changed. Bind the selected space again."
+            )
+            return
+        result = await route.ingress.owner_message(
             channel=self.name,
             text=text,
             images=images,
@@ -428,6 +560,7 @@ class TelegramChannel:
             recipient=chat_id,
             reply_to=str(quoted) if quoted else None,
             forwarded=any(message.get(k) for k in _FORWARD_FIELDS),
+            **route.authority,
         )
         await self._after(result, chat_id)
 
@@ -458,13 +591,19 @@ class TelegramChannel:
             f"    pa channels approve telegram {request.code}\n\n"
             f"The code works for {int(PAIRING_TTL_S // 60)} minutes."
         )
+        if self.app.identities is not None:
+            text = (
+                "Open your Personal Agent workspace, choose a space, and use Devices → "
+                "Generate channel binding code. Send /bind followed by that code here. "
+                "New collaborators must first accept a project invitation."
+            )
         try:
             await self.api.send_message(chat_id, text)
         except (TelegramApiError, NotSent, httpx.HTTPError):
             log.warning("could not send a pairing code", exc_info=True)
             return  # not marked as told: they get it with their next message
         self.app.pairing.mark_notified(request.code)
-        log.info("Telegram pairing request %s from %r", request.code, request.label)
+        log.info("Telegram channel onboarding instructions delivered")
 
     async def _say(self, chat_id: str, text: str) -> None:
         """A direct reply to something that happened right now (an error, a refusal)."""
@@ -477,11 +616,55 @@ class TelegramChannel:
         """The owner pressed Approve or Deny under a request."""
         sender_id = str((callback.get("from") or {}).get("id", ""))
         callback_id = str(callback.get("id", ""))
-        if not self.app.pairing.is_approved(self.name, sender_id):
+        message = callback.get("message") or {}
+        chat = message.get("chat") or {}
+        # Old test/provider callbacks can omit chat.type, but any explicit non-private type fails.
+        if chat.get("type", "private") != "private" or str(chat.get("id", "")) != sender_id:
+            with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
+                await self.api.answer_callback(callback_id)
+            return
+        account = await self._account() if self.app.identities is not None else ""
+        route = incoming_route(
+            self.app,
+            ingress,
+            channel=self.name,
+            account=account,
+            sender=sender_id,
+            recipient=sender_id,
+            legacy_sender=sender_id,
+        )
+        can_approve = route is not None
+        if route is not None and route.app.identities is not None:
+            try:
+                route.app.identities.require_access(
+                    route.principal_id, route.app.space_id, manage=True
+                )
+            except IdentityError:
+                can_approve = False
+        if not can_approve or route is None:
             with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
                 await self.api.answer_callback(callback_id)
             return
         parts = str(callback.get("data", "")).split(":")
+        if len(parts) == 5 and parts[0] == "ap3":
+            if parts[1] != route.app.space_id or parts[2] != str(route.membership_version):
+                with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
+                    await self.api.answer_callback(
+                        callback_id,
+                        "This approval belongs to another space or an older authorization.",
+                    )
+                return
+            parts = ["ap", *parts[3:]]
+        elif (
+            self.app.identities is not None
+            and not route.legacy
+            and not (route.app.space_id == OWNER_SPACE and route.principal_id == OWNER_ID)
+        ):
+            with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
+                await self.api.answer_callback(
+                    callback_id, "Open the workspace to review this approval."
+                )
+            return
         if (
             len(parts) != 3
             or parts[0] != "ap"
@@ -491,12 +674,15 @@ class TelegramChannel:
             with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
                 await self.api.answer_callback(callback_id)
             return
-        answer = ingress.commands.decide(
-            parts[2] == "y", [parts[1]], self.name, ingress.session_key
+        answer = route.ingress.commands.decide(
+            parts[2] == "y",
+            [parts[1]],
+            self.name,
+            route.ingress.session_key,
+            principal_id=route.principal_id,
         )
         with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
             await self.api.answer_callback(callback_id, answer.splitlines()[0] if answer else "")
-        message = callback.get("message") or {}
         if message.get("message_id") and (message.get("chat") or {}).get("id"):
             with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
                 await self.api.clear_buttons(message["chat"]["id"], message["message_id"])
@@ -525,6 +711,26 @@ class TelegramChannel:
                 if now - last_sent >= TYPING_EVERY_S:
                     last_sent = now
                     recent = app.pairing.recent_sender(self.name)
-                    if recent is not None:
+                    bound_owner = False
+                    if recent is not None and app.identities is not None:
+                        await self._account()
+                        bound = app.identities.lookup_channel(
+                            self.name, self._transport._account_id, recent.sender
+                        )
+                        bound_owner = (
+                            bound is not None
+                            and bound.space_id == app.space_id
+                            and bound.principal_id == OWNER_ID
+                        )
+                    if recent is not None and (
+                        bound_owner
+                        or legacy_allowed(
+                            app,
+                            self.name,
+                            self._transport._account_id,
+                            recent.sender,
+                            recent.sender,
+                        )
+                    ):
                         with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
                             await self.api.send_chat_action(recent.sender)
