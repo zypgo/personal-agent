@@ -1,6 +1,6 @@
 # personal-agent
 
-一个**跑在你自己电脑上的常驻个人 agent**：
+一个**面向个人与可信小团队的常驻 Agent**：控制端可运行在自有主机或现有 Railway，代码任务由自有电脑执行。
 
 - **模型**：默认 OpenAI；支持兼容端点、自定义密钥变量，以及独立的语音转写服务。托管搜索按 Provider 能力启用。
 - **引擎**：[OpenAI Agents SDK](https://github.com/openai/openai-agents-python)，封装在 `harness/` 端口之后。
@@ -12,6 +12,17 @@
 > 手机连接：[docs/MOBILE.md](docs/MOBILE.md) · 本轮修复与升级：[docs/RELIABILITY.md](docs/RELIABILITY.md)
 > 监测 GitHub 新 PR 并回收：[docs/PR_PLAYBOOK.md](docs/PR_PLAYBOOK.md)
 > **0.2.0**：[功能、架构与升级](docs/V0_2.md) · [钉钉](docs/DINGTALK.md) · [文件交付](docs/ARTIFACTS.md) · [Provider 配置](docs/PROVIDERS.md) · [最新参考项目复核](docs/REFERENCE_REVIEW.md)
+
+## V3.0（包版本 0.3.0）
+
+面向个人与约 2–5 名可信协作者：私人/项目空间、独立成员与设备、手机工作台、持久后台任务、步骤和补充回答、自有 Docker 执行节点、固定渠道绑定及整实例备份恢复。
+
+**部署选择：一个已有 Railway 服务 + 持久卷 + 自己的电脑。** 不新增付费云沙箱；电脑离线时，云端 API 对话和审批可继续，执行任务等待设备上线。
+
+- [V3 架构、实现与升级边界](docs/V3.md)
+- [协作与手机操作](docs/COLLABORATION.md) · [持久任务协议](docs/EXECUTION.md)
+- [自有节点](docs/NODES.md) · [已有 Railway 服务部署](docs/RAILWAY.md)
+- [V3 验证记录与上线验收](docs/V3_ACCEPTANCE.md)
 
 ## 0.2.0 新增
 
