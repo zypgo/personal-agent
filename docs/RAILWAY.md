@@ -37,6 +37,12 @@ RAILWAY_DEPLOYMENT_DRAINING_SECONDS=45
 
 挂载卷的服务重新部署会有短暂中断，因为同一个卷不能同时由新旧实例运行；SQLite、Inbox、Outbox、任务尝试和 Runner 收据使恢复可追踪，但不宣称零停机。[健康检查说明](https://docs.railway.com/deployments/healthchecks)也说明检查只用于部署就绪，并不是持续监控。程序仅给健康检查路径接受 Railway 专用 Host，其他 API 继续校验精确 Host、Origin 和 CSRF 请求头。
 
+### 未登录入口按来源地址限流
+
+注册、恢复和节点配对这三个未登录入口共用一个按来源地址的计数（每次调用都算，60 秒内 10 次）；旧的浏览器配对另有一个只统计失败的计数，额度相同。应用读取的是 TCP 对端地址，不读任何转发头；而 Railway 在应用前面有一层边缘代理，[官方文档](https://docs.railway.com/networking/public-networking/specs-and-limits)（2026-11-17 查阅）说明它用 `X-Real-IP` 传递访客地址。所以在 Railway 上所有访客看起来来自同一个代理地址，共用一个计数。
+
+配对码、恢复码都是高熵的一次性凭据，这不是认证绕过，而是可用性取舍：有人持续请求，会让这些入口对所有人短暂返回 429（约一分钟）。已登录用户的接口和节点的任务请求不受这个限流影响。不要为此盲目放开 uvicorn 的 `FORWARDED_ALLOW_IPS`：uvicorn 只认 `X-Forwarded-For`，而上述文档页没有列出这个头；信任可被伪造的转发头反而会让限流失效。若它成为实际问题，应作为带测试的单独变更，决定是否只在确认来自平台代理时读取 `X-Real-IP`。
+
 ## 2. 首次打开网页与手机
 
 通过 Railway 的 SSH/终端进入这个**既有服务**，使用入口的管理员模式。它会先切换到同一服务账号，避免 root 命令产生随后无法访问的 SQLite/WAL 文件。
