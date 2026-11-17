@@ -69,8 +69,31 @@ class RunContext:
     content the owner did not write, an address outside this set needs the owner's approval: an
     address can carry data out. Insertion-ordered so the oldest can be dropped."""
 
+    principal_id: str = ""
+    membership_version: int | None = None
+    principal_version: int | None = None
+
     def __post_init__(self) -> None:
+        self.principal_id = self.principal_id or self.app.space_owner_id
+        if self.membership_version is None and self.principal_version is None:
+            snapshot = self.app.actor_snapshot(self.principal_id)
+            self.membership_version = snapshot.get("membership_version")
+            self.principal_version = snapshot.get("principal_version")
         self.work_id = self.work_id or f"run:{self.run_id}"
+
+    def require_authorized(self) -> None:
+        self.app.require_actor(
+            self.principal_id,
+            version=self.membership_version,
+            principal_version=self.principal_version,
+        )
+
+    def authority(self) -> dict[str, Any]:
+        return {
+            "principal_id": self.principal_id,
+            "membership_version": self.membership_version,
+            "principal_version": self.principal_version,
+        }
 
     def know_urls(self, urls: Iterable[str]) -> None:
         for key in keys_of(urls):
@@ -96,6 +119,7 @@ class RunContext:
     def to_meta(self) -> dict[str, Any]:
         """What must survive while the run waits for the owner (small; no app handles)."""
         return {
+            **self.authority(),
             "profile": self.profile,
             "origin": self.origin.to_json(),
             "trust": self.trust.value,
@@ -129,4 +153,7 @@ class RunContext:
             known_urls=dict.fromkeys(str(k) for k in meta.get("known_urls") or []),
             work_id=str(meta.get("work_id") or ""),
             cost_cap_usd=cap,
+            principal_id=str(meta.get("principal_id") or app.space_owner_id),
+            membership_version=meta.get("membership_version"),
+            principal_version=meta.get("principal_version"),
         )

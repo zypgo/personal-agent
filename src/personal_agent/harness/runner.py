@@ -34,6 +34,7 @@ from agents import (
 from agents.exceptions import MaxTurnsExceeded
 from agents.models.interface import Model
 
+from personal_agent.collaboration.models import AccessDenied
 from personal_agent.core.approvals import (
     DENIED,
     EXPIRED,
@@ -107,6 +108,7 @@ class RunAccounting(RunHooks[RunContext]):
         input_items: list[TResponseInputItem],
     ) -> None:
         ctx = context.context
+        ctx.require_authorized()
         self.app.budget.check_run(ctx.run_id, ctx.cost_cap_usd)  # raises BudgetExceeded
 
     async def on_llm_end(
@@ -202,6 +204,14 @@ class Harness:
                 return Origin(
                     channel=event.source, recipient=event.payload.get("recipient"), interactive=True
                 )
+        for event in reversed(batch.events):
+            origin = event.payload.get("origin")
+            if isinstance(origin, dict):
+                return Origin(
+                    channel=str(origin.get("channel") or "web"),
+                    recipient=origin.get("recipient"),
+                    interactive=False,
+                )
         return Origin(channel=self.app.notify_channel(), interactive=False)
 
     @staticmethod
@@ -229,11 +239,42 @@ class Harness:
 
     # ---- entry point -------------------------------------------------------------------
     async def run(self, batch: Batch) -> RunOutcome:
+        manager = self.app.collaboration
+        if manager is None:
+            return await self._run_batch(batch)
+        async with manager.run_slots:
+            return await self._run_batch(batch)
+
+    def _event_authorized(self, event: Event) -> bool:
+        try:
+            actor = str(
+                event.payload.get("principal_id")
+                or event.payload.get("actor_id")
+                or self.app.space_owner_id
+            )
+            self.app.require_actor(
+                actor,
+                version=event.payload.get("membership_version"),
+                principal_version=event.payload.get("principal_version"),
+            )
+            return True
+        except AccessDenied:
+            return False
+
+    async def _run_batch(self, batch: Batch) -> RunOutcome:
         """Handle one batch of events. Returns an outcome for every ordinary ending (including a
         run that hit its step limit or is waiting for approval); raises for failures that the
         inbox should schedule a retry for."""
         app = self.app
-        app.budget.check_day()  # before any state changes: deferred events stay exactly as they were
+        if app.identities is not None:
+            # Ownership changes may happen between daemon ticks; don't use a cached former
+            # owner as the default authority of system/legacy background events.
+            app.space_owner_id = app.identities.space(app.space_id).owner_id
+        active = [event for event in batch.events if self._event_authorized(event)]
+        if not active:
+            return RunOutcome("-", "silent", error="authorization changed")
+        batch = Batch(batch.session_key, batch.owner, active, batch.lease_expires_at)
+        app.budget.check_day()  # deferred events stay exactly as they were
 
         resumes = [e for e in batch.events if e.kind == Kind.APPROVAL_RESPONSE]
         done = app.runs.handled(
@@ -245,13 +286,26 @@ class Harness:
         outcomes: list[RunOutcome] = []
         for event in resumes:
             outcomes.append(await self._resume(event))
-        if rest:
-            sub = Batch(
-                session_key=batch.session_key,
-                owner=batch.owner,
-                events=rest,
-                lease_expires_at=batch.lease_expires_at,
+        # Shared conversations may contain several people. Never grant the newest person's
+        # authority or return address to somebody else's event in the same inbox claim.
+        from itertools import groupby
+
+        def actor_key(event: Event) -> tuple[Any, ...]:
+            if "principal_id" not in event.payload and "actor_id" not in event.payload:
+                return (app.space_owner_id, "legacy")
+            return (
+                event.payload.get("principal_id")
+                or event.payload.get("actor_id")
+                or app.space_owner_id,
+                event.payload.get("membership_version"),
+                event.payload.get("principal_version"),
+                event.source,
+                event.payload.get("recipient"),
+                str(event.payload.get("origin", "")),
             )
+
+        for _, events in groupby(rest, key=actor_key):
+            sub = Batch(batch.session_key, batch.owner, list(events), batch.lease_expires_at)
             outcomes.append(await self._run_events(sub))
         if not outcomes:
             return RunOutcome("-", "silent")
@@ -282,6 +336,13 @@ class Harness:
             tainted=not batch.trusted,
             work_id=f"events:{min(batch.ids)}",
             owner_request=self.owner_request_for(batch),
+            principal_id=str(
+                batch.events[-1].payload.get("principal_id")
+                or batch.events[-1].payload.get("actor_id")
+                or app.space_owner_id
+            ),
+            membership_version=batch.events[-1].payload.get("membership_version"),
+            principal_version=batch.events[-1].payload.get("principal_version"),
         )
         ctx.know_urls(self.owner_urls_for(batch))
         dreamer = Dreamer(app) if profile == "dream" else None
@@ -327,6 +388,11 @@ class Harness:
                         app.approvals.drop_run(ctx.run_id)
                     app.runs.finish(ctx.run_id, "cancelled", error="cancelled")
             raise
+        except AccessDenied:
+            with app.db.tx():
+                app.approvals.drop_run(ctx.run_id)
+                app.runs.finish(ctx.run_id, "cancelled", error="authorization changed")
+            return RunOutcome(ctx.run_id, "cancelled", error="authorization changed")
         except Exception as exc:
             failure = classify(exc)
             if resuming and ctx.profile != "dream":
@@ -422,6 +488,7 @@ class Harness:
         key, run_id = batch.session_key, ctx.run_id
 
         await self._prepare_plugins()
+        ctx.require_authorized()
         instructions = self._instructions(ctx.profile)
         # Build the model before touching any state: with no API key this raises, and a later
         # retry must find the session exactly as it was.
@@ -453,7 +520,8 @@ class Harness:
         elif len(fresh) == len(batch.events):
             # A conversation that carries on and has grown long is summarised before the new
             # words are added, so that the summary never covers them.
-            await Compactor(app).compact(key, run_id)
+            await Compactor(app).compact(key, run_id, authorize=ctx.require_authorized)
+            ctx.require_authorized()
 
         # Persist the triggering events first (idempotently), then run on the log alone. A retry
         # after a crash therefore resumes instead of duplicating the owner's message.
@@ -536,6 +604,7 @@ class Harness:
         """Save the run and ask the owner. Everything happens in one transaction: either the run
         is suspended *and* the owner has been queued a request, or neither."""
         app = self.app
+        ctx.require_authorized()
         state = result.to_state().to_string(context_serializer=lambda c: {"run_id": c.run_id})
         calls: list[PendingCall] = []
         for item in result.interruptions:
@@ -555,6 +624,7 @@ class Harness:
                 run_id=ctx.run_id,
                 dedupe_key=f"approval:{ctx.run_id}:{approvals[0].id}",
                 extra={
+                    **ctx.authority(),
                     "approval_ids": [a.id for a in approvals],
                     "interactive": ctx.origin.interactive,
                 },
@@ -578,12 +648,19 @@ class Harness:
         run = app.runs.get(run_id)
         model_name = (run.model if run else None) or app.config.model.main
         ctx = RunContext.from_meta(app, run_id, saved.session_key, saved.meta)
+        try:
+            ctx.require_authorized()
+        except AccessDenied:
+            app.approvals.drop_run(run_id)
+            app.runs.finish(run_id, "cancelled", error="authorization changed")
+            return RunOutcome(run_id, "cancelled", error="authorization changed")
         app.runs.set_status(run_id, "running")
         return await self._settle(ctx, self._continue(ctx, saved.state, model_name), resuming=True)
 
     async def _continue(self, ctx: RunContext, state_text: str, model_name: str) -> RunOutcome:
         app = self.app
         await self._prepare_plugins()
+        ctx.require_authorized()
         instructions = self._instructions(ctx.profile)
         model = app.model_factory(model_name)
         agent = self._agent(ctx, instructions, model)
@@ -651,6 +728,7 @@ class Harness:
         steps would either send the answer again after the retry, or (once the saved state of a run
         that waited for approval is gone) lose it."""
         app = self.app
+        ctx.require_authorized()
         queued = list(ctx.queued_messages)
         with app.db.tx():
             app.approvals.drop_run(ctx.run_id)
@@ -664,7 +742,7 @@ class Harness:
                     kind="message" if final_text else "notice",
                     run_id=ctx.run_id,
                     dedupe_key=f"run:{ctx.run_id}:final",
-                    extra={"interactive": True, "final_response": True},
+                    extra={"interactive": True, "final_response": True, **ctx.authority()},
                 )
                 if message_id is not None:
                     queued.append(message_id)
@@ -691,7 +769,7 @@ class Harness:
                     kind="notice",
                     run_id=ctx.run_id,
                     dedupe_key=f"run:{ctx.run_id}:{key}",
-                    extra={"interactive": ctx.origin.interactive},
+                    extra={"interactive": ctx.origin.interactive, **ctx.authority()},
                 )
             )
             app.runs.finish(ctx.run_id, "failed", error=error)
