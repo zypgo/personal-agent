@@ -130,9 +130,23 @@ class Transcript:
     def add_out(self, message: OutMessage) -> Turn | None:
         """A message a channel confirmed delivering. Recording the same message twice is a no-op."""
         details: dict[str, Any] = {"urgency": message.urgency}
+        if message.run_id:
+            details["run_id"] = message.run_id
+            if message.payload.get("final_response") is True:
+                details["final_response"] = True
         approvals = message.payload.get("approval_ids")
         if approvals:
             details["approval_ids"] = list(approvals)
+        if message.kind == "artifact":
+            # A plugin's payload is not an authority for filenames or downloadable IDs. Only
+            # store-owned snapshots associated with this exact notification become file cards.
+            artifacts = self.db.query(
+                """SELECT id,name,mime,size,sha256,expires_at FROM artifacts
+                   WHERE outbox_id=? AND session_key=? ORDER BY created_at,id LIMIT 1""",
+                (message.id, message.session_key),
+            )
+            if artifacts:
+                details["artifacts"] = [dict(row) for row in artifacts]
         return self._insert(OUT, message.channel, message.kind, message.text, message.id, details)
 
     def _insert(

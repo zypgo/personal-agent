@@ -48,6 +48,10 @@ class OutMessage:
         """Whether a duplicate is better than a message that never came: an alert, an answer to
         what the owner just said, a request the agent is blocked on. When the outcome of sending
         anything else is unknown it is parked as `maybe_sent` instead."""
+        # Files are one upload with a caption. Losing its acknowledgement must not duplicate
+        # the document, even when it answers a person who is currently waiting.
+        if self.kind == "artifact":
+            return False
         return (
             self.urgency == "urgent"
             or self.kind == "approval_request"
@@ -55,8 +59,8 @@ class OutMessage:
         )
 
 
-MUST_ARRIVE_SQL = """(urgency = 'urgent' OR kind = 'approval_request'
-                      OR COALESCE(json_extract(payload, '$.interactive'), 0) = 1)"""
+MUST_ARRIVE_SQL = """(kind != 'artifact' AND (urgency = 'urgent' OR kind = 'approval_request'
+                      OR COALESCE(json_extract(payload, '$.interactive'), 0) = 1))"""
 """`OutMessage.must_arrive`, for the queries that decide the same thing in the database."""
 
 

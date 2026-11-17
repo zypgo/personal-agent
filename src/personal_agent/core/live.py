@@ -1,8 +1,9 @@
 """A tiny in-process bus for "something just happened" nudges to the apps that are open.
 
-Nothing here is a source of truth. The database holds every message and every state; the bus only
-lets an open web page or a chat typing indicator learn about a change right away instead of at
-its next poll. A subscriber that misses an event loses nothing: it re-reads the database.
+The database is authoritative for committed messages and work state. Nudges let an open page
+or typing indicator notice changes immediately. Bounded answer previews are intentionally
+ephemeral: a subscriber replaces them from the current snapshot and replays durable history
+from the database. Losing a preview cannot lose a committed answer.
 """
 
 from __future__ import annotations
@@ -10,13 +11,42 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections import Counter
 from collections.abc import Iterator
 from typing import Any
 
+from personal_agent.security.redact import known_secret_values, redact
+from personal_agent.security.sanitize import scrub_surrogates, strip_invisible
+
 log = logging.getLogger(__name__)
 
 Event = dict[str, Any]
+
+MAX_DRAFT_CHARS = 32_000
+MAX_DRAFTS = 16
+
+
+def preview_text(text: str, *, settled: bool = False) -> str:
+    """Scrub a preview, including a known credential split across model chunks.
+
+    Withhold a suffix that could still become a secret; scrubbing individual deltas would
+    expose a token one piece at a time. The final message still comes from the durable outbox.
+    """
+    # Normalize before comparing suffixes: a hidden bidi/control character must not let a
+    # partial credential through just because its raw bytes did not match the known prefix.
+    text = scrub_surrogates(strip_invisible(text))
+    # Multiline credentials may themselves contain CRLF or hidden characters. Compare both
+    # sides in the same form or normalization could erase the only full-secret match.
+    known = [scrub_surrogates(strip_invisible(value)) for value in known_secret_values()]
+    end = len(text)
+    if not settled:
+        for secret in known:
+            for size in range(min(len(secret) - 1, len(text)), 0, -1):
+                if text.endswith(secret[:size]):
+                    end = min(end, len(text) - size)
+                    break
+    return redact(text[:end], known)
 
 
 class Subscription:
@@ -60,6 +90,50 @@ class LiveBus:
     def __init__(self) -> None:
         self._subscriptions: list[Subscription] = []
         self._busy: Counter[str] = Counter()
+        self._drafts: dict[str, Event] = {}
+        self._draft_text: dict[str, str] = {}
+        self._draft_revision = 0
+        self._draft_notified_at = 0.0
+
+    def response_started(self, run_id: str) -> None:
+        """Start or replace one model attempt's preview. Never used for background work."""
+        if run_id not in self._drafts and len(self._drafts) >= MAX_DRAFTS:
+            return
+        self._draft_text[run_id] = ""
+        self._draft_revision += 1
+        self._drafts[run_id] = {"run_id": run_id, "sequence": self._draft_revision, "text": ""}
+        self.publish({"type": "drafts"})
+
+    def response_text(self, run_id: str, text: str, *, complete: bool = False) -> None:
+        """Publish bounded *snapshots*, so a slow phone can miss deltas without losing words."""
+        if run_id not in self._drafts:
+            return
+        previous = self._draft_text[run_id]
+        raw = text if complete else previous + text
+        truncated = len(raw) > MAX_DRAFT_CHARS
+        raw = raw[:MAX_DRAFT_CHARS]
+        self._draft_text[run_id] = raw
+        self._draft_revision += 1
+        self._drafts[run_id] = {
+            "run_id": run_id,
+            "sequence": self._draft_revision,
+            "text": preview_text(raw, settled=complete and not truncated),
+            "truncated": truncated,
+        }
+        now = time.monotonic()
+        if complete or now - self._draft_notified_at >= 0.1:
+            self._draft_notified_at = now
+            self.publish({"type": "drafts"})
+
+    def response_finished(self, run_id: str) -> None:
+        """Remove previews on completion, approval, failure or cancellation."""
+        self._draft_text.pop(run_id, None)
+        if self._drafts.pop(run_id, None) is not None:
+            self.publish({"type": "drafts"})
+
+    def response_drafts(self) -> list[Event]:
+        """Current safe previews for a newly connected browser. Not a durable transcript."""
+        return [dict(value) for value in self._drafts.values()]
 
     def subscribe(self, maxsize: int = 64) -> Subscription:
         """Listen for events. Call it from inside the event loop that will read them."""
