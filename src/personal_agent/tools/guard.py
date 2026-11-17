@@ -105,8 +105,8 @@ class ToolGuard:
         return ToolCall(
             tool=tool.name,
             category=tool.category_of(rc, args),
-            detail=tool.detail_of(args),
-            views=tool.views_of(args),
+            detail=tool.detail_of(args, rc),
+            views=tool.views_of(args, rc),
             profile=rc.profile,
             tainted=rc.tainted,
             allowed_profiles=tool.profiles,

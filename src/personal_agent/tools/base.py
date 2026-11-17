@@ -95,6 +95,11 @@ class ToolDef:
     timeout: Callable[[Any, dict[str, Any]], float] | None = None
     """Called with (app, arguments): how long one call may run, for tools that know better than
     the global tool timeout (a shell command that was given ten minutes)."""
+    detail_for: Callable[[Any, dict[str, Any]], str] | None = None
+    """Context-dependent policy detail, e.g. a path relative to this app's workspace. The
+    callback must be side-effect free. `detail` remains the context-free display fallback."""
+    views_for: Callable[[Any, dict[str, Any]], Sequence[str]] | None = None
+    """Context-dependent extra deny/always-ask views, added to `views`. Must not perform I/O."""
 
     def category_of(self, ctx: Any, args: dict[str, Any]) -> Category:
         """The category of this call. A category function that crashes gives the tool's own
@@ -143,13 +148,20 @@ class ToolDef:
             return None
         return seconds if seconds > 0 else None
 
-    def detail_of(self, args: dict[str, Any]) -> str:
+    def detail_of(self, args: dict[str, Any], ctx: Any = None) -> str:
         """The short summary for rules and the audit log: invisible characters removed, and cut
         with a note when it is long."""
-        if self.detail is None:
+        if self.detail is None and (self.detail_for is None or ctx is None):
             return ""
         try:
-            return clipped(strip_invisible(str(self.detail(args)), formatting=True), DETAIL_CHARS)
+            value = (
+                self.detail_for(ctx, args)
+                if self.detail_for is not None and ctx is not None
+                else self.detail(args)
+                if self.detail is not None
+                else ""
+            )
+            return clipped(strip_invisible(str(value), formatting=True), DETAIL_CHARS)
         except Exception:
             return ""
 
@@ -162,12 +174,13 @@ class ToolDef:
         except Exception:
             return ""
 
-    def views_of(self, args: dict[str, Any]) -> tuple[str, ...]:
+    def views_of(self, args: dict[str, Any], ctx: Any = None) -> tuple[str, ...]:
         """The further texts a `deny` or `always_ask` rule is tried on (see `views`)."""
-        if self.views is None:
-            return ()
         try:
-            return tuple(strip_invisible(str(v), formatting=True) for v in self.views(args))
+            views = list(self.views(args)) if self.views is not None else []
+            if self.views_for is not None and ctx is not None:
+                views.extend(self.views_for(ctx, args))
+            return tuple(strip_invisible(str(v), formatting=True) for v in views)
         except Exception:
             return ()
 
