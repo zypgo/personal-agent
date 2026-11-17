@@ -9,6 +9,9 @@ const VERSION = "{{version}}";
 const CACHE = `pa-shell-${VERSION}`;
 const SHELL = [
   "/",
+  "/workspace",
+  "/static/workbench.js",
+  "/static/workbench.css",
   `/static/style.css?v=${VERSION}`,
   `/static/app.js?v=${VERSION}`,
   "/static/api.js",

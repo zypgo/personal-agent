@@ -6,7 +6,7 @@
 // file, and none may be added: the page's policy forbids inline code, and the answers it shows can
 // repeat text that someone else wrote.
 
-import { Live, api, artifactBlob } from "./api.js";
+import { Live, api, artifactBlob, scopedURL, invalidateRequests } from "./api.js";
 import { activityLabel, connectionLabel } from "./activity.js";
 import { audioDuration } from "./audio-metadata.js";
 import {
@@ -227,6 +227,9 @@ function signedOut() {
 
 // ---- the chat -------------------------------------------------------------------------------
 function teardownChat() {
+  invalidateRequests();
+  for (const entry of store.pending) releasePreviews(entry.files);
+  store.principalId = null;
   if (live) live.stop();
   live = null;
   ui = null;
@@ -243,6 +246,7 @@ function teardownChat() {
 }
 
 async function showChat(notice) {
+  store.principalId = session.principal_id;
   buildChat();
   if (notice) toast(notice, { error: true });
   try {
@@ -250,7 +254,8 @@ async function showChat(notice) {
     store.addTurns(page.turns);
     store.more = page.more;
   } catch (error) {
-    if (error.status === 401) return signedOut();
+    if (error?.name === "AbortError") return;
+    if ([401, 403].includes(error.status)) return signedOut();
     toast(error.message, { error: true });
   }
   renderLog();
@@ -306,7 +311,7 @@ function buildChat() {
     h(
       "div",
       { class: "chat" },
-      h("header", { class: "bar" }, h("div", { class: "who" }, lamp, name, state), waiting, menu),
+      h("header", { class: "bar" }, h("div", { class: "who" }, lamp, name, state), h("a", { href: scopedURL("/workspace"), text: "工作台", class: "workspace-link" }), waiting, menu),
       banner,
       update,
       h("div", { class: "stage" }, log, jump),
@@ -420,7 +425,8 @@ async function loadEarlier() {
     renderLog();
     ui.log.scrollTop = top + (ui.log.scrollHeight - before); // keep what the owner was reading in place
   } catch (error) {
-    if (error.status === 401) return signedOut();
+    if (error?.name === "AbortError") return;
+    if ([401, 403].includes(error.status)) return signedOut();
     toast(error.message, { error: true });
   } finally {
     if (ui) ui.loadMore.disabled = false;
@@ -538,7 +544,7 @@ function artifactNode(file) {
         status.textContent = size;
       } catch (error) {
         status.textContent = error.message;
-        if (error.status === 401) signedOut();
+        if ([401, 403].includes(error.status)) signedOut();
       } finally {
         button.disabled = false;
         // Safari needs the blob to survive the click's task before its download starts.
@@ -550,7 +556,7 @@ function artifactNode(file) {
 }
 
 function pictureNode(id) {
-  const image = h("img", { src: `/api/media/${id}`, alt: "A picture", loading: "lazy", decoding: "async" });
+  const image = h("img", { src: scopedURL(`/api/media/${id}`), alt: "A picture", loading: "lazy", decoding: "async" });
   return h("button", { type: "button", class: "picture", "aria-label": "Open picture", dataset: { media: id } }, image);
 }
 
@@ -646,7 +652,8 @@ async function decide(approval, decision, card, note = "") {
     if (result.approval) store.setApprovals([result.approval]);
     if (!result.ok) toast(result.message, { error: false });
   } catch (error) {
-    if (error.status === 401) return signedOut();
+    if (error?.name === "AbortError") return;
+    if ([401, 403].includes(error.status)) return signedOut();
     toast(error.message, { error: true });
     for (const button of card.querySelectorAll("button")) button.disabled = false;
     return;
@@ -697,7 +704,7 @@ async function copyText(text, button) {
 }
 
 function openPicture(id) {
-  const dialog = h("dialog", { class: "lightbox", "aria-label": "Picture" }, h("img", { src: `/api/media/${id}`, alt: "A picture" }), iconButton("close", "Close", () => dialog.close(), "close"));
+  const dialog = h("dialog", { class: "lightbox", "aria-label": "Picture" }, h("img", { src: scopedURL(`/api/media/${id}`), alt: "A picture" }), iconButton("close", "Close", () => dialog.close(), "close"));
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close();
   });
@@ -872,7 +879,8 @@ async function deliver(entry) {
     if (fresh.length) scrollToBottom(true);
   } catch (error) {
     if (!store.findPending(entry.clientId)) return; // the stream already showed it as delivered
-    if (error.status === 401) return signedOut();
+    if (error?.name === "AbortError") return;
+    if ([401, 403].includes(error.status)) return signedOut();
     entry.state = error.status === 422 ? "rejected" : "failed";
     entry.error = error.status === 0 ? "Not sent: no connection." : error.message;
     renderLog();
