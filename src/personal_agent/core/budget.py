@@ -7,6 +7,7 @@ midnight (events wait in the inbox, nothing is lost). The owner can lift today's
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import tzinfo
 
@@ -49,6 +50,7 @@ class BudgetGuard:
         self.cfg = cfg
         self.clock = clock or SystemClock()
         self.tz = tz
+        self.instance_guard: Callable[[], None] | None = None
 
     # ---- today ------------------------------------------------------------------------
     def _day_key(self) -> str:
@@ -102,6 +104,8 @@ class BudgetGuard:
 
     # ---- checks -----------------------------------------------------------------------
     def check_day(self) -> None:
+        if self.instance_guard is not None:
+            self.instance_guard()
         spent, limit = self.spent_today(), self.daily_limit()
         if spent >= limit:
             raise BudgetExceeded("daily", spent, limit, self.resets_in())
