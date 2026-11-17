@@ -322,3 +322,131 @@ async def test_daily_file_retention_still_runs_when_database_auto_prune_is_off(
     await daemon._upkeep_loop()
     assert not (app.paths.artifacts_dir / f"{artifact.id}.blob").exists()
     assert daemon.stats.errors == 0
+
+
+# ---- Gaps found by breaking the code on purpose (scripts/mutation/lists/v02_channels_files.py) ----
+
+
+def test_a_rewrite_of_the_same_length_is_still_noticed_by_its_timestamps(make_app, monkeypatch):
+    """The size alone cannot show that a file was rewritten while it was being read."""
+    app = make_app()
+    path = source(app, content=b"a finished report")
+    real_fstat = implementation.os.fstat
+    calls = 0
+
+    def rewriting(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            path.write_bytes(b"b finished report")  # the same 17 bytes
+            # Not left to the file system's timestamp granularity.
+            stamp = path.stat().st_mtime_ns + 5_000_000_000
+            os.utime(path, ns=(stamp, stamp))
+        return real_fstat(fd)
+
+    monkeypatch.setattr(implementation.os, "fstat", rewriting)
+    with pytest.raises(ArtifactError, match="changed"):
+        publish(app)
+    assert app.db.scalar("SELECT COUNT(*) FROM outbox") == 0
+
+
+def test_a_nul_byte_in_the_path_is_an_artifact_error_not_a_crash(make_app):
+    app = make_app()
+    source(app)
+    # An explicit name keeps the filename check from refusing the request first.
+    with pytest.raises(ArtifactError):
+        publish(app, "report\0.txt", name="report.txt")
+    assert app.db.scalar("SELECT COUNT(*) FROM outbox") == 0
+
+
+def test_a_caption_may_have_500_characters_and_not_501(make_app):
+    app = make_app()
+    source(app)
+    source(app, "second.txt")
+    assert publish(app, description="word " * 100).artifact
+    with pytest.raises(ArtifactError, match="500"):
+        publish(app, "second.txt", description="word " * 100 + "x")
+
+
+@pytest.mark.parametrize(
+    "name, accepted",
+    [
+        (("report-" * 40)[:236] + ".txt", True),  # 240 bytes
+        (("report-" * 40)[:237] + ".txt", False),  # 241 bytes
+        ("é" * 118 + ".txt", True),  # 240 bytes in 122 characters
+        ("é" * 119 + ".txt", False),  # 242 bytes in 123 characters
+    ],
+)
+def test_a_download_name_is_limited_to_240_bytes_not_characters(name, accepted):
+    if accepted:
+        assert implementation.validate_artifact_metadata(name, "") == ""
+    else:
+        with pytest.raises(ArtifactError, match="short filename"):
+            implementation.validate_artifact_metadata(name, "")
+
+
+@pytest.mark.parametrize("changes", [{"work_id": ""}, {"session_key": ""}])
+def test_publication_needs_a_session_and_a_durable_work_identifier(make_app, changes):
+    app = make_app()
+    source(app)
+    with pytest.raises(ArtifactError, match="durable"):
+        publish(app, **changes)
+    assert app.db.scalar("SELECT COUNT(*) FROM outbox") == 0
+
+
+def test_the_store_creates_its_own_folder_private_to_the_owner(make_app, tmp_path):
+    app = make_app()
+    folder = tmp_path / "somewhere-new" / "artifacts"
+    old = os.umask(0)  # so the result does not depend on the umask of whoever runs this
+    try:
+        ArtifactStore(app.db, folder, app.paths.workspace_dir, app.config.artifacts, app.clock)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o700
+
+
+def test_sweeping_removes_only_the_blobs_it_made_and_nothing_else(make_app):
+    app = make_app()
+    source(app)
+    artifact = publish(app).artifact
+    folder = app.paths.artifacts_dir
+    (folder / "notes.txt").write_bytes(b"somebody's file")
+    (folder / "not-an-identifier.blob").write_bytes(b"not one of ours either")
+    orphan = folder / ("b" * 32 + ".blob")
+    orphan.write_bytes(b"left behind by a crash")
+    assert app.artifacts.sweep() == 1
+    assert not orphan.exists()
+    assert (folder / "notes.txt").exists() and (folder / "not-an-identifier.blob").exists()
+    assert app.artifacts.read(artifact.id)[1] == b"a finished report"
+
+
+def tool_context(app, *, origin=None, work_id="events:42"):
+    rc = RunContext(app, "run:1", "main", FULL, origin or Origin("web"), work_id=work_id)
+    ctx = ToolContext(
+        context=rc, tool_name="publish_artifact", tool_call_id="call1", tool_arguments="{}"
+    )
+    return rc, ctx
+
+
+ARGS = json.dumps({"path": "report.txt", "name": None, "description": ""})
+
+
+async def test_asking_again_after_expiry_says_the_snapshot_is_gone(make_app):
+    app = make_app(config=Config(artifacts=ArtifactConfig(retention_days=1)))
+    source(app)
+    _, ctx = tool_context(app)
+    await publish_artifact_tool.on_invoke_tool(ctx, ARGS)
+    app.clock.advance(86400)
+    again = await publish_artifact_tool.on_invoke_tool(ctx, ARGS)
+    assert "expired" in again and "new source path" in again
+    assert "already published for this task" not in again
+
+
+@pytest.mark.parametrize("interactive", [True, False])
+async def test_the_queued_file_knows_whether_a_person_is_waiting(make_app, interactive):
+    app = make_app()
+    source(app)
+    rc, ctx = tool_context(app, origin=Origin("web", interactive=interactive))
+    await publish_artifact_tool.on_invoke_tool(ctx, ARGS)
+    queued = app.outbox.get(rc.queued_messages[0])
+    assert queued.payload["interactive"] is interactive

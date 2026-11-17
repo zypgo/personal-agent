@@ -43,6 +43,11 @@ def test_a_secret_pasted_instead_of_an_environment_name_is_refused_without_echoi
         ("http://api.openai.com/v1", False),
         ("https://api.openai.com:8443/v1", False),
         ("https://api.openai.com/other", False),
+        ("https://api.openai.com/v1/proxy", False),
+        ("https://api.openai.com/v10", False),
+        ("https://gateway.openai.com/v1", False),
+        ("https://evil-openai.com/v1", False),
+        ("https://:secret@api.openai.com/v1", False),
         ("https://api.openai.com/v1?forward=elsewhere", False),
         ("https://api.openai.com/v1#other", False),
         ("https://api.openai.com:invalid/v1", False),
@@ -185,3 +190,12 @@ def test_custom_credential_variables_are_scrubbed_even_without_a_secret_looking_
     assert "model-credential-value" not in cleaned
     assert "speech-credential-value" not in cleaned
     assert "model-credential-value" not in classify(RuntimeError("model-credential-value")).summary
+
+
+def test_an_empty_credential_variable_counts_as_a_missing_credential(monkeypatch):
+    monkeypatch.setenv("PA_MODEL_AUTH", "")
+    endpoint = model_endpoint(
+        ModelConfig(base_url="https://gateway.example/v1", api_key_env="PA_MODEL_AUTH")
+    )
+    assert endpoint.key is None
+    assert endpoint.missing_key

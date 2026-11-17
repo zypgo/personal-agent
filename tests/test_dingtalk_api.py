@@ -254,3 +254,77 @@ async def test_token_failure_cannot_be_mistaken_for_an_uncertain_message_send(ri
     with pytest.raises(DingTalkApiError):
         await api.send_message("robot", "owner", "hi")
     assert not fake.calls(SEND_PATH)
+
+
+# ---- Gaps found by breaking the code on purpose (scripts/mutation/lists/v02_channels_files.py) ----
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "ws://gateway.dingtalk.com/connect",
+        "wss://notdingtalk.com/connect",
+        "wss://gateway.dingtalk.com:8080/connect",
+        "wss://user@gateway.dingtalk.com/connect",
+        "wss://:secret@gateway.dingtalk.com/connect",
+        "wss://gateway.dingtalk.com/connect?leak=1",
+        "wss://gateway.dingtalk.com/connect#fragment",
+        "wss://gateway.dingtalk.com",
+        "https://gateway.dingtalk.com/connect",
+    ],
+)
+def test_an_untrusted_endpoint_is_refused_for_good_not_retried(endpoint):
+    with pytest.raises(DingTalkApiError) as caught:
+        stream_url(endpoint, "offline-ticket")
+    assert caught.value.permanent
+
+
+@pytest.mark.parametrize(
+    "code, kept",
+    [
+        ("InvalidParameter.Staff", "InvalidParameter.Staff"),
+        ("has a space", ""),
+        ("offline-secret-echoed-back " * 4, ""),
+        ("x" * 120, "x" * 120),
+        ("x" * 121, ""),
+    ],
+)
+async def test_only_an_identifier_shaped_error_code_is_kept(rig, code, kept):
+    fake, api = rig
+    fake.script(SEND_PATH, httpx.Response(400, json={"code": code}))
+    with pytest.raises(DingTalkApiError) as caught:
+        await api.send_message("robot", "owner", "hi")
+    assert caught.value.code == kept
+    assert "offline-secret" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "header, seconds",
+    [
+        ("23", 23.0),
+        ("0", 1.0),
+        ("-5", 1.0),
+        ("99999", 3600.0),
+        ("nan", 60.0),
+        ("inf", 60.0),
+        ("soon", 60.0),
+    ],
+)
+async def test_retry_after_is_kept_within_what_a_person_can_wait_for(rig, header, seconds):
+    fake, api = rig
+    fake.script(SEND_PATH, httpx.Response(429, headers={"Retry-After": header}, json={}))
+    with pytest.raises(DingTalkApiError) as caught:
+        await api.send_message("robot", "owner", "hi")
+    assert caught.value.retry_after == seconds
+
+
+@pytest.mark.parametrize("lifetime", ["true", "0", "-1", "Infinity", "NaN", '"7200"', "null"])
+async def test_an_implausible_token_lifetime_is_refused_not_cached(rig, lifetime):
+    fake, api = rig
+    body = f'{{"accessToken":"offline-access","expireIn":{lifetime}}}'.encode()
+    fake.script(
+        TOKEN_PATH,
+        httpx.Response(200, content=body, headers={"content-type": "application/json"}),
+    )
+    with pytest.raises(DingTalkApiError, match="invalid access token"):
+        await api.access_token()

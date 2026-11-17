@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -12,7 +13,7 @@ from agents.models.multi_provider import MultiProvider
 from agents.testing import ModelStep, ScriptedModel
 
 from personal_agent.channels.web.api import sse
-from personal_agent.core.live import LiveBus, preview_text
+from personal_agent.core.live import MAX_DRAFT_CHARS, MAX_DRAFTS, LiveBus, preview_text
 from personal_agent.harness.streaming import consume_stream
 
 
@@ -131,6 +132,113 @@ async def test_a_cleanup_error_does_not_replace_the_stream_failure():
 
     live = LiveBus()
     result = FailingStream()
+    with pytest.raises(RuntimeError) as caught:
+        await consume_stream(cast(RunResultStreaming, result), live, "run")
+    assert caught.value is failure
+    assert result.cancelled
+    assert not live.response_drafts()
+
+
+# ---- Gaps found by breaking the code on purpose (scripts/mutation/lists/v02_channels_files.py) ----
+
+
+def test_a_preview_is_cut_at_the_size_limit_and_says_so():
+    live = LiveBus()
+    live.response_started("run")
+    live.response_text("run", "x" * (MAX_DRAFT_CHARS + 50))
+    [draft] = live.response_drafts()
+    assert len(draft["text"]) == MAX_DRAFT_CHARS and draft["truncated"] is True
+    live.response_text("run", "more words")
+    assert len(live.response_drafts()[0]["text"]) == MAX_DRAFT_CHARS
+
+
+def test_a_cut_off_preview_still_withholds_the_start_of_a_credential(monkeypatch):
+    secret = "fictitiousReviewCredentialXYZ"
+    monkeypatch.setenv("PA_REVIEW_KEY", secret)
+    live = LiveBus()
+    live.response_started("run")
+    # A complete message that continues past the limit, which falls inside the credential:
+    # what was cut off is not settled, so a possible beginning of the credential stays hidden.
+    live.response_text("run", "a" * (MAX_DRAFT_CHARS - 9) + secret, complete=True)
+    [draft] = live.response_drafts()
+    assert draft["truncated"] is True
+    assert draft["text"] == "a" * (MAX_DRAFT_CHARS - 9)
+
+
+def test_only_a_few_runs_are_previewed_at_once():
+    live = LiveBus()
+    for number in range(MAX_DRAFTS + 3):
+        live.response_started(f"run-{number}")
+        live.response_text(f"run-{number}", "hello")
+    assert [d["run_id"] for d in live.response_drafts()] == [f"run-{n}" for n in range(MAX_DRAFTS)]
+    live.response_finished("run-0")
+    live.response_started("run-late")
+    assert "run-late" in {d["run_id"] for d in live.response_drafts()}
+
+
+def test_text_for_a_run_nobody_started_is_ignored():
+    live = LiveBus()
+    live.response_text("ghost", "hello")
+    assert live.response_drafts() == []
+
+
+def test_a_new_model_attempt_starts_again_from_nothing():
+    live = LiveBus()
+    live.response_started("run")
+    live.response_text("run", "first attempt")
+    live.response_started("run")
+    assert live.response_drafts()[0]["text"] == ""
+    live.response_text("run", "second")
+    assert live.response_drafts()[0]["text"] == "second"
+
+
+def raw(kind, **fields):
+    return SimpleNamespace(type="raw_response_event", data=SimpleNamespace(type=kind, **fields))
+
+
+class ScriptedStream:
+    """A public result stub: some events, then perhaps a failure the SDK recorded itself."""
+
+    def __init__(self, events, live, failure=None):
+        self.events, self.live, self.run_loop_exception = events, live, failure
+        self.seen: list[list[str]] = []  # the previews as they stood after each event
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+
+    async def stream_events(self) -> AsyncIterator[object]:
+        if self.cancelled:
+            return
+        for event in self.events:
+            yield event
+            self.seen.append([d["text"] for d in self.live.response_drafts()])
+
+
+async def test_only_answer_text_ever_reaches_the_preview():
+    live = LiveBus()
+    result = ScriptedStream(
+        [
+            raw("response.created"),
+            raw("response.reasoning_summary_text.delta", delta="private reasoning "),
+            raw("response.function_call_arguments.delta", delta='{"path": "secret.txt"}'),
+            raw("response.output_text.delta", delta="Hello"),
+            raw("response.output_text.delta", delta=" world"),
+            raw("response.output_text.done", text="Hello world"),
+        ],
+        live,
+    )
+    await consume_stream(cast(RunResultStreaming, result), live, "run")
+    assert result.seen[-1] == ["Hello world"]
+    shown = " ".join(text for texts in result.seen for text in texts)
+    assert "private" not in shown and "secret.txt" not in shown
+    assert not live.response_drafts()
+
+
+async def test_a_failure_the_sdk_recorded_after_the_stream_ended_is_raised():
+    failure = RuntimeError("the model request failed")
+    live = LiveBus()
+    result = ScriptedStream([raw("response.output_text.delta", delta="partial")], live, failure)
     with pytest.raises(RuntimeError) as caught:
         await consume_stream(cast(RunResultStreaming, result), live, "run")
     assert caught.value is failure
