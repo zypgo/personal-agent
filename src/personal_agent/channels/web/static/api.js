@@ -43,6 +43,32 @@ export async function api(path, { method = "GET", json, form, signal } = {}) {
   return data;
 }
 
+/** Fetch an immutable result through the paired browser session, never a public bearer link. */
+export async function artifactBlob(id) {
+  if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) throw new ApiError(400, "Invalid file reference.");
+  let response;
+  try {
+    response = await fetch(`/api/artifacts/${id}`, {
+      headers: { "X-PA": "1" }, credentials: "same-origin", cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(0, "Cannot reach the agent. Please try again when connected.");
+  }
+  if (!response.ok) {
+    const messages = {
+      401: "Pair this browser again to download files.",
+      404: "This file is unavailable.",
+      410: "This file has expired. Ask the agent to create it again.",
+    };
+    throw new ApiError(response.status, messages[response.status] ?? "The file could not be downloaded.");
+  }
+  try {
+    return await response.blob();
+  } catch {
+    throw new ApiError(0, "The download was interrupted. Please try again.");
+  }
+}
+
 /**
  * The live stream. The browser's EventSource already reconnects by itself and says where it left
  * off (the server numbers turns), so this adds only what it does not do:
@@ -51,9 +77,9 @@ export async function api(path, { method = "GET", json, form, signal } = {}) {
  * Whatever is missed is replayed from the database, so a late or lost nudge costs nothing.
  */
 export class Live {
-  constructor({ after, onHello, onTurn, onActivity, onApprovals, onSignout, onState }) {
+  constructor({ after, onHello, onTurn, onActivity, onApprovals, onDrafts = () => {}, onSignout, onState }) {
     this.after = after;
-    this.on = { onHello, onTurn, onActivity, onApprovals, onSignout, onState };
+    this.on = { onHello, onTurn, onActivity, onApprovals, onDrafts, onSignout, onState };
     this.source = null;
     this.state = "closed";
     this.retryTimer = null;
@@ -67,21 +93,25 @@ export class Live {
     this.source = source;
     this._set("connecting");
     source.addEventListener("hello", (e) => {
+      if (this.source !== source) return;
       this.failures = 0;
       this._set("open");
       this.on.onHello(JSON.parse(e.data));
     });
-    source.addEventListener("turn", (e) => this.on.onTurn(JSON.parse(e.data)));
-    source.addEventListener("activity", (e) => this.on.onActivity(JSON.parse(e.data)));
-    source.addEventListener("approvals", (e) => this.on.onApprovals(JSON.parse(e.data)));
+    for (const [event, callback] of [["turn", "onTurn"], ["activity", "onActivity"], ["approvals", "onApprovals"], ["drafts", "onDrafts"]]) {
+      source.addEventListener(event, (e) => {
+        if (this.source === source) this.on[callback](JSON.parse(e.data));
+      });
+    }
     source.addEventListener("signout", () => {
+      if (this.source !== source) return;
       this.stop();
       this.on.onSignout();
     });
     source.onerror = () => {
       if (this.source !== source) return;
       this._set("down");
-      if (source.readyState === EventSource.CLOSED) this._check();
+      if (source.readyState === EventSource.CLOSED) this._check(source);
     };
   }
 
@@ -102,17 +132,19 @@ export class Live {
     this._set("closed");
   }
 
-  async _check() {
+  async _check(source) {
     // the browser gave up on this stream: was it the session, or only the network?
     try {
       await api("/api/session");
     } catch (error) {
+      if (this.source !== source) return;
       if (error.status === 401) {
         this.stop();
         this.on.onSignout();
         return;
       }
     }
+    if (this.source !== source) return;
     this.failures += 1;
     const wait = Math.min(30_000, 1500 * 2 ** Math.min(this.failures, 5));
     this.retryTimer = setTimeout(() => {

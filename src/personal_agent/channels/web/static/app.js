@@ -6,7 +6,7 @@
 // file, and none may be added: the page's policy forbids inline code, and the answers it shows can
 // repeat text that someone else wrote.
 
-import { Live, api } from "./api.js";
+import { Live, api, artifactBlob } from "./api.js";
 import { activityLabel, connectionLabel } from "./activity.js";
 import { audioDuration } from "./audio-metadata.js";
 import {
@@ -235,6 +235,8 @@ function teardownChat() {
   store.order = [];
   store.pending = [];
   store.approvals.clear();
+  store.drafts.clear();
+  store.completedRuns.clear();
   store.more = false;
   setBadge(0);
   unread = 0;
@@ -265,6 +267,12 @@ async function showChat(notice) {
       store.setApprovals(data.approvals);
       renderLog();
       renderStatus();
+    },
+    onDrafts: (data) => {
+      const stick = nearBottom();
+      store.replaceDrafts(data.drafts);
+      renderLog();
+      if (stick) scrollToBottom(false);
     },
     onSignout: signedOut,
     onState: onStreamState,
@@ -315,6 +323,7 @@ function buildChat() {
 function onHello(data) {
   store.setWorking(data.working);
   store.setApprovals(data.approvals ?? []);
+  store.replaceDrafts(data.drafts);
   renderLog();
   renderStatus();
 }
@@ -440,6 +449,12 @@ function renderLog() {
     seen.add(entry.key);
     previous = entry.turn ?? null;
   }
+  for (const draft of store.drafts.values()) {
+    if (!draft.text) continue;
+    const key = `draft:${draft.run_id}`;
+    wanted.push(cached(key, `${draft.sequence}|${draft.text}`, () => draftNode(draft)));
+    seen.add(key);
+  }
   let ref = ui.loadMore.nextSibling;
   for (const node of wanted) {
     if (node === ref) ref = ref.nextSibling;
@@ -466,6 +481,14 @@ function daySeparator(at) {
   return h("div", { class: "day", role: "separator" }, h("span", { text: dayLabel(at, nowSeconds()) }));
 }
 
+function draftNode(draft) {
+  return h("article", { class: "turn agent streaming", "aria-busy": "true" },
+    h("div", { class: "speaker", text: session.agent }),
+    h("div", { class: "body" }, h("p", { class: "words", text: draft.text })),
+    h("div", { class: "meta" }, h("span", { class: "tag", text: draft.truncated ? "Writing… full reply follows." : "Writing…" })),
+  );
+}
+
 const approvalState = (turn) => (turn.approvals ?? []).map((a) => `${a.id}:${store.approval(a).status}`).join(",");
 const turnSignature = (turn, previous) => `${turn.id}|${previous?.direction ?? "-"}|${approvalState(turn)}`;
 const pendingSignature = (p) => `${p.state}|${p.error ?? ""}`;
@@ -482,9 +505,48 @@ function turnNode(turn, previous) {
   } else {
     body.append(renderMarkdown(document, turn.text));
   }
+  if (!mine && Array.isArray(turn.meta?.artifacts)) {
+    for (const file of turn.meta.artifacts.slice(0, 10)) {
+      if (file && /^[0-9a-f]{32}$/.test(file.id) && typeof file.name === "string") body.append(artifactNode(file));
+    }
+  }
   for (const approval of turn.approvals ?? []) body.append(approvalNode(approval));
   node.append(body, metaLine(turn));
   return node;
+}
+
+function artifactNode(file) {
+  const name = file.name.slice(0, 240);
+  const expired = Number.isFinite(file.expires_at) && file.expires_at <= nowSeconds();
+  const size = Number.isSafeInteger(file.size) && file.size >= 0
+    ? (file.size < 1024 ? `${file.size} B` : `${Math.ceil(file.size / 1024)} KB`)
+    : "File";
+  const status = h("span", { class: "artifact-status", role: "status", text: expired ? "Expired · ask for a new file" : size });
+  const button = h("button", {
+    type: "button", class: "artifact-download", disabled: expired, text: `Download ${name}`,
+    onclick: async () => {
+      button.disabled = true;
+      status.textContent = "Downloading…";
+      let url;
+      try {
+        const blob = await artifactBlob(file.id);
+        url = URL.createObjectURL(blob);
+        const link = h("a", { href: url, download: name });
+        document.body.append(link);
+        link.click();
+        link.remove();
+        status.textContent = size;
+      } catch (error) {
+        status.textContent = error.message;
+        if (error.status === 401) signedOut();
+      } finally {
+        button.disabled = false;
+        // Safari needs the blob to survive the click's task before its download starts.
+        if (url) setTimeout(() => URL.revokeObjectURL(url), 30000);
+      }
+    },
+  });
+  return h("section", { class: "artifact" }, button, status);
 }
 
 function pictureNode(id) {

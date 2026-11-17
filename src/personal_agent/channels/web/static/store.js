@@ -10,6 +10,8 @@ export class Store {
     this.order = []; // ids, oldest first
     this.pending = []; // messages typed here that the server has not confirmed yet
     this.approvals = new Map(); // id -> approval
+    this.drafts = new Map(); // run_id -> bounded, temporary answer preview
+    this.completedRuns = new Set(); // final replies suppress a delayed snapshot from an old stream
     this.more = false; // are there older turns on the server?
     this.working = false;
     this.tool = null;
@@ -29,6 +31,10 @@ export class Store {
     for (const turn of list) {
       if (this.turns.has(turn.id)) continue;
       this.turns.set(turn.id, turn);
+      if (turn.direction === "out" && turn.meta?.run_id && turn.meta.final_response === true) {
+        this.completedRuns.add(turn.meta.run_id);
+        this.drafts.delete(turn.meta.run_id);
+      }
       fresh.push(turn);
       for (const approval of turn.approvals ?? []) {
         // what a turn carried is a snapshot: it may fill a gap, never overwrite something newer
@@ -60,6 +66,18 @@ export class Store {
   setWorking(working, tool = null) {
     this.working = Boolean(working);
     this.tool = this.working ? tool : null;
+  }
+
+  /** Replace all previews, including on reconnect. They never enter history or local storage. */
+  replaceDrafts(list) {
+    this.drafts.clear();
+    for (const draft of (Array.isArray(list) ? list : []).slice(0, 16)) {
+      if (!draft || typeof draft !== "object") continue;
+      if (typeof draft.run_id !== "string" || !draft.run_id || draft.run_id.length > 100) continue;
+      if (this.completedRuns.has(draft.run_id)) continue;
+      if (typeof draft.text !== "string" || !Number.isSafeInteger(draft.sequence)) continue;
+      this.drafts.set(draft.run_id, { ...draft, text: draft.text.slice(0, 32000) });
+    }
   }
 
   // ---- messages on their way ---------------------------------------------------------------
