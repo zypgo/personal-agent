@@ -50,6 +50,34 @@ class Dispatcher:
         report = DeliveryReport()
         outbox = self.app.outbox
         for message in outbox.claim_due(channels=set(self.channels), limit=limit):
+            actor = message.payload.get("principal_id") or message.payload.get("actor_id")
+            if actor is not None:
+                from personal_agent.collaboration.models import AccessDenied
+
+                try:
+                    self.app.require_actor(
+                        str(actor),
+                        version=message.payload.get("membership_version"),
+                        principal_version=message.payload.get("principal_version"),
+                    )
+                except AccessDenied:
+                    self.app.db.execute(
+                        "UPDATE outbox SET status='cancelled', last_error='authorization changed' WHERE id=? AND status='sending'",
+                        (message.id,),
+                    )
+                    report.failed.append(message.id)
+                    continue
+            if (
+                self.app.space_id != "personal-owner"
+                and message.channel not in ("web", "cli")
+                and not message.recipient
+            ):
+                self.app.db.execute(
+                    "UPDATE outbox SET status='cancelled', last_error='recipient required' WHERE id=? AND status='sending'",
+                    (message.id,),
+                )
+                report.failed.append(message.id)
+                continue
             channel = self.channels[message.channel]
             until = self._not_before(message)
             if until is not None:
@@ -126,6 +154,21 @@ class Dispatcher:
         Never raises: the message is delivered whatever becomes of its bookmarks."""
         if not message.on_sent:
             return
+        actor = message.payload.get("principal_id") or message.payload.get("actor_id")
+        if actor is not None:
+            from personal_agent.collaboration.models import AccessDenied
+
+            try:
+                self.app.require_actor(
+                    str(actor),
+                    version=message.payload.get("membership_version"),
+                    principal_version=message.payload.get("principal_version"),
+                )
+            except AccessDenied:
+                # Delivery already happened and remains recorded as sent. A lost permission
+                # during the network await must not authorize subsequent memory mutations.
+                log.info("on_sent commits of message %s skipped: authorization changed", message.id)
+                return
         if self._from_untrusted_run(message):
             # `send_message` refuses these now; a message queued before that, or by anything else,
             # is not allowed to write memory on behalf of a run the owner's words did not start.

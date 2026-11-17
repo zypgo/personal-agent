@@ -223,6 +223,7 @@ class ArtifactStore:
         description: str = "",
         web_enabled: bool = False,
         interactive: bool = False,
+        authority: dict[str, Any] | None = None,
     ) -> Publication:
         """Publish once per work + source path; retries return the original immutable snapshot.
 
@@ -303,7 +304,11 @@ class ArtifactStore:
                     text=text,
                     run_id=run_id,
                     dedupe_key=f"artifact:{identifier}",
-                    extra={"artifacts": [artifact.to_json()], "interactive": interactive},
+                    extra={
+                        **(authority or {}),
+                        "artifacts": [artifact.to_json()],
+                        "interactive": interactive,
+                    },
                 )
                 self.db.execute(
                     """INSERT INTO artifacts

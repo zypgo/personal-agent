@@ -432,6 +432,9 @@ class Timers:
             ) from exc
 
     def _event(self, timer: Timer, late: float) -> NewEvent:
+        from personal_agent.db import loads
+
+        authority = loads(self.db.kv_get(f"timer_origin:{timer.id}"), {})
         tz = get_tz(timer.tz or self.default_tz)
         return NewEvent(
             source="timer",
@@ -441,6 +444,7 @@ class Timers:
                 "name": timer.name,
                 "prompt": timer.prompt,
                 "timer_id": timer.id,
+                **authority,
                 "timer_kind": timer.kind,
                 "scheduled_for": format_local(timer.due_at, tz),
                 "late_s": int(late),
