@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from personal_agent.channels.commands import ChatCommands, parse_command
 from personal_agent.channels.transcribe import TranscriptionError, estimate_seconds
+from personal_agent.core.budget import BudgetExceeded
 from personal_agent.core.events import Kind, NewEvent, Trust
 from personal_agent.core.media import MediaError
 from personal_agent.core.receipts import ReceiptStore
@@ -100,6 +101,10 @@ class Ingress:
         recipient: str | None = None,
         reply_to: str | None = None,
         forwarded: bool = False,
+        principal_id: str | None = None,
+        membership_version: int | None = None,
+        principal_version: int | None = None,
+        client_request_id: str | None = None,
     ) -> Accepted:
         """A message from the owner on `channel`. `recipient` is how that channel addresses the
         owner (a Telegram chat id); the answer is sent back to it.
@@ -107,6 +112,11 @@ class Ingress:
         `forwarded`: the owner passed on something somebody else wrote. It reaches the agent as
         quoted outside text, never as the owner's own words, and is never run as a command."""
         app = self.app
+        actor = principal_id or app.space_owner_id
+        app.require_actor(actor, version=membership_version, principal_version=principal_version)
+        authority: dict[str, Any] = {"principal_id": actor, **app.actor_snapshot(actor)}
+        if client_request_id:
+            authority["client_request_id"] = client_request_id
         body = clean_text(text)
         if len(body) > MAX_TEXT_CHARS:
             return Accepted(
@@ -118,7 +128,16 @@ class Ingress:
             parse_command(body) if body and not images and voice is None and not forwarded else None
         )
         if parsed is not None and self.commands.known(parsed[0]):
-            return self._command(parsed, body, channel, recipient, external_id)
+            if parsed[0] in ("approve", "deny"):
+                from personal_agent.collaboration.models import AccessDenied
+
+                try:
+                    app.require_approval_actor(actor)
+                except AccessDenied:
+                    return Accepted(
+                        "rejected", reply="Only this space's owners can approve actions."
+                    )
+            return self._command(parsed, body, channel, recipient, external_id, authority)
 
         spoken = False
         receipt_key: tuple[str, str] | None = None
@@ -174,7 +193,15 @@ class Ingress:
             heard = (
                 cached
                 if cached is not None
-                else await self._transcribe(voice, receipt_key=receipt_key)
+                else await self._transcribe(
+                    voice,
+                    receipt_key=receipt_key,
+                    authorize=lambda: app.require_actor(
+                        actor,
+                        version=authority.get("membership_version"),
+                        principal_version=authority.get("principal_version"),
+                    ),
+                )
             )
             if isinstance(heard, Accepted):
                 return heard
@@ -188,7 +215,17 @@ class Ingress:
         if not body and not attachments:
             return Accepted("rejected", reply="That message is empty.")
 
-        payload: dict[str, Any] = {"text": "" if forwarded else body, "recipient": recipient}
+        # Transcription can await a remote service; check again before committing any input.
+        app.require_actor(
+            actor,
+            version=authority.get("membership_version"),
+            principal_version=authority.get("principal_version"),
+        )
+        payload: dict[str, Any] = {
+            "text": "" if forwarded else body,
+            "recipient": recipient,
+            **authority,
+        }
         if forwarded and body:
             payload["forwarded"] = body
         if attachments:
@@ -213,7 +250,9 @@ class Ingress:
             if added.duplicate:
                 return Accepted("duplicate", event_id=added.id)
             marks = {k: True for k, on in (("voice", spoken), ("forwarded", forwarded)) if on}
-            turn = app.transcript.add_in(channel, body, attachments=attachments, meta=marks or None)
+            turn = app.transcript.add_in(
+                channel, body, attachments=attachments, meta={**marks, **authority}
+            )
         self.wake()
         return Accepted("queued", turn=turn, event_id=added.id)
 
@@ -225,15 +264,22 @@ class Ingress:
         channel: str,
         recipient: str | None,
         external_id: str | None,
+        authority: dict[str, Any],
     ) -> Accepted:
         app = self.app
         key = f"command:{channel}:{external_id}" if external_id else None
         if key is not None and app.db.kv_get(key) is not None:
             return Accepted("duplicate")  # a re-delivered update: do not run it twice
-        turn = app.transcript.add_in(channel, body)
+        turn = app.transcript.add_in(channel, body, meta=authority)
         name, args = parsed
         try:
-            answer = self.commands.run(name, args, channel=channel, session_key=self.session_key)
+            answer = self.commands.run(
+                name,
+                args,
+                channel=channel,
+                session_key=self.session_key,
+                principal_id=authority["principal_id"],
+            )
         except Exception:
             log.exception("command /%s failed", name)
             answer = f"/{name} failed. The details are in the log."
@@ -246,13 +292,33 @@ class Ingress:
             text=answer,
             kind="notice",
             dedupe_key=key or f"command:{channel}:{uuid.uuid4().hex}",
-            extra={"interactive": True},
+            extra={"interactive": True, **authority},
         )
         self.wake()
         return Accepted("command", turn=turn)
 
     # ---- voice and pictures -----------------------------------------------------------
     async def _transcribe(
+        self,
+        voice: Upload,
+        *,
+        receipt_key: tuple[str, str] | None = None,
+        authorize: Callable[[], None] | None = None,
+    ) -> str | Accepted:
+        """Paid preprocessing shares the instance's capacity with model runs in every space."""
+        manager = self.app.collaboration
+        if manager is None:
+            if authorize is not None:
+                authorize()
+            return await self._transcribe_with_budget(voice, receipt_key=receipt_key)
+        async with manager.run_slots:
+            # Waiting for capacity is an authorization boundary too: a revoked member must
+            # not start a new paid request when a slot eventually becomes available.
+            if authorize is not None:
+                authorize()
+            return await self._transcribe_with_budget(voice, receipt_key=receipt_key)
+
+    async def _transcribe_with_budget(
         self, voice: Upload, *, receipt_key: tuple[str, str] | None = None
     ) -> str | Accepted:
         """The words of a voice message, or the reason it was not turned into any."""
@@ -272,7 +338,9 @@ class Ingress:
             return reject(
                 f"That recording is too long ({int(seconds)} s; the limit is {cfg.max_voice_seconds} s)."
             )
-        if app.budget.spent_today() >= app.budget.daily_limit():
+        try:
+            app.budget.check_day()
+        except BudgetExceeded:
             return reject("Today's spending limit is reached, so I cannot listen right now.")
         try:
             async with asyncio.timeout(cfg.transcribe_timeout_s):

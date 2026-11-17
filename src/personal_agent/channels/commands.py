@@ -61,7 +61,15 @@ class ChatCommands:
     def known(self, name: str) -> bool:
         return name in {"help", "start", "new", "status", "approvals", "approve", "deny"}
 
-    def run(self, name: str, args: list[str], *, channel: str, session_key: str) -> str:
+    def run(
+        self,
+        name: str,
+        args: list[str],
+        *,
+        channel: str,
+        session_key: str,
+        principal_id: str | None = None,
+    ) -> str:
         if name in ("help", "start"):
             return HELP
         if name == "new":
@@ -72,7 +80,9 @@ class ChatCommands:
         if name == "approvals":
             return self.approvals()
         if name in ("approve", "deny"):
-            return self.decide(name == "approve", args, channel, session_key)
+            return self.decide(
+                name == "approve", args, channel, session_key, principal_id=principal_id
+            )
         return f"Unknown command /{name}. Try /help."
 
     # ---- the commands ---------------------------------------------------------------
@@ -93,8 +103,18 @@ class ChatCommands:
             ]
         )
 
-    def decide(self, approve: bool, args: list[str], channel: str, session_key: str) -> str:
+    def decide(
+        self,
+        approve: bool,
+        args: list[str],
+        channel: str,
+        session_key: str,
+        *,
+        principal_id: str | None = None,
+    ) -> str:
         app = self.app
+        actor = principal_id or app.space_owner_id
+        app.require_approval_actor(actor)
         targets, note = split_targets(args)
         ids, problem = choose_approvals(app.approvals.pending(), targets, session_key=session_key)
         if ids is None:
@@ -102,7 +122,7 @@ class ChatCommands:
         lines: list[str] = []
         resumed = False
         for approval_id in ids:
-            result = app.approvals.decide(approval_id, approve, by=f"owner:{channel}", note=note)
+            result = app.approvals.decide(approval_id, approve, by=f"{actor}:{channel}", note=note)
             lines.append(result.message)
             resumed = resumed or result.resume_queued
         if resumed:
