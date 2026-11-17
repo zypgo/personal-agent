@@ -70,6 +70,25 @@ def _client(proxy: str | None) -> httpx.AsyncClient:
     )
 
 
+def _result(method: str, response: httpx.Response) -> Any:
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    if response.status_code == 200 and body.get("ok"):
+        return body.get("result")
+    parameters = body.get("parameters")
+    retry_after = parameters.get("retry_after") if isinstance(parameters, dict) else None
+    raise TelegramApiError(
+        method,
+        response.status_code,
+        str(body.get("description") or response.reason_phrase or "error"),
+        retry_after=float(retry_after) if retry_after is not None else None,
+    )
+
+
 class TelegramApi:
     def __init__(
         self,
@@ -100,19 +119,7 @@ class TelegramApi:
             # Failed before a request was written. The message of the exception can hold the URL
             # (and so the token); do not chain it.
             raise NotSent(f"could not connect to Telegram ({type(exc).__name__})") from None
-        try:
-            body = response.json()
-        except ValueError:
-            body = {}
-        if response.status_code == 200 and body.get("ok"):
-            return body.get("result")
-        retry_after = (body.get("parameters") or {}).get("retry_after")
-        raise TelegramApiError(
-            method,
-            response.status_code,
-            str(body.get("description") or response.reason_phrase or "error"),
-            retry_after=float(retry_after) if retry_after is not None else None,
-        )
+        return _result(method, response)
 
     # ---- what the channel uses --------------------------------------------------------
     async def get_me(self) -> dict[str, Any]:
@@ -159,6 +166,32 @@ class TelegramApi:
 
     async def send_chat_action(self, chat_id: str | int, action: str = "typing") -> None:
         await self.call("sendChatAction", {"chat_id": chat_id, "action": action}, timeout_s=10)
+
+    async def send_document(
+        self,
+        chat_id: str | int,
+        content: bytes,
+        *,
+        filename: str,
+        mime: str,
+        caption: str = "",
+        silent: bool = False,
+    ) -> dict[str, Any]:
+        """One multipart upload; late transport failures remain unknown, never auto-retried."""
+        params = {"chat_id": str(chat_id), "caption": caption}
+        if silent:
+            params["disable_notification"] = "true"
+        try:
+            response = await self._client.post(
+                f"{self._base}/sendDocument",
+                data=params,
+                files={"document": (filename, content, mime)},
+                timeout=CALL_TIMEOUT_S,
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+            raise NotSent(f"could not connect to Telegram ({type(exc).__name__})") from None
+        sent: dict[str, Any] = _result("sendDocument", response)
+        return sent
 
     async def answer_callback(self, callback_id: str, text: str = "") -> None:
         await self.call(
