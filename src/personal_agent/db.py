@@ -401,6 +401,24 @@ MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     );
     CREATE INDEX ingress_receipts_updated ON ingress_receipts(updated_at);
     """,
+    """
+    CREATE TABLE artifacts (
+        id TEXT PRIMARY KEY,
+        session_key TEXT NOT NULL,
+        work_id TEXT NOT NULL,
+        source_path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime TEXT NOT NULL,
+        size INTEGER NOT NULL CHECK(size >= 0),
+        sha256 TEXT NOT NULL,
+        run_id TEXT,
+        created_at REAL NOT NULL,
+        expires_at REAL NOT NULL,
+        outbox_id INTEGER REFERENCES outbox(id) ON DELETE SET NULL,
+        UNIQUE(session_key, work_id, source_path)
+    );
+    CREATE INDEX artifacts_expiry ON artifacts(expires_at);
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

@@ -18,6 +18,7 @@ from personal_agent.channels.web.auth import WebAuth
 from personal_agent.clock import Clock, SystemClock, get_tz
 from personal_agent.config import Config, load_config, load_env
 from personal_agent.core.approvals import Approvals
+from personal_agent.core.artifacts import ArtifactStore
 from personal_agent.core.budget import BudgetGuard
 from personal_agent.core.inbox import Inbox
 from personal_agent.core.live import LiveBus
@@ -88,6 +89,7 @@ class App:
     transcript: Transcript
     live: LiveBus
     media: MediaStore
+    artifacts: ArtifactStore
     transcriber: Transcriber
     web_auth: WebAuth
     janitor: Janitor
@@ -100,6 +102,8 @@ class App:
         names = {name for name, spec in self.plugin_channels.items() if spec.push}
         if self.config.telegram.enabled:
             names.add("telegram")
+        if self.config.dingtalk.enabled:
+            names.add("dingtalk")
         return names - PULL_ONLY
 
     def notify_channel(self) -> str:
@@ -128,6 +132,7 @@ class App:
 
         # Finish committed file projections before reviewing or undoing a memory pass.
         self.memory.recover()
+        reclaimed_artifacts = self.artifacts.sweep()
         orphaned = self.runs.recover_orphans()
         dreams = Dreamer(self).recover()
         receipts = ReceiptStore(self.db, self.clock).recover()
@@ -136,6 +141,7 @@ class App:
         released = self.inbox.release_leases()
         return {
             "orphaned_runs": orphaned,
+            "reclaimed_artifacts": reclaimed_artifacts,
             "recovered_dreams": dreams,
             "interrupted_transcriptions": receipts,
             "interrupted_tool_calls": interrupted,
@@ -201,6 +207,9 @@ def build_app(
     if read_env:
         load_env(paths)
     cfg = config or load_config(paths)
+    register_secret_envs(
+        [cfg.model.api_key_env, cfg.media.transcribe_api_key_env or cfg.model.api_key_env]
+    )
     clock = clock or SystemClock()
     database = db or open_database(paths.db_file)
     memory = MemoryStore(paths, database, cfg.memory, clock)
@@ -218,6 +227,7 @@ def build_app(
     )
     register_secret_envs(secret.env for secret in cfg.secrets.values())
     register_secret_envs(route.secret_env for route in cfg.webhooks.routes.values())
+    register_secret_envs((cfg.dingtalk.client_id_env, cfg.dingtalk.client_secret_env))
     tz = get_tz(cfg.agent.timezone)
     inbox = Inbox(database, clock)
     runs = RunStore(database, clock)
@@ -268,6 +278,9 @@ def build_app(
         transcript=Transcript(database, clock, live),
         live=live,
         media=MediaStore(paths.media_dir),
+        artifacts=ArtifactStore(
+            database, paths.artifacts_dir, paths.workspace_dir, cfg.artifacts, clock
+        ),
         transcriber=transcriber or OpenAITranscriber(cfg.model, cfg.media),
         web_auth=WebAuth(
             database,

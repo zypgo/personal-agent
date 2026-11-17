@@ -21,8 +21,15 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from personal_agent.clock import get_tz, valid_zone
-from personal_agent.config import Config, ConfigError, api_key, load_config, read_text_file
+from personal_agent.config import Config, ConfigError, load_config, read_text_file
 from personal_agent.db import SCHEMA_VERSION
+from personal_agent.harness.endpoints import (
+    DEFAULT_KEY_ENV,
+    Endpoint,
+    model_endpoint,
+    supports_hosted_search,
+    transcription_endpoint,
+)
 from personal_agent.harness.pricing import is_known
 from personal_agent.maintenance import footprint, size
 from personal_agent.paths import Paths
@@ -82,16 +89,37 @@ def _home_check(paths: Paths) -> Check:
 
 
 def _key_check(paths: Paths, cfg: Config) -> Check:
-    if api_key():
-        return Check("OpenAI key", "ok", "OPENAI_API_KEY is set")
-    if cfg.model.base_url or os.environ.get("OPENAI_BASE_URL"):
-        return Check("OpenAI key", "warn", "no key, but a custom endpoint is configured")
+    endpoint = model_endpoint(cfg.model)
+    name = "OpenAI key" if endpoint.api_key_env == DEFAULT_KEY_ENV else "model key"
+    return _endpoint_key_check(paths, name, endpoint)
+
+
+def _endpoint_key_check(paths: Paths, name: str, endpoint: Endpoint) -> Check:
+    if endpoint.key:
+        return Check(name, "ok", f"{endpoint.api_key_env} is set")
+    if not endpoint.missing_key:
+        return Check(name, "warn", "no key, but a custom endpoint is configured")
     return Check(
-        "OpenAI key",
+        name,
         "fail",
-        "OPENAI_API_KEY is not set",
-        f"Put OPENAI_API_KEY=... in {paths.env_file}",
+        f"{endpoint.api_key_env} is not set",
+        f"Put {endpoint.api_key_env}=... in {paths.env_file}",
     )
+
+
+def _speech_checks(paths: Paths, cfg: Config) -> list[Check]:
+    if not cfg.media.voice:
+        return []
+    endpoint = transcription_endpoint(cfg.model, cfg.media)
+    routing = "independent" if cfg.media.transcribe_base_url else "inherited from model"
+    return [
+        _endpoint_key_check(paths, "speech key", endpoint),
+        Check(
+            "speech endpoint",
+            "ok",
+            f"{routing}; requires /audio/transcriptions support (not probed)",
+        ),
+    ]
 
 
 def _model_checks(cfg: Config) -> list[Check]:
@@ -207,6 +235,7 @@ def static_checks(paths: Paths) -> list[Check]:
     return [
         *checks,
         _key_check(paths, cfg),
+        *_speech_checks(paths, cfg),
         *_model_checks(cfg),
         _timezone_check(cfg),
         _sqlite_check(),
@@ -507,14 +536,43 @@ def _channel_checks(paths: Paths, cfg: Config) -> list[Check]:
                     "brew install ffmpeg   (or set [media] voice = false)",
                 )
             )
+    dingtalk = cfg.dingtalk
+    if dingtalk.enabled:
+        missing = [
+            name
+            for name in (dingtalk.client_id_env, dingtalk.client_secret_env)
+            if not os.environ.get(name, "").strip()
+        ]
+        if missing:
+            checks.append(
+                Check(
+                    "dingtalk",
+                    "fail",
+                    "enabled, but missing " + ", ".join(missing),
+                    f"Put the application credentials in {paths.env_file}; see docs/DINGTALK.md.",
+                )
+            )
+        else:
+            approved = _approved_senders(paths, "dingtalk")
+            checks.append(
+                Check(
+                    "dingtalk",
+                    "ok" if approved else "warn",
+                    f"credentials set; {approved} account(s) approved; connection not probed",
+                    "Run `pa channels test dingtalk` to check gateway authentication. "
+                    "Start `pa serve`, message the private bot, then "
+                    "`pa channels approve dingtalk CODE`.",
+                )
+            )
     notify = cfg.notify.channel
     known = (
         {"cli", "auto"}
         | ({"telegram"} if telegram.enabled else set())
         | ({"web"} if cfg.web.enabled else set())
+        | ({"dingtalk"} if dingtalk.enabled else set())
     )
     if notify not in known:
-        if cfg.plugins.enabled and notify not in {"telegram", "web"}:
+        if cfg.plugins.enabled and notify not in {"telegram", "web", "dingtalk"}:
             # Doctor does not run plugin code, so it cannot see which channels they offer.
             checks.append(
                 Check(
@@ -752,6 +810,8 @@ def _web_checks(cfg: Config) -> list[Check]:
         search = "off"
     elif cfg.model.api != "responses":
         search = "unavailable (needs model.api = responses)"
+    elif not supports_hosted_search(cfg.model):
+        search = "unavailable (endpoint has not enabled hosted search support)"
     else:
         search = cfg.tools.web_search
     checks = [Check("web", "ok", f"tools: {', '.join(tools) or 'none'}; hosted search: {search}")]

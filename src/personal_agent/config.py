@@ -24,7 +24,9 @@ from pydantic import (
     model_validator,
 )
 
+from personal_agent.channels.dingtalk.config import DingTalkConfig
 from personal_agent.clock import parse_quiet_hours
+from personal_agent.core.artifact_config import ArtifactConfig
 from personal_agent.parsing import loads_toml
 from personal_agent.paths import Paths
 from personal_agent.validation import problems
@@ -65,6 +67,12 @@ class AgentConfig(_Section):
     stopgap until summarising compaction lands."""
 
 
+class ModelCapabilities(_Section):
+    hosted_web_search: bool | None = None
+    """None: offer hosted search only at the native OpenAI endpoint. True explicitly declares
+    that a compatible endpoint implements it; False disables it. Requires the Responses API."""
+
+
 class ModelConfig(_Section):
     main: str = "gpt-6.1-sol"
     """Conversations and background work."""
@@ -75,10 +83,14 @@ class ModelConfig(_Section):
     verbosity: Literal["low", "medium", "high"] | None = None
     base_url: str | None = None
     """OpenAI-compatible endpoint. `None` = the OpenAI default / `OPENAI_BASE_URL`."""
+    api_key_env: str = "OPENAI_API_KEY"
+    """Environment variable containing this endpoint's key; never put the key in config.toml."""
+    capabilities: ModelCapabilities = ModelCapabilities()
     api: Literal["responses", "chat_completions"] = "responses"
     """`chat_completions` for OpenAI-compatible servers that do not implement the Responses API."""
     store: bool = False
-    """False: OpenAI does not keep responses; the full history lives in our own state.db."""
+    """False: request stateless Responses mode. Context is still sent to the model endpoint;
+    this setting does not govern every provider's data retention."""
     reasoning_item_ids: Literal["preserve", "omit"] = "preserve"
     """`omit` strips reasoning item IDs when history is replayed to the API. Use it only as a
     fallback if `pa doctor --live` reports that the API rejects replayed reasoning items."""
@@ -90,6 +102,11 @@ class ModelConfig(_Section):
     timeout_s: float = Field(180.0, gt=0)
     """Per model call attempt."""
     max_retries: int = Field(3, ge=0, le=10)
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _key_env_is_a_name(cls, value: str) -> str:
+        return _check_env_name(value, "model.api_key_env")
 
 
 class MemoryConfig(_Section):
@@ -379,6 +396,12 @@ class MediaConfig(_Section):
     """Turn voice messages into text with OpenAI speech-to-text before the agent sees them."""
     transcribe_model: str = "gpt-transcribe"
     """`whisper-1` and the `gpt-4o-*-transcribe` models are scheduled to shut down on 2027-02-26."""
+    transcribe_base_url: str | None = None
+    """Speech endpoint, independent of the model endpoint when set. None preserves the legacy
+    behaviour: inherit model.base_url / OPENAI_BASE_URL / the OpenAI default."""
+    transcribe_api_key_env: str | None = None
+    """Speech key's environment variable. None inherits model.api_key_env. Set both speech
+    overrides when the speech and text models use different providers."""
     transcribe_timeout_s: float = Field(240.0, gt=0, le=3600)
     """Deadline for one complete transcription, including conversion and provider retries."""
     language: str | None = None
@@ -386,6 +409,11 @@ class MediaConfig(_Section):
     max_voice_seconds: int = Field(300, ge=5, le=3600)
     max_voice_bytes: int = Field(20_000_000, ge=10_000, le=25_000_000)
     """The speech API accepts files up to 25 MB."""
+
+    @field_validator("transcribe_api_key_env")
+    @classmethod
+    def _key_env_is_a_name(cls, value: str | None) -> str | None:
+        return _check_env_name(value, "media.transcribe_api_key_env") if value is not None else None
 
 
 class TelegramConfig(_Section):
@@ -463,6 +491,9 @@ class WebConfig(_Section):
     """The chat page you open in a browser (your phone's, too)."""
 
     enabled: bool = False
+    stream_responses: bool = True
+    """Show live answer previews for interactive web chats. Disable for model endpoints that do
+    not implement streaming. The final answer is still delivered through the durable outbox."""
     host: str = "127.0.0.1"
     """Where to listen. 127.0.0.1 is this computer only. To use the page from a phone, keep this
     and put Tailscale Serve (or another HTTPS proxy you trust) in front: `tailscale serve --bg 8765`."""
@@ -789,7 +820,9 @@ class Config(_Section):
     mcp: McpConfig = McpConfig()
     plugins: PluginsConfig = PluginsConfig()
     media: MediaConfig = MediaConfig()
+    artifacts: ArtifactConfig = ArtifactConfig()
     telegram: TelegramConfig = TelegramConfig()
+    dingtalk: DingTalkConfig = DingTalkConfig()
     web: WebConfig = WebConfig()
     webhooks: WebhooksConfig = WebhooksConfig()
     secrets: dict[str, SecretConfig] = {}
@@ -822,8 +855,10 @@ fast = "gpt-6-luna"              # cheap side jobs (summaries, guardian review)
 reasoning_effort = "medium"      # none | minimal | low | medium | high | xhigh | max
 # reasoning_context = "all_turns"  # auto | current_turn | all_turns
 # base_url = "https://api.openai.com/v1"   # any OpenAI-compatible endpoint
+# api_key_env = "OPENAI_API_KEY"  # variable name, not its value; use a provider-specific name when needed
 # api = "chat_completions"       # for compatible servers without the Responses API
-store = false                    # false: OpenAI keeps no copy; history lives in state.db
+# capabilities = { hosted_web_search = false }  # auto by default: only the native OpenAI endpoint
+store = false                    # request stateless Responses mode; context still leaves this machine
 # reasoning_item_ids = "omit"    # fallback if `pa doctor --live` says replayed reasoning is rejected
 # prompt_cache_retention = "24h" # keep the prompt's static start cached for a day: much cheaper runs after
 #                                # pauses, but OpenAI then holds data derived from the prompt that long
@@ -913,6 +948,8 @@ images = true                    # pictures you send are shown to the model
 images_in_context = 2            # each request carries only your newest N pictures
 voice = true                     # voice messages are turned into text first (OpenAI speech-to-text)
 transcribe_model = "gpt-transcribe"
+# transcribe_base_url = "https://api.openai.com/v1"  # independent speech endpoint; omitted = inherit model
+# transcribe_api_key_env = "OPENAI_API_KEY"  # independent speech key; omitted = inherit model.api_key_env
 # transcribe_timeout_s = 240     # interrupted calls require a new message before retrying
 # language = "zh"                # ISO-639-1 hint; default: detect
 
@@ -924,11 +961,25 @@ transcribe_model = "gpt-transcribe"
 # enabled = true
 # proxy = "socks5://127.0.0.1:1080"    # if Telegram is not reachable directly
 
+# DingTalk private chat, using an application robot's outbound Stream connection (no public port).
+# Put DINGTALK_CLIENT_ID and DINGTALK_CLIENT_SECRET in .env, enable the robot and Stream mode in
+# DingTalk, then message it and approve its code: `pa channels approve dingtalk CODE`.
+# [dingtalk]
+# enabled = true
+# corp_id = "ding-your-organization"   # optional organization restriction
+
+# Files published from the workspace are private, immutable snapshots with authenticated downloads.
+# [artifacts]
+# max_file_bytes = 10485760             # 10 MiB per file
+# max_total_bytes = 209715200           # 200 MiB of unexpired results
+# retention_days = 30
+
 # A chat page for any browser, installable on a phone's home screen. It listens on this computer
 # only; `pa web connect --via tailscale` sets up private HTTPS and a one-time pairing QR.
 # Use `pa web connect --via lan` on trusted Wi-Fi, or `pa web pair` to pair another browser.
 # [web]
 # enabled = true
+# stream_responses = true              # false for model endpoints without streaming support
 # public_url = "https://my-mac.tailnet-name.ts.net"   # where your phone reaches it
 
 # Let other programs wake the agent (GitHub, a monitoring tool, your own script). Each route needs

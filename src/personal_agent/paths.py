@@ -69,6 +69,11 @@ class Paths:
         return self.home / "media"
 
     @property
+    def artifacts_dir(self) -> Path:
+        """Private, immutable snapshots of files published to the owner."""
+        return self.home / "artifacts"
+
+    @property
     def backups_dir(self) -> Path:
         """Copies of the database that `pa db backup` makes. Created when the first one is."""
         return self.home / "backups"
@@ -90,6 +95,7 @@ class Paths:
             self.logs_dir,
             self.run_dir,
             self.media_dir,
+            self.artifacts_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
             try:
