@@ -6,7 +6,8 @@ nothing private: the agent's name, its messages and its state are only ever sent
 
 Messages the owner writes go through `Ingress`, the same door Telegram uses; the answers come back
 through the outbox like any other channel's, and reach the page as events on `/api/stream`. The
-page never holds state of its own that the database does not: reconnect and it asks what it missed.
+page replays durable history on reconnect. In-progress answer previews are separate, bounded
+in-memory snapshots; they never advance the durable history cursor.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from starlette.routing import Route
 
 from personal_agent.channels.commands import ChatCommands
 from personal_agent.channels.ingress import MAX_IMAGES, Ingress, Upload
+from personal_agent.channels.web.artifacts import artifact_routes
 from personal_agent.channels.web.connect import connection_info
 from personal_agent.channels.web.probe import probe_signature
 from personal_agent.channels.web.security import Guard
@@ -499,12 +501,14 @@ class WebApi:
         try:
             yield b"retry: 3000\n\n"
             approvals = self._recent_approvals()
+            drafts = app.live.response_drafts()
             yield sse(
                 "hello",
                 {
                     "working": app.live.busy,
                     "last_id": app.transcript.last_id(),
                     "approvals": approvals,
+                    "drafts": drafts,
                 },
             )
             last_sent = after
@@ -528,6 +532,13 @@ class WebApi:
                         "activity",
                         {"working": bool(latest.get("working")), "tool": latest.get("tool")},
                     )
+                    spoke = True
+                # Snapshot replacement tolerates missed nudges and a sleeping phone. Previews
+                # have no SSE id: only committed transcript turns advance Last-Event-ID.
+                current_drafts = app.live.response_drafts()
+                if current_drafts != drafts:
+                    drafts = current_drafts
+                    yield sse("drafts", {"drafts": drafts})
                     spoke = True
                 # Approvals are decided from other places too (Telegram, the terminal, which is
                 # another process): compare with the database rather than wait for a nudge.
@@ -564,6 +575,7 @@ class WebApi:
             Route("/api/stream", self.stream),
             Route("/api/messages", self.messages, methods=["POST"]),
             Route("/api/media/{media_id}", self.media),
+            *artifact_routes(self.app),
             Route("/api/approvals", self.approvals),
             Route("/api/approvals/{approval_id}", self.decide, methods=["POST"]),
             Route("/api/status", self.status),

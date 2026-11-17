@@ -15,6 +15,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from personal_agent.channels.base import ChannelCapabilities
 from personal_agent.channels.http import HttpListener
 from personal_agent.channels.ingress import Ingress
 from personal_agent.channels.web.api import build_web_app
@@ -30,6 +31,14 @@ log = logging.getLogger(__name__)
 
 class WebChannel:
     name = "web"
+    capabilities = ChannelCapabilities(
+        markdown=True,
+        images_in=True,
+        audio_in=True,
+        documents_out=True,
+        approval_buttons=True,
+        streaming=True,
+    )
 
     def __init__(self, app: App, *, host: str | None = None, port: int | None = None) -> None:
         self.app = app
