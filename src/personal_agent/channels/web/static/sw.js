@@ -12,6 +12,8 @@ const SHELL = [
   "/workspace",
   "/static/workbench.js",
   "/static/workbench.css",
+  "/static/orchestration.js",
+  "/static/orchestration.css",
   `/static/style.css?v=${VERSION}`,
   `/static/app.js?v=${VERSION}`,
   "/static/api.js",
