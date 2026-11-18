@@ -2,13 +2,15 @@
 
 控制台保存任务、批准计划、接收回执；现有 Grok Bot 或 Muse 使用自己的会话、工具和账号执行任务。桥接不调用模型，也不创建额外云沙箱。
 
+**Grok Bot 完整自动接单请按 [GROK_BOT_SETUP.md](GROK_BOT_SETUP.md) 配置。** 指南提供附件代码包安装、官方安全凭据验证、Webhook 唤醒与定时兜底、持久恢复及自动验收步骤；本页保留通用桥接和其他执行端说明。Grok 真实接通仍须在用户自己的账号完成验证。
+
 ## 支持边界
 
 | 接入方式 | 当前行为 | 不代表什么 |
 | --- | --- | --- |
 | Grok Bot Routine webhook | HTTPS POST、Bearer 鉴权；HTTP 200 记录 `wake_accepted` | 不代表领取、完成或验收 |
 | Muse `manual` | 用户在现有会话中启动桥接领取 | 不假定公开会话控制 API |
-| Muse `native_schedule` | 原生定时任务运行领取指令 | 控制台未因此验证该账号的定时器 |
+| Muse `native_schedule` | 原生定时任务运行领取指令 | 单独设置此模式不会创建定时器，也不能证明无人值守运行 |
 | `verified_hook` | 内部发送器仅接受显式验证的 Bearer hook 合同 | Web 注册入口目前关闭，不能凭一个 URL 声称已接通 Muse |
 | HTTP / 可选 MCP | Agent 主动领取、心跳、进展、问答、候选结果、文件 | 不是供应商的完整会话或计费 API |
 
@@ -19,7 +21,7 @@
 - [Muse Platform 文档](https://platform.muse.ai/docs)：连接器由开发者向 Muse 提供工具，不据此推断有远程会话控制 API。
 - [Muse 的 Tailscale 接入](https://tailscale.com/blog/meta-muse-ai-agent-tailscale)：该路径的连接方向、设备批准须按实际账号验证；本桥接不依赖虚构的入站端口或 `StableID`。
 
-`check` 成功只证明该机器能够访问本控制服务并使用指定 Agent 凭据。真实 Grok / Muse 账号接入仍需从原生会话完成一次「领取 → 回传 → 人工验收」。仓库测试使用本机 HTTP 和假 webhook，未调用真实供应商账号。
+`check` 成功只证明该机器能够访问本控制服务并使用指定 Agent 凭据。每个真实 Grok / Muse 账号接入仍需从原生会话完成一次「领取 → 回传 → owner 验收」。仓库自动化测试使用本机 HTTP 和假 webhook；另已完成一次 Muse 原生定时的真实无人值守联调，具体时间、权限范围和成果检查见下文及 [Muse 验收记录](../examples/muse/README.md)。
 
 ## 1. 在控制台注册 Agent
 
@@ -157,6 +159,49 @@ python3 pa-agent-bridge.py --home /workspace/pa-worker-state report ATTEMPT_ID \
 ```
 
 同一 Grok 账号下的多个 Bot 可能共享电脑环境。本系统约束的是 worker HTTP/MCP 接口能提供的数据，不能把同账号 Bot 描述为独立安全沙箱。原生账号额度、订阅、会话寿命和供应商权限均沿用用户已有产品设置。
+
+## Muse 原生 Vault / cron 接单
+
+Muse 环境需要官方 Vault 注入或出站代理时，使用 [Muse 通用示例及运行说明](../examples/muse/README.md)。适配器复用现有 `WorkerBridge`，只替换 HTTP 传输并增加持久交付记录；不启动额外模型或云沙箱。它保留平台代理、验证 TLS、拒绝重定向，通过官方 `dynamic_credentials.py` 向明确指定的 HTTPS 主机注入 `custom.<provider>` 凭据，不向模型导出真实 token。
+
+`--url`、`--credential`、`--agent`、`--space` 都由部署者显式设置。安装完整 Personal Agent 时直接复用配套 bridge；独立运行需提供 `--bridge` 与独立核实的 `--bridge-sha256`。先运行 `probe` 完成实际权限检查，再配置原生定时任务并创建已批准测试任务。
+
+```bash
+python3 /workspace/muse_vault_worker.py \
+  --url https://YOUR-CONTROL-ORIGIN --credential custom.personal-agent \
+  --agent YOUR_AGENT_ID --space YOUR_SPACE_ID \
+  --home /workspace/pa-muse-state claim
+```
+
+聊天诊断优先将上述子命令改为 `local-status`，沿用相同 origin、credential、Agent、空间和状态目录。它校验 origin／Agent／空间身份，持有既有 `muse-dispatch` 锁，只返回脱敏本地元数据，保留账本原字节；不依赖 Vault helper、不建立 HTTP opener、不发网络请求。可据此排查本地空闲、busy 或 pending，避免单为诊断而触发只授权给 cron 的联网操作。需要核对远端执行或取消状态时使用联网 `status [ATTEMPT_ID]`；本地空闲不等于远端队列为空，定时任务授权也不自动扩展到聊天。缺失的 `pending_action`／`result_confirmed` 等字段不能补成 `false`。
+
+定时任务每轮调用一次 `claim`，**先处理 `next: status_then_retry`**：用 `status ATTEMPT_ID` 核对原任务和授权，本轮最多调用一次 `retry ATTEMPT_ID` 重发保存的原请求，然后结束本轮；核对或重试失败时保留账本并报告，不重执行、不循环重试。其余 `idle` / `busy` 才静默退出，只有首次 `claimed: true` 才交付 payload。Muse 原生任务执行获批内容，维护心跳并用 `result` 回传正文和附件；执行中出现未知响应时也遵循同一恢复顺序。候选结果仍需请求方验收。单次请求超时 120 秒，以容纳平台授权等待；这不是后台心跳服务。
+
+**权限范围和自动运行分别验收。** 对已经创建的原生定时任务，在该 scheduled job 的审批菜单选择 `Always allow for this scheduled task`，核对权限仅绑定该任务和精确控制端主机的 `443` 端口，保持账户全局默认审批策略不变。2026-11-18 的真实配置核对到 3 条符合该范围的 durable 授权记录；这不是每次安装必须具有的固定数量。若界面提供的权限包含其他主机、所有子域名或额外动作，应保留单次确认并说明无人值守请求仍可能等待审批，不修改代理或绕过授权。
+
+`native_schedule` 只记录接入模式，实际定时器须在 Muse 中创建。worker 只领取已经批准的任务，结果仍需 owner 验收；不能把批准计划或成功 `probe` 当作执行完成。应以原生自然触发记录和控制端 attempt、进展、文件结果及验收记录核对，手动 Run now 不能替代这一检查。
+
+本次采用原生 `every: 5m`。关闭聊天窗口不会暂停已经启用的原生定时计划；**空队列轮询也消耗 Muse 用量**，因为每轮仍会先唤醒 Agent。可在 Muse 任务页暂停计划，或在该任务的授权管理中撤销对应持久授权。暂停计划停止后续唤醒，撤销权限收回后续访问；对已经领取的执行仍需单独请求取消并确认停止。
+
+### 已完成的真实验收
+
+2026-11-18 **20:09:28—20:10:27（Asia/Shanghai）**，Muse 原生定时器自然触发并完成一轮任务。在事先配置任务专属持久权限后，该轮没有人工点击授权、手动 Run now 或手工领取。执行使用 worker CLI、原版 WorkerBridge 和 Muse 官方 Vault helper，通过已有 HTTP 接口领取获批任务并回传 CSV、Markdown。
+
+owner 实际下载了两份文件，核对任务载荷中的随机 nonce、文件大小和 SHA-256，并逐地区验证四笔合成订单的订单数、数量、销售额及总计，随后完成成果验收。nonce 没有预写进定时提示或脚本。
+
+同日 **20:09:28—23:34:05（Asia/Shanghai）** 的原生历史中，共核对到 **41 次自然触发，41 次 success、0 次 failed、0 次 cancelled**。查询 `limit=50` 返回 43 条，其中 2 条早于窗口，`history_may_be_truncated=false`。首轮之后的 40 轮均静默结束，单轮约 20—40 秒；原生摘要无法区分 `idle` 与 `busy`，因此这些记录只证明定时触发和正常退出，不能独立证明队列为空、没有旧 pending 或接单账本未阻塞。
+
+后续独立核查通过 Railway 上现有 owner HTTPS API 得到 `health_status: 200`、`health_ok: true`；专用 Muse 的 `active_attempts: 0`、`outstanding_wakes: 0`，三个既有测试任务均为 `succeeded`。Muse 侧持有 `muse-dispatch` 锁，直接复用已安装的 `Dispatcher.local_status()` 做离线脱敏诊断，返回 `initialized: true`、`attempt_id: null`、`delivered: false`，没有网络／Vault 调用或状态改写。因为没有 attempt，`pending_action`、`result_confirmed` 字段不存在，不能写成 `false`。这些证据确认本次专用队列和本地指针**当前空闲，未被旧任务卡住**，不能追溯证明此前每一静默轮次都为 `idle`。
+
+手动网络 `status` 曾因单次权限等待在 120 秒后超时，未计通过；之后的离线诊断只验证本地状态，不代替网络或 Vault 权限检查。当时复用的是已安装的 `Dispatcher.local_status()` 方法，后续新增的正式 `local-status` 子命令未计入这次线上实测。完整记录与检查项见 [Muse 示例运行说明](../examples/muse/README.md)。
+
+### 已验收任务仍有本地 pending 时
+
+交付记录写入后崩溃、响应丢失或租约失效时，保留账本供核对，不自动重放。控制端 `accepted` 与本地收到 `result_receipt` 是不同事实；定时历史 success 也不能证明没有待恢复请求。
+
+若旧 outbox 无法恢复，资源 owner 必须先核实**对应的 Muse 原生执行确实结束**。`uncertain` 或取消待确认可在控制台登记停止；已经 `accepted` 的执行当前没有对应界面按钮，须通过已登录资源 owner 的 `POST /api/v4/tasks/{task_id}/stopped`，正文含 `step_id`、`attempt_id`、`note`，补充停止证明。worker token 无权操作。对 accepted 的确认只追加停止说明、操作者、时间及 `attempt.stop_confirmed` 事件，保留验收、结果、任务状态和后续依赖，不把任务改成失败或重新入队。
+
+随后使用原状态目录运行示例的 `reconcile`。它要求服务端 `stop-receipt` 的原 attempt、generation 匹配，状态为 `stopped` 或 `accepted`、`stopped_by` 为非空字符串、`stopped_at` 为有限正数且不是布尔值；裸 `accepted` 不足以释放。恢复只标记本地接单指针已释放，保留原 pending 和历史，不伪造结果回执、不重发旧任务，也不替 owner 停止远端执行。完整步骤见 [Muse 恢复说明](../examples/muse/README.md#已验收结果与本地待确认请求的恢复)，控制端与适配器均须使用包含该恢复支持的版本。
 
 ## Codex / Cursor / Personal Agent Host
 
