@@ -63,6 +63,10 @@ class SpaceManager:
             child.budget.instance_guard = self.check_instance_budget
             self.apps[space.id] = child
         self.apps[space.id].space_owner_id = space.owner_id
+        store = self.apps[space.id].orchestration
+        if store is not None:
+            store.space_id = space.id
+            store.space_owner_id = space.owner_id
         return self.apps[space.id]
 
     def all_apps(self) -> list[App]:
