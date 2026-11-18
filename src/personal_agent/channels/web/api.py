@@ -667,6 +667,11 @@ def body_limit_for(app: App) -> Callable[[str, str], int]:
     message = MAX_IMAGES * media.max_image_bytes + media.max_voice_bytes + 256 * 1024
 
     def limit(method: str, path: str) -> int:
+        if method == "POST" and path.startswith("/api/v4/"):
+            if "/worker/" in path and (path.endswith("/result") or path.endswith("/mcp")):
+                return 16 * 1024 * 1024
+            if path == "/api/v4/tasks":
+                return 1024 * 1024
         if method == "POST" and path.startswith("/api/v3/nodes/attempts/"):
             return 16 * 1024 * 1024
         return message if method == "POST" and path == "/api/messages" else 64 * 1024

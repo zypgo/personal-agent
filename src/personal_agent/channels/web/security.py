@@ -25,6 +25,7 @@ carry a secret out), framing the page, sniffing a type, or leaking the address.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Iterable
 from urllib.parse import urlsplit
 
@@ -65,6 +66,7 @@ CUSTOM_HEADER = "x-pa"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 SAME_ORIGIN = frozenset({"same-origin", "none"})
 DEFAULT_BODY_LIMIT = 64 * 1024
+WORKER_PATH = re.compile(r"/api/v4/agents/[A-Za-z0-9_.:-]+/worker/[^?#]*\Z")
 
 
 def hostname(value: str | None) -> str:
@@ -163,12 +165,20 @@ class Guard:
             return _refuse(403, "This page does not accept requests from there.")
         site = headers.get("sec-fetch-site")
         method = scope["method"]
+        # Native API/MCP clients carry explicit per-agent credentials, never browser cookies.
+        # Endpoints authenticate before reading bodies; Host, supplied Origin and Fetch
+        # Metadata checks remain in force for this narrow machine interface.
+        machine = (
+            WORKER_PATH.fullmatch(scope["path"]) is not None
+            and headers.get("authorization", "").startswith("Bearer ")
+            and not headers.get("cookie")
+        )
         if method not in SAFE_METHODS:
-            if origin is None:
+            if origin is None and not machine:
                 return _refuse(403, "A request that changes something must say where it came from.")
             if site is not None and site not in SAME_ORIGIN:
                 return _refuse(403, "This page does not accept requests from other sites.")
-            if headers.get(CUSTOM_HEADER) != "1":
+            if headers.get(CUSTOM_HEADER) != "1" and not machine:
                 return _refuse(403, "Missing the header that marks a request from the page itself.")
         elif (
             scope["path"].startswith(self.api_prefix)
