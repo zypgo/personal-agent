@@ -1440,17 +1440,35 @@ class OrchestrationStore:
             if step["current_attempt"] != attempt_id:
                 raise OrchestrationConflict("This is not the step's current attempt.")
             attempt = self.db.row("SELECT * FROM orchestration_attempts WHERE id=?", (attempt_id,))
-            if attempt["state"] == "stopped":
+            if attempt["state"] == "stopped" or (
+                attempt["state"] == "accepted" and attempt["stopped_at"] is not None
+            ):
                 if attempt["stop_note"] != note or attempt["stopped_by"] != actor_id:
                     raise OrchestrationConflict(
                         "This attempt already has a different stop confirmation."
                     )
+            elif attempt["state"] == "accepted":
+                # An accepted result is not proof that its native execution stopped.
+                # Record only the owner's explicit attestation. Preserve acceptance,
+                # result eligibility and downstream work, including after token rotation.
+                self.db.execute(
+                    """UPDATE orchestration_attempts SET stopped_by=?,stopped_at=?,stop_note=?
+                       WHERE id=?""",
+                    (actor_id, self.clock.now(), note, attempt_id),
+                )
+                self._event(
+                    task_id,
+                    "attempt.stop_confirmed",
+                    {"actor_id": actor_id, "note": note},
+                    step_id=step_id,
+                    attempt_id=attempt_id,
+                )
             else:
                 if attempt["state"] != "uncertain" and not (
                     attempt["state"] in ACTIVE_ATTEMPTS and attempt["desired_state"] == "cancel"
                 ):
                     raise OrchestrationConflict(
-                        "Only an uncertain or cancellation-pending attempt needs confirmation."
+                        "Only an accepted, uncertain or cancellation-pending attempt needs confirmation."
                     )
                 now = self.clock.now()
                 self.db.execute(
@@ -1483,7 +1501,7 @@ class OrchestrationStore:
                     "task_id": task_id,
                     "step_id": step_id,
                     "attempt_id": attempt_id,
-                    "state": "stopped",
+                    "state": "accepted" if attempt["state"] == "accepted" else "stopped",
                     "redacted": True,
                 }
             return self._view_task(task, actor_id=actor_id)
