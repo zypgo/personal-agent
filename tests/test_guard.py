@@ -90,6 +90,10 @@ async def test_a_tool_denied_on_every_call_is_not_even_offered(make_app):
             "job_status",
             "cancel_job",
             "ask_task_input",
+            "list_agents",
+            "delegate_agents",
+            "agent_task_status",
+            "cancel_agent_task",
         }
         | FILE_TOOLS
         | WEB_TOOLS
@@ -106,6 +110,7 @@ async def test_read_only_mode_hides_everything_that_changes_the_world(make_app):
     assert tool_names(model) == {
         "memory", "send_message", "schedule", "search_history", "search_tool_history", "fetch", "leaky", "list_files",
         "read_file", "web_fetch", "http_request", "web_search", "submit_job", "job_status", "cancel_job", "ask_task_input",
+        "list_agents", "delegate_agents", "agent_task_status", "cancel_agent_task",
     }  # fmt: skip
 
 
