@@ -27,6 +27,9 @@ const SHELL = [
   "/static/icon-192.png",
   "/manifest.webmanifest",
 ];
+// Only explicitly public shell paths may enter storage. A blacklist of /api/ misses encoded
+// forms such as /%61pi/history, which the server decodes into an authenticated API route.
+const SHELL_PATHS = new Set(SHELL.map((path) => new URL(path, self.location.origin).pathname));
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -53,7 +56,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/") || url.pathname === "/sw.js") return; // the network, or nothing
+  if (!SHELL_PATHS.has(url.pathname)) return; // private, unknown and encoded paths: network only
   event.respondWith(networkFirst(request));
 });
 

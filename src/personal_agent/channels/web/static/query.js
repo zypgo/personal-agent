@@ -1448,14 +1448,15 @@ var Q = class extends Error {
 			} catch {
 				throw this.#f(n, a.signal), se();
 			}
-			let c = null;
+			let c = null, l = !1;
 			if (i === "blob" && s.ok) try {
 				c = await s.blob();
 			} catch {
 				throw this.#f(n, a.signal), new Q(0, "The download was interrupted. Please try again.");
 			}
-			else if (!s.headers || (s.headers.get("content-type") ?? "").includes("json")) try {
-				c = await s.json();
+			else if (s.status === 204 || s.status === 205) l = !0;
+			else if (!s.headers || (s.headers.get("content-type") ?? "").toLowerCase().includes("json")) try {
+				c = await s.json(), l = !0;
 			} catch {
 				c = null;
 			}
@@ -1463,6 +1464,7 @@ var Q = class extends Error {
 				let e = c && typeof c == "object" ? c : {}, t = typeof e.error == "string" ? e.error : typeof e.detail == "string" ? e.detail : `The agent answered ${s.status}.`;
 				throw new Q(s.status, t, c);
 			}
+			if (i === "json" && !l) throw new Q(0, "The agent returned an incomplete or invalid response. Refresh before trying again.");
 			return c;
 		} finally {
 			for (let e of o) e.removeEventListener("abort", s);

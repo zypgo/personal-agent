@@ -269,6 +269,50 @@ async def test_sdk_cancelled_call_keeps_worker_slot_until_request_finishes(recei
 
 
 @pytest.mark.parametrize("cancel", [True, False])
+async def test_sdk_interrupted_close_still_closes_client_after_the_worker_finishes(receipt, cancel):
+    entered, release, closed = threading.Event(), threading.Event(), threading.Event()
+    client = FakeDocker(receipt, "running")
+    original = client.inspect_container
+    original_close = client.close
+
+    def blocking(resource):
+        entered.set()
+        assert release.wait(5)
+        return original(resource)
+
+    def close():
+        original_close()
+        closed.set()
+
+    client.inspect_container = blocking
+    client.close = close
+    backend = adapter(client, timeout_s=0.01)
+    pending = asyncio.create_task(backend.inspect(receipt))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        closing = asyncio.create_task(backend.aclose())
+        if cancel:
+            await asyncio.sleep(0)
+            closing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await closing
+        else:
+            with pytest.raises(TimeoutError):
+                await closing
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        assert await asyncio.to_thread(closed.wait, 1)
+        await backend.aclose()
+        assert client.closed
+        with pytest.raises(BackendError, match="closed"):
+            await backend.inspect(receipt)
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await backend.aclose()
+
+
+@pytest.mark.parametrize("cancel", [True, False])
 async def test_sdk_interrupts_a_blocked_log_stream_without_killing_container(receipt, cancel):
     entered, closed = threading.Event(), threading.Event()
     client = FakeDocker(receipt, "running")

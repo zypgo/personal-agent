@@ -73,7 +73,7 @@ function setup(task = taskFixture(), {principal = "alice", role = "member", resp
   const calls = [];
   const context = {document, URL, URLSearchParams, AbortController, DOMException, RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest, crypto: webcrypto,
     location: {href: "https://example.invalid/workspace", origin: "https://example.invalid", hash: ""},
-    history: {replaceState() {}}, fetch: async (url, options) => {
+    history: {replaceState() {}}, confirm: () => true, fetch: async (url, options) => {
       const path = new URL(url, "https://example.invalid").pathname;
       const body = options.body ? JSON.parse(options.body) : null;
       calls.push({path, body});
@@ -87,7 +87,7 @@ function setup(task = taskFixture(), {principal = "alice", role = "member", resp
       return {ok: true, status: 200, json: async () => data};
     },
   };
-  runInNewContext(definitions + "\nglobalThis.ui={state,renderTask,loadTasks,editingTask,showLogin};", context);
+  runInNewContext(definitions + "\nglobalThis.ui={state,renderTask,loadTasks,loadMembers,editingTask,showLogin};", context);
   context.ui.state.me = {principal: {id: principal, is_admin: false}, role, spaces: []};
   context.ui.state.space = "space-a"; context.ui.state.taskId = task.id;
   context.ui.renderTask(task);
@@ -177,4 +177,38 @@ test("a revoked project is cleared when a parallel request is cancelled before t
   releaseOld({ ok: true, status: 200, json: async () => ({ budget: {space_spent_usd: 999} }) });
   await settled();
   assert.doesNotMatch(get("task-diagnostics").textContent, /999/);
+});
+
+test("leaving a project switches to an accessible space before requesting any more private data", async () => {
+  let left = false;
+  const rejectedSpaceReads = [];
+  const {ui, get, calls} = setup(taskFixture(), {principal: "alice", role: "owner", respond: (url, options) => {
+    const space = url.searchParams.get("space");
+    if (url.pathname === "/api/v3/members" && options.method === "POST") {
+      left = true;
+      return {ok: true, status: 200, json: async () => ({members: []})};
+    }
+    if (left && space === "space-a") {
+      rejectedSpaceReads.push(url.pathname);
+      return {ok: false, status: 403, json: async () => ({error: "No longer a member"})};
+    }
+    if (url.pathname === "/api/v3/members") return {ok: true, status: 200, json: async () => ({
+      members: [{principal_id: "alice", display_name: "Alice", role: "owner"}],
+    })};
+    if (url.pathname === "/api/v3/me") return {ok: true, status: 200, json: async () => ({
+      principal: {id: "alice", display_name: "Alice", is_admin: false}, role: "owner", space_id: "personal-a",
+      spaces: [{id: "personal-a", name: "Personal", kind: "personal"}],
+    })};
+  }});
+  ui.state.me.spaces = [{id: "space-a", name: "Project", kind: "project"}];
+  ui.state.tab = "spaces";
+  await ui.loadMembers();
+  find(get("members-list"), "button")[0].listeners.get("click")();
+  await settled();
+  assert.equal(left, true);
+  assert.equal(ui.state.space, "personal-a");
+  assert.equal(ui.state.taskId, null);
+  assert.deepEqual(rejectedSpaceReads, []);
+  assert.match(get("notice").textContent, /已离开该项目/);
+  assert.equal(calls.filter(call => call.body?.revoke).length, 1);
 });

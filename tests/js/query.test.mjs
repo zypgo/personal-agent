@@ -178,3 +178,36 @@ test("typed task forms preserve the caller's idempotency key and explicit comman
   assert.deepEqual(task, { title: "Report", command: fields.command, input_paths: ["in.txt", "data.csv"], output_paths: ["report.md"], timeout_s: 60, client_request_id: "same-user-retry-id" });
   assert.deepEqual(buildTaskRequest(fields, "same-user-retry-id"), task);
 });
+
+test("a truncated JSON write response is not reported as success or retried", async t => {
+  let calls = 0;
+  const requests = scope(t, { fetcher: async () => {
+    calls++;
+    return new Response('{"accepted":', { status: 200, headers: { "Content-Type": "application/json" } });
+  } });
+  await assert.rejects(requests.request("/api/messages", { method: "POST", json: { text: "once" } }),
+    error => error instanceof ApiError && error.status === 0 && /invalid response/.test(error.message));
+  assert.equal(calls, 1);
+});
+
+test("an HTML success page from a proxy is not accepted as private API data", async t => {
+  const requests = scope(t, { fetcher: async () => new Response("<html>proxy page</html>", {
+    status: 200, headers: { "Content-Type": "text/html" },
+  }) });
+  await assert.rejects(requests.request("/api/history"), error => error instanceof ApiError && error.status === 0);
+});
+
+test("an invalid error body still revokes access using its HTTP status", async t => {
+  const lost = [];
+  const requests = scope(t, {
+    fetcher: async () => new Response("{", { status: 401, headers: { "Content-Type": "application/json" } }),
+    onAccessLost: status => lost.push(status),
+  });
+  await assert.rejects(requests.request("/api/session"), error => error.status === 401);
+  assert.deepEqual(lost, [401]);
+});
+
+test("an explicitly empty success response remains valid", async t => {
+  const requests = scope(t, { fetcher: async () => new Response(null, { status: 204 }) });
+  assert.equal(await requests.request("/api/logout", { method: "POST" }), null);
+});

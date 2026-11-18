@@ -1226,7 +1226,7 @@ M = [
     (
         "http: viewers can write through the legacy routes",
         WC,
-        '                write=scope["method"] not in ("GET", "HEAD", "OPTIONS") and path != "/api/logout",',
+        '                write=scope["method"] not in ("GET", "HEAD", "OPTIONS"),',
         "                write=False,",
         HTTP,
     ),

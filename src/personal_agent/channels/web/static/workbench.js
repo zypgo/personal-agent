@@ -446,7 +446,10 @@ async function loadMembers() {
       const revoke=node("button","移除","ghost danger");
       revoke.addEventListener("click",()=>run(async()=>{
         if(!confirm(`从当前项目移除 ${member.display_name || "该成员"}？对方的私人空间保持独立。`)) return;
-        await api("/api/v3/members",{method:"POST",body:{principal_id:member.principal_id || member.id,action:"revoke",revoke:true}});
+        const principalId=member.principal_id || member.id;
+        const leaving=principalId===state.me?.principal.id;
+        await api("/api/v3/members",{method:"POST",body:{principal_id:principalId,action:"revoke",revoke:true}});
+        if(leaving) {await switchSpace("");notice("已离开该项目，已切换到可访问的空间。");return;}
         await loadMe();await loadMembers();
       }));actions.append(select,revoke);row.append(actions);
     } else row.append(node("span",{owner:"负责人",member:"成员",viewer:"访客"}[member.role] || member.role,"badge"));

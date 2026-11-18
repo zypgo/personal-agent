@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
 
 from helpers import owner_message, webhook
@@ -75,6 +76,35 @@ async def test_at_is_read_in_the_owners_timezone(make_app):
     await ask(app)
     expected = datetime(2023, 12, 2, 1, 0, tzinfo=UTC).timestamp()  # 09:00 in UTC+8
     assert app.timers.get("standup").due_at == expected
+
+
+@pytest.mark.parametrize(
+    ("at", "utc_hour"),
+    [("2023-12-02T09:00", 14), ("2023-12-02T09:00+02:00", 7)],
+)
+async def test_at_uses_the_requested_timezone_unless_it_already_has_an_offset(
+    make_app, at, utc_hour
+):
+    cfg = Config(agent=AgentConfig(timezone="Asia/Shanghai"))
+    args = full(
+        name="standup", prompt="Prepare the standup notes.", at=at, timezone="America/New_York"
+    )
+    app = make_app(ScriptedModel([[call(args)], [assistant_message("ok")]]), config=cfg)
+    await ask(app)
+
+    assert (
+        app.timers.get("standup").due_at == datetime(2023, 12, 2, utc_hour, tzinfo=UTC).timestamp()
+    )
+
+
+async def test_at_rejects_an_unknown_timezone_before_creating_a_reminder(make_app):
+    args = full(name="standup", prompt="p", at="2023-12-02T09:00", timezone="Mars/Olympus")
+    app = make_app(ScriptedModel([[call(args)], [assistant_message("Let me fix that.")]]))
+    await ask(app)
+
+    assert app.timers.get("standup") is None
+    assert "time zone" in last_output(app)
+    assert last_output(app).startswith("Error")
 
 
 async def test_a_reminder_can_continue_this_conversation(make_app):

@@ -183,12 +183,24 @@ async def test_chat_upload_cannot_outlive_device_or_membership_generation(
     assert shared.inbox.counts()["pending"] == 0
 
 
-async def test_owner_demotion_while_reading_approval_body_does_not_approve(group):
+@pytest.mark.parametrize("change", ["demotion", "membership_rejoin"])
+async def test_owner_demotion_while_reading_approval_body_does_not_approve(group, change):
     root, shared, _, member, _, user = group
     actor = member.principal.id
     root.identities.set_role("owner", shared.space_id, actor, "owner")
     [approval] = shared.approvals.create("r", "main", [PendingCall("c", "shell", "operation")])
     api = WebApi(shared, Ingress(shared), stop=asyncio.Event(), secure=False)
+
+    def change_authority():
+        if change == "demotion":
+            root.identities.set_role("owner", shared.space_id, actor, "member")
+        else:
+            root.identities.revoke_member("owner", shared.space_id, actor)
+            invitation = root.identities.create_member_invite(
+                "owner", shared.space_id, role="owner"
+            )
+            root.identities.redeem_member(invitation.code, existing_principal_id=actor)
+
     with pytest.raises(HTTPException) as error:
         await api.decide(
             request(
@@ -196,9 +208,7 @@ async def test_owner_demotion_while_reading_approval_body_does_not_approve(group
                 user.token(),
                 data={"decision": "approve"},
                 params={"approval_id": str(approval.id)},
-                after_read=lambda: root.identities.set_role(
-                    "owner", shared.space_id, actor, "member"
-                ),
+                after_read=change_authority,
             )
         )
     assert error.value.status_code == 403

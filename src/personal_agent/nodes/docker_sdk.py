@@ -14,7 +14,7 @@ import os
 import re
 import threading
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -84,8 +84,8 @@ class DockerSDKBackend(DockerBackend):
         self._client: docker.DockerClient | None = None
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pa-docker")
         self._slot = asyncio.Semaphore(1)
-        self._pending: set[asyncio.Future[Any]] = set()
         self._operation: _Operation | None = None
+        self._closing: Future[None] | None = None
         self._closed = False
 
     def _connect(self) -> docker.DockerClient:
@@ -162,10 +162,8 @@ class DockerSDKBackend(DockerBackend):
                     self._operation = None
                     self._slot.release()
                     raise
-                self._pending.add(future)
 
                 def finished(completed: asyncio.Future[T]) -> None:
-                    self._pending.discard(completed)
                     self._operation = None
                     self._slot.release()
                     # A cancelled caller must not leave unobserved SDK exceptions/logs.
@@ -384,18 +382,22 @@ class DockerSDKBackend(DockerBackend):
         await self._call(cleanup)
 
     async def aclose(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self._operation is not None:
-            self._operation.cancel()
-        try:
-            if self._pending:
-                await asyncio.wait_for(
-                    asyncio.shield(asyncio.gather(*self._pending, return_exceptions=True)),
-                    self.timeout_s + 2,
-                )
-            if self._client is not None:
-                await asyncio.get_running_loop().run_in_executor(self._executor, self._client.close)
-        finally:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._closing is None:
+            self._closed = True
+            if self._operation is not None:
+                self._operation.cancel()
+
+            def close() -> None:
+                if self._client is not None:
+                    self._client.close()
+
+            # Queue finalization behind the active request before any cancellable await.
+            # The worker owns the client, so it must close it even if shutdown's caller
+            # times out, is cancelled, or closes the event loop before the request returns.
+            self._closing = self._executor.submit(close)
+            self._executor.shutdown(wait=False, cancel_futures=False)
+        closing = asyncio.wrap_future(self._closing)
+        closing.add_done_callback(
+            lambda completed: completed.exception() if not completed.cancelled() else None
+        )
+        await asyncio.wait_for(asyncio.shield(closing), self.timeout_s + 2)

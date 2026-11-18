@@ -13,6 +13,13 @@
 > 监测 GitHub 新 PR 并回收：[docs/PR_PLAYBOOK.md](docs/PR_PLAYBOOK.md)
 > **0.2.0**：[功能、架构与升级](docs/V0_2.md) · [钉钉](docs/DINGTALK.md) · [文件交付](docs/ARTIFACTS.md) · [Provider 配置](docs/PROVIDERS.md) · [最新参考项目复核](docs/REFERENCE_REVIEW.md)
 
+## 0.3.2：真实调用与可靠性修复
+
+修复恢复配对、撤权中的流式响应与审批、退出与离开项目、发件箱中断恢复、长工具会话、跨时区提醒、Docker 客户端关闭，以及浏览器响应校验与离线缓存。保持现有控制面、自有 Runner 和 SQLite 架构，不增加云资源。
+
+- [审查发现、修复与真实验收记录](docs/REVIEW_0_3_2.md)
+- 真实测试：将 `OPENAI_API_KEY` 注入环境后执行 `PA_LIVE=1 uv run pytest tests/live -q`；缺少密钥会明确失败，默认离线测试不会调用模型。
+
 ## 0.3.1：基础组件升级
 
 V3 API 使用 FastAPI/Pydantic 严格契约；浏览器引入 TanStack Query、markdown-it 和可复现 TypeScript/Vite 构建；正文提取采用本地 Trafilatura；自有 Runner 默认 Docker 官方 SDK；整实例一致快照可交给 restic 加密归档。保留原有权限、收据和恢复撤权机制，运行服务无需 Node，也不新增云资源。

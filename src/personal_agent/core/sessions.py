@@ -159,14 +159,21 @@ class SessionStore:
         """The model-visible history: [compaction summary] + visible items.
 
         With `limit`, only the newest items are returned, but never starting in the middle
-        of a tool exchange: the slice is moved forward to the next user message.
+        of a tool exchange: the slice is moved forward to the next user message. If the
+        newest exchange alone exceeds the limit, keep it whole from its preceding user message.
         """
         _, summary = self._bounds(key)
         items = [loads(r["item"], {}) for r in self._visible_rows(key)]
         if limit is not None and limit > 0 and len(items) > limit:
-            tail = items[-limit:]
-            start = next((i for i, it in enumerate(tail) if it.get("role") == "user"), None)
-            items = tail[start:] if start is not None else tail
+            floor = len(items) - limit
+            start = next(
+                (i for i in range(floor, len(items)) if items[i].get("role") == "user"), None
+            )
+            if start is None:
+                start = next(
+                    (i for i in range(floor - 1, -1, -1) if items[i].get("role") == "user"), 0
+                )
+            items = items[start:]
         if summary:
             items.insert(
                 0,

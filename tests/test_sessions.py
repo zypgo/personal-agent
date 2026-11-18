@@ -123,6 +123,23 @@ def test_limit_never_starts_inside_a_tool_exchange(store):
     assert store.items("s", limit=100)[0]["content"] == "q1"
 
 
+@pytest.mark.parametrize("with_user", [True, False])
+def test_limit_keeps_a_long_tool_exchange_whole(store, with_user):
+    exchange = [
+        {"type": "function_call", "call_id": "c1", "name": "t", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+        {"role": "assistant", "content": "done"},
+    ]
+    if with_user:
+        store.append("s", [user("earlier"), {"role": "assistant", "content": "old answer"}])
+        exchange.insert(0, user("current request"))
+    store.append("s", exchange)
+
+    # The latest request exceeds the window. Keeping only the tail would orphan c1's result
+    # and hide the request the tools were carrying out.
+    assert store.items("s", limit=2) == exchange
+
+
 def test_repair_dangling_calls(store):
     store.append(
         "s",

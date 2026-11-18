@@ -192,6 +192,8 @@ class V3Api:
             if app.jobs is not None:
                 app.jobs.revoke_actor(target)
             app.live.publish({"type": "authorization_changed"})
+            if data.revoke and target == session.principal_id:
+                return answer({"members": []})
         return answer({"members": self.identities.members(session.principal_id, app.space_id)})
 
     async def invite(self, request: Request) -> Response:
@@ -815,14 +817,14 @@ class SpaceRouter:
             response = self.api._asset(Request(scope), "workbench.html")
             await response(scope, receive, send)
             return
-        if not path.startswith("/api/") or path in ("/api/pair", "/api/health"):
+        if not path.startswith("/api/") or path in ("/api/pair", "/api/health", "/api/logout"):
             await self.fallback(scope, receive, send)
             return
         request = Request(scope)
         try:
             app, session = self.v3.selected(
                 request,
-                write=scope["method"] not in ("GET", "HEAD", "OPTIONS") and path != "/api/logout",
+                write=scope["method"] not in ("GET", "HEAD", "OPTIONS"),
             )
             if path.startswith("/api/approvals/"):
                 app.require_approval_actor(session.principal_id)

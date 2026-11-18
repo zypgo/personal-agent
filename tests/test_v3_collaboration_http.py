@@ -207,6 +207,46 @@ async def test_member_cannot_approve_another_persons_tools(group):
     assert result.status == "rejected"
 
 
+@pytest.mark.parametrize("selection", ["revoked", "unavailable", "another_person"])
+def test_logout_does_not_require_access_to_the_selected_space(group, selection):
+    root, shared, _, member, owner, user = group
+    token = user.token()
+    root.identities.revoke_member("owner", shared.space_id, member.principal.id)
+    space = {
+        "revoked": shared.space_id,
+        "unavailable": "no-such-space",
+        "another_person": OWNER_SPACE,
+    }[selection]
+
+    response = post(user, "/api/logout", {}, space)
+
+    assert response.status_code == 200
+    assert "max-age=0" in response.headers["set-cookie"].lower()
+    assert root.web_auth.lookup(token) is None
+    assert user.client.get("/api/v3/me").status_code == 401
+    assert owner.client.get("/api/v3/me").status_code == 200
+
+
+def test_an_owner_can_leave_a_project_without_a_false_permission_error(group):
+    root, shared, _, member, owner, user = group
+    root.identities.set_role("owner", shared.space_id, member.principal.id, "owner")
+
+    response = post(
+        user,
+        "/api/v3/members",
+        {"principal_id": member.principal.id, "revoke": True},
+        shared.space_id,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"members": []}
+    assert user.client.get(f"/api/v3/members?space={shared.space_id}").status_code == 403
+    assert owner.client.get(f"/api/v3/members?space={shared.space_id}").status_code == 200
+    own = user.client.get("/api/v3/me")
+    assert own.status_code == 200
+    assert shared.space_id not in {space["id"] for space in own.json()["spaces"]}
+
+
 def test_membership_revoke_preserves_private_space_and_drops_project(group):
     _, shared, private, member, owner, user = group
     result = post(

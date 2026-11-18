@@ -215,14 +215,17 @@ export class RequestScope {
         throw unreachable();
       }
       let data: unknown = null;
+      let validJSON = false;
       if (kind === "blob" && response.ok) {
         try { data = await response.blob(); }
         catch {
           this.#check(epoch, controller.signal);
           throw new ApiError(0, "The download was interrupted. Please try again.");
         }
-      } else if (!response.headers || (response.headers.get("content-type") ?? "").includes("json")) {
-        try { data = await response.json(); }
+      } else if (response.status === 204 || response.status === 205) {
+        validJSON = true;
+      } else if (!response.headers || (response.headers.get("content-type") ?? "").toLowerCase().includes("json")) {
+        try { data = await response.json(); validJSON = true; }
         catch { data = null; }
       }
       this.#check(epoch, controller.signal);
@@ -231,6 +234,9 @@ export class RequestScope {
         const message = typeof detail.error === "string" ? detail.error
           : typeof detail.detail === "string" ? detail.detail : `The agent answered ${response.status}.`;
         throw new ApiError(response.status, message, data);
+      }
+      if (kind === "json" && !validJSON) {
+        throw new ApiError(0, "The agent returned an incomplete or invalid response. Refresh before trying again.");
       }
       return data as T;
     } finally {

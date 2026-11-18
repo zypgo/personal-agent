@@ -43,6 +43,7 @@ def test_recovery_ends_every_earlier_session_and_every_code_a_session_prepared(b
     mine = post(stolen, "/api/v3/spaces", {"name": "Mine"}).json()["space"]["id"]
     spare = {
         "device": post(stolen, "/api/v3/devices/pair", {"label": "spare"}).json()["code"],
+        "legacy_device": root.web_auth.invite("spare", principal_id=sam).code,
         "channel": post(stolen, "/api/v3/channel-binding", {}).json()["code"],
         "member": post(stolen, f"/api/v3/invites?space={mine}", {}).json()["code"],
     }
@@ -56,6 +57,7 @@ def test_recovery_ends_every_earlier_session_and_every_code_a_session_prepared(b
         assert earlier.client.get("/api/v3/me").status_code == 401
     # Nothing prepared before the recovery can be spent after it.
     assert post(thief, "/api/pair", {"code": spare["device"]}).status_code == 403
+    assert post(thief, "/api/pair", {"code": spare["legacy_device"]}).status_code == 403
     with pytest.raises(InvalidInvite):
         root.identities.bind_channel(spare["channel"], "telegram", "bot", "sender", "sender")
     with pytest.raises(InvalidInvite):
@@ -74,6 +76,8 @@ def test_recovery_leaves_other_people_and_their_codes_alone(browsers):
     assert post(a, "/api/v3/enroll", {"code": first.code, "display_name": "A"}).status_code == 200
     assert post(b, "/api/v3/enroll", {"code": second.code, "display_name": "B"}).status_code == 200
     kept = post(b, "/api/v3/devices/pair", {"label": "spare"}).json()["code"]
+    other_principal = b.client.get("/api/v3/me").json()["principal"]["id"]
+    legacy = root.web_auth.invite("spare", principal_id=other_principal).code
 
     # A recovers on a new device. B's session and B's prepared code are none of A's business.
     own = post(a, "/api/v3/recovery-code", {}).json()["code"]
@@ -81,6 +85,22 @@ def test_recovery_leaves_other_people_and_their_codes_alone(browsers):
     assert a.client.get("/api/v3/me").status_code == 401
     assert b.client.get("/api/v3/me").status_code == 200
     assert post(third_device, "/api/pair", {"code": kept}).status_code == 200
+    assert post(third_device, "/api/pair", {"code": legacy}).status_code == 200
+
+
+@pytest.mark.parametrize("recover_issuer", [False, True])
+def test_recovery_voids_legacy_pairings_for_the_target_or_the_issuer(browsers, recover_issuer):
+    root, web = browsers
+    project = root.identities.create_project("owner", "Shared")
+    invited = root.identities.create_member_invite("owner", project.id)
+    member = root.identities.redeem_member(invited.code, label="Sam").principal.id
+    pairing = root.web_auth.invite("legacy device", principal_id=member, issued_by="owner")
+    recovery_actor = "owner" if recover_issuer else member
+    recovery = root.identities.issue_recovery(recovery_actor)
+
+    assert post(web["laptop"], "/api/v3/recover", {"code": recovery}).status_code == 200
+    assert post(web["thief"], "/api/pair", {"code": pairing.code}).status_code == 403
+    assert web["thief"].client.get("/api/v3/me").status_code == 401
 
 
 def test_recovery_of_an_administrator_also_voids_prepared_node_codes(browsers):
