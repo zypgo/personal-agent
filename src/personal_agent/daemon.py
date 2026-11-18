@@ -105,6 +105,10 @@ class Daemon:
         self.app = app
         self.channels = channels
         self.services = list(services)
+        if app.orchestration is not None:
+            from personal_agent.orchestration.service import OrchestrationService
+
+            self.services.append(OrchestrationService(app))
         if app.collaboration is not None and app.collaboration.root is app:
             self.services.append(app.collaboration)
         self.grace_s = grace_s

@@ -20,6 +20,8 @@ from typing import Any
 from personal_agent.collaboration.schema import migrate as migrate_collaboration
 from personal_agent.execution.schema import migrate as migrate_execution
 from personal_agent.nodes.schema import migrate as migrate_nodes
+from personal_agent.orchestration.artifact_schema import migrate as migrate_agent_artifacts
+from personal_agent.orchestration.schema import migrate as migrate_orchestration
 from personal_agent.parsing import loads_json
 from personal_agent.security.sanitize import scrub_tree
 
@@ -425,7 +427,15 @@ MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
 ]
 
 
-MIGRATIONS.extend([migrate_collaboration, migrate_execution, migrate_nodes])
+MIGRATIONS.extend(
+    [
+        migrate_collaboration,
+        migrate_execution,
+        migrate_nodes,
+        migrate_orchestration,
+        migrate_agent_artifacts,
+    ]
+)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 

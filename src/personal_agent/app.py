@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from personal_agent.collaboration.store import IdentityStore
     from personal_agent.execution.store import ExecutionStore
     from personal_agent.nodes.registry import NodeRegistry
+    from personal_agent.orchestration.store import OrchestrationStore
 
 log = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ class App:
     collaboration: SpaceManager | None = None
     jobs: ExecutionStore | None = None
     nodes: NodeRegistry | None = None
+    orchestration: OrchestrationStore | None = None
 
     def require_actor(
         self,
@@ -133,10 +135,10 @@ class App:
         if self.identities is not None:
             self.identities.require_access(principal_id, self.space_id, manage=True)
 
-    def actor_snapshot(self, principal_id: str) -> dict[str, int]:
+    def actor_snapshot(self, principal_id: str, *, write: bool = True) -> dict[str, int]:
         if self.identities is None:
             return {}
-        member = self.identities.require_access(principal_id, self.space_id, write=True)
+        member = self.identities.require_access(principal_id, self.space_id, write=write)
         principal = self.identities.principal(principal_id)
         return {"membership_version": member.version, "principal_version": principal.authz_version}
 
@@ -252,8 +254,11 @@ def build_app(
     plugin_entry_points: Iterable[Any] | None = None,
     transcriber: Transcriber | None = None,
     collaboration: bool = True,
+    paths: Paths | None = None,
 ) -> App:
-    paths = Paths.resolve(home)
+    if paths is not None and home is not None:
+        raise ValueError("Choose either home or explicit paths, not both.")
+    paths = paths or Paths.resolve(home)
     paths.ensure()
     if read_env:
         load_env(paths)
@@ -349,6 +354,7 @@ def build_app(
     from personal_agent.collaboration.store import IdentityStore
     from personal_agent.execution.store import ExecutionStore
     from personal_agent.nodes.registry import NodeRegistry
+    from personal_agent.orchestration.store import OrchestrationStore
 
     app.identities = IdentityStore(database, clock)
     app.jobs = ExecutionStore(
@@ -361,6 +367,14 @@ def build_app(
     )
     app.jobs.authorization_snapshot = app.actor_snapshot
     app.nodes = NodeRegistry(database, clock)
+    app.orchestration = OrchestrationStore(
+        database,
+        clock,
+        app.actor_snapshot,
+        read_authorization_snapshot=lambda actor: app.actor_snapshot(actor, write=False),
+        space_id=app.space_id,
+        space_owner_id=app.space_owner_id,
+    )
     if collaboration:
         from personal_agent.collaboration.runtime import SpaceManager
 
