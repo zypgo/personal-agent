@@ -15,6 +15,7 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import math
 import mimetypes
 import os
 import queue
@@ -27,6 +28,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -321,6 +324,56 @@ class BoundedConnection(http.client.HTTPConnection):
         raise OSError("Control service connection failed.")
 
 
+def _worker_request_body(
+    method: str,
+    action: str,
+    payload: dict[str, Any] | None,
+    *,
+    binary: bool = False,
+) -> bytes | None:
+    parts = action.split("/")
+    artifact_route = (
+        binary
+        and method == "GET"
+        and payload is None
+        and len(parts) == 4
+        and parts[0] == "runs"
+        and IDENTIFIER.fullmatch(parts[1])
+        and parts[2] == "artifacts"
+        and IDENTIFIER.fullmatch(parts[3])
+    )
+    if (
+        not artifact_route
+        and action not in {"hello", "claim", "status"}
+        and not (
+            len(parts) == 3
+            and parts[0] == "runs"
+            and IDENTIFIER.fullmatch(parts[1])
+            and parts[2]
+            in {
+                "heartbeat",
+                "events",
+                "result",
+                "question",
+                "status",
+                "uncertain",
+                "stop-receipt",
+            }
+        )
+    ):
+        raise BridgeError("Invalid worker endpoint.")
+    if method not in {"GET", "POST"}:
+        raise BridgeError("Invalid worker request method.")
+    body = (
+        None
+        if payload is None
+        else json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    )
+    if body is not None and len(body) > MAX_REQUEST_BYTES:
+        raise BridgeError("Request exceeds 16 MiB; reduce the result or attachments.")
+    return body
+
+
 class WorkerClient:
     """Same-origin, no-redirect HTTP client. Does not read environment proxy settings."""
 
@@ -361,46 +414,7 @@ class WorkerClient:
         *,
         binary: bool = False,
     ) -> bytes:
-        parts = action.split("/")
-        artifact_route = (
-            binary
-            and method == "GET"
-            and payload is None
-            and len(parts) == 4
-            and parts[0] == "runs"
-            and IDENTIFIER.fullmatch(parts[1])
-            and parts[2] == "artifacts"
-            and IDENTIFIER.fullmatch(parts[3])
-        )
-        if (
-            not artifact_route
-            and action not in {"hello", "claim", "status"}
-            and not (
-                len(parts) == 3
-                and parts[0] == "runs"
-                and IDENTIFIER.fullmatch(parts[1])
-                and parts[2]
-                in {
-                    "heartbeat",
-                    "events",
-                    "result",
-                    "question",
-                    "status",
-                    "uncertain",
-                    "stop-receipt",
-                }
-            )
-        ):
-            raise BridgeError("Invalid worker endpoint.")
-        if method not in {"GET", "POST"}:
-            raise BridgeError("Invalid worker request method.")
-        body = (
-            None
-            if payload is None
-            else json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
-        )
-        if body is not None and len(body) > MAX_REQUEST_BYTES:
-            raise BridgeError("Request exceeds 16 MiB; reduce the result or attachments.")
+        body = _worker_request_body(method, action, payload, binary=binary)
         parsed = urlsplit(self.origin)
         hostname = parsed.hostname
         if hostname is None:
@@ -487,6 +501,102 @@ class WorkerClient:
                 response.close()
             connection.close()
         return bytes(raw)
+
+
+class _NoWorkerRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        if fp is not None:
+            fp.close()
+        raise RequestError(
+            "Worker redirects are not followed; preserve the original request.", status=code
+        )
+
+
+class SystemProxyWorkerClient(WorkerClient):
+    """Use the platform's normal proxy and verified TLS; never retry through another route."""
+
+    def __init__(self, credentials: Credentials, *, timeout_s: float = 120.0) -> None:
+        if not math.isfinite(timeout_s) or not 0 < timeout_s <= 120:
+            raise BridgeError("Proxy request timeout must be between 0 and 120 seconds.")
+        super().__init__(credentials, timeout_s=min(timeout_s, 60.0))
+        self.timeout_s = timeout_s
+        # Retain the default ProxyHandler, HTTPS certificate validation and environment policy.
+        self.opener = urllib.request.build_opener(_NoWorkerRedirect())
+
+    def _read_response(
+        self,
+        method: str,
+        action: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        binary: bool = False,
+    ) -> bytes:
+        body = _worker_request_body(method, action, payload, binary=binary)
+        url = (
+            self.origin
+            + f"/api/v4/agents/{self.agent_id}/worker/{action}?"
+            + urlencode({"space": self.space_id})
+        )
+        request = urllib.request.Request(  # noqa: S310 -- control_origin permits HTTPS and explicit loopback HTTP only
+            url,
+            data=body,
+            method=method,
+            headers={
+                "Authorization": f"Bearer {self.credentials.token}",
+                "Origin": self.origin,
+                "X-PA": "1",
+                "Content-Type": "application/json",
+                "Accept": "application/octet-stream" if binary else "application/json",
+                "Accept-Encoding": "identity",
+                "User-Agent": VERSION,
+            },
+        )
+        limit = MAX_FILE_BYTES if binary else MAX_RESPONSE_BYTES
+        deadline = time.monotonic() + self.timeout_s
+        try:
+            with self.opener.open(request, timeout=self.timeout_s) as response:
+                if response.status != 200:
+                    raise RequestError(
+                        "Unexpected worker status; preserve the original request.",
+                        status=response.status,
+                    )
+                encoding = response.headers.get("Content-Encoding", "identity").strip().lower()
+                if encoding not in {"", "identity"}:
+                    raise RequestError("Compressed worker responses are not accepted.")
+                raw = bytearray()
+                while True:
+                    if time.monotonic() >= deadline:
+                        raise RequestError(
+                            "Worker response deadline expired; its outcome may be unknown."
+                        )
+                    chunk = response.read1(min(65_536, limit + 1 - len(raw)))
+                    raw.extend(chunk)
+                    if len(raw) > limit:
+                        raise RequestError("Worker response exceeds its size limit.")
+                    if not chunk:
+                        break
+                return bytes(raw)
+        except urllib.error.HTTPError as exc:
+            code = exc.code
+            exc.close()
+            raise RequestError(
+                f"Worker HTTP {code}; check authorization and preserve the original request.",
+                status=code,
+            ) from None
+        except RequestError:
+            raise
+        except (OSError, ValueError, http.client.HTTPException):
+            raise RequestError(
+                "Platform proxy or worker request failed; preserve the receipt. No alternate route was attempted."
+            ) from None
 
 
 def _attempt(response: dict[str, Any]) -> dict[str, Any]:
@@ -824,6 +934,357 @@ class WorkerBridge:
                     }
                 )
         return {"files": saved}
+
+
+LIVE_WORKER_STATES = frozenset({"claimed", "running", "waiting_input"})
+COMPLETE_WORKER_STATES = frozenset(
+    {
+        "result_reported",
+        "accepted",
+        "rejected",
+        "cancelled",
+        "failed",
+        "expired",
+        "revoked",
+        "stopped",
+    }
+)
+
+
+def validate_worker_response(
+    action: str,
+    payload: dict[str, Any] | None,
+    result: dict[str, Any],
+    *,
+    agent_id: str,
+    space_id: str,
+) -> None:
+    """Validate native-agent replies before an outbox can be acknowledged."""
+    try:
+        _validate_worker_response(action, payload, result, agent_id=agent_id, space_id=space_id)
+    except RequestError:
+        raise
+    except (AttributeError, KeyError, TypeError, ValueError, BridgeError):
+        raise RequestError("Invalid worker response; preserve the original request.") from None
+
+
+def _validate_worker_response(
+    action: str,
+    payload: dict[str, Any] | None,
+    result: dict[str, Any],
+    *,
+    agent_id: str,
+    space_id: str,
+) -> None:
+    """An HTTP 200 alone must not clear the bridge's durable outbox."""
+    body = payload or {}
+    failure = "Worker response does not match its operation; preserve the original request."
+
+    def attempt(value: Any, expected_id: str | None = None) -> None:
+        if not isinstance(value, dict):
+            raise RequestError(failure)
+        try:
+            identifier(value.get("attempt_id", ""))
+            identifier(value.get("task_id", ""))
+        except BridgeError:
+            raise RequestError(failure) from None
+        if (
+            value.get("agent_id") != agent_id
+            or (expected_id is not None and value.get("attempt_id") != expected_id)
+            or type(value.get("generation")) is not int
+            or value["generation"] < 1
+            or value.get("state") not in LIVE_WORKER_STATES | COMPLETE_WORKER_STATES | {"uncertain"}
+            or value.get("desired_state") not in {"run", "cancel"}
+            or not isinstance(value.get("lease_token"), str)
+            or not value["lease_token"]
+        ):
+            raise RequestError(failure)
+        if "generation" in body and (
+            value["generation"] != body["generation"] or value["lease_token"] != body["lease_token"]
+        ):
+            raise RequestError(failure)
+
+    if action == "hello":
+        if (
+            type(result.get("protocol_version")) is not int
+            or result.get("protocol_version") != 1
+            or result.get("agent", {}).get("id") != agent_id
+        ):
+            raise RequestError(failure)
+    elif action == "status":
+        if result.get("agent", {}).get("id") != agent_id or not isinstance(
+            result.get("attempts"), list
+        ):
+            raise RequestError(failure)
+        for item in result["attempts"]:
+            attempt(item)
+    elif action == "claim":
+        if "attempt" not in result:
+            raise RequestError(failure)
+        value = result["attempt"]
+        if value is None:
+            return
+        attempt(value)
+        if (
+            value.get("worker_id") != body.get("worker_id")
+            or (body.get("task_id") is not None and value["task_id"] != body["task_id"])
+            or not isinstance(value.get("payload"), dict)
+            or value["payload"].get("space_id") != space_id
+        ):
+            raise RequestError(failure)
+    else:
+        parts = action.split("/")
+        if "artifacts" in parts:
+            return  # artifact() validates decoded size, ID, and content SHA-256.
+        if parts[-1] == "stop-receipt":
+            if (
+                result.get("attempt_id") != parts[1]
+                or type(result.get("generation")) is not int
+                or result["generation"] < 1
+                or "stopped_by" not in result
+                or "stopped_at" not in result
+            ):
+                raise RequestError(failure)
+            return
+        attempt(result, parts[1])
+        if parts[-1] == "events" and (
+            type(result.get("last_sequence")) is not int
+            or result.get("last_sequence") != body.get("sequence")
+        ):
+            raise RequestError(failure)
+        if parts[-1] == "question":
+            questions = result.get("questions")
+            if not isinstance(questions, list):
+                raise RequestError(failure)
+            matching = [
+                question
+                for question in questions
+                if isinstance(question, dict) and question.get("id") == body.get("request_id")
+            ]
+            if len(matching) != 1:
+                raise RequestError(failure)
+            question = matching[0]
+            # The controller redacts text and choices. Stable identity and a complete
+            # recorded question acknowledge the write without comparing unredacted secrets.
+            if (
+                question.get("attempt_id") != result.get("attempt_id")
+                or question.get("task_id") != result.get("task_id")
+                or question.get("state") not in {"open", "answered", "closed"}
+                or not isinstance(question.get("text"), str)
+                or not question["text"].strip()
+                or not isinstance(question.get("choices"), list)
+                or len(question["choices"]) != len(body.get("choices", []))
+                or any(
+                    not isinstance(choice, str) or not choice.strip()
+                    for choice in question["choices"]
+                )
+            ):
+                raise RequestError(failure)
+        if parts[-1] == "uncertain" and (
+            result.get("state") != "uncertain" or result.get("desired_state") != "cancel"
+        ):
+            raise RequestError(failure)
+        if parts[-1] == "result" and (
+            result.get("state") not in COMPLETE_WORKER_STATES | {"uncertain"}
+            or not isinstance(result.get("result"), dict)
+            or result["result"].get("outcome") != body.get("status")
+            or type(result.get("result_eligible")) is not bool
+        ):
+            raise RequestError(failure)
+
+
+def worker_attempt_view(attempt: dict[str, Any]) -> dict[str, Any]:
+    """Never print a raw worker response: it includes the private lease token."""
+    keys = (
+        "attempt_id",
+        "task_id",
+        "step_id",
+        "agent_id",
+        "generation",
+        "state",
+        "desired_state",
+        "desired_cancel",
+        "last_sequence",
+        "lease_expires_at",
+        "result_eligible",
+    )
+    result = {key: attempt[key] for key in keys if key in attempt}
+    if isinstance(attempt.get("result"), dict):
+        result["result_outcome"] = attempt["result"].get("outcome")
+    if isinstance(attempt.get("questions"), list):
+        result["questions"] = [
+            {
+                key: question[key]
+                for key in ("id", "request_id", "state", "text", "choices", "answer")
+                if key in question
+            }
+            for question in attempt["questions"]
+            if isinstance(question, dict)
+        ]
+    return result
+
+
+def has_owner_stop_proof(record: dict[str, Any], proof: Any) -> bool:
+    """Both recovery paths require the same explicit proof for the saved attempt."""
+    if not isinstance(proof, dict):
+        return False
+    stopped_at = proof.get("stopped_at")
+    valid_time = (type(stopped_at) is int and stopped_at > 0) or (
+        type(stopped_at) is float and math.isfinite(stopped_at) and stopped_at > 0
+    )
+    return (
+        proof.get("attempt_id") == record["attempt"]["attempt_id"]
+        and type(proof.get("generation")) is int
+        and proof["generation"] == record["attempt"]["generation"]
+        and proof.get("state") in {"stopped", "accepted"}
+        and isinstance(proof.get("stopped_by"), str)
+        and bool(proof["stopped_by"].strip())
+        and valid_time
+    )
+
+
+class WorkerDispatcher:
+    """Durable one-time handoff shared by native agents; use the same command lock."""
+
+    def __init__(
+        self,
+        bridge: WorkerBridge,
+        *,
+        ledger_name: str = "worker-dispatch.json",
+        lock_name: str = "worker-dispatch",
+        execution: str = "native_agent",
+    ) -> None:
+        self.bridge = bridge
+        if ledger_name == "agent.json":
+            raise BridgeError("Dispatch ledger cannot replace the credential configuration.")
+        self.path = bridge.home / identifier(ledger_name)
+        self.lock_name = identifier(lock_name)
+        self.execution = execution
+
+    def read(self) -> dict[str, Any] | None:
+        if not self.path.exists():
+            return None
+        state = _read_private(self.path)
+        if state.get("version") != 1 or state.get("binding") != self.bridge.binding:
+            raise BridgeError("Dispatch ledger belongs to another version or agent; preserve it.")
+        identifier(state.get("worker_id", ""))
+        if state.get("attempt_id") is not None:
+            identifier(state["attempt_id"])
+        return state
+
+    def new(self, task_id: str | None) -> dict[str, Any]:
+        state = {
+            "version": 1,
+            "binding": self.bridge.binding,
+            **self.bridge.begin(),
+            "task_id": task_id,
+            "attempt_id": None,
+            "delivered": False,
+        }
+        _write_private(self.path, state)
+        return state
+
+    def local_status(self) -> dict[str, Any]:
+        state = self.read()
+        if state is None:
+            return {"initialized": False}
+        out = {
+            "initialized": True,
+            "attempt_id": state.get("attempt_id"),
+            "delivered": state.get("delivered", False),
+            "released": state.get("released", False),
+        }
+        if state.get("attempt_id"):
+            record = self.bridge._read(state["attempt_id"])
+            pending = record.get("pending")
+            out.update(
+                {
+                    "pending_action": pending.get("action") if pending else None,
+                    "result_confirmed": bool(record.get("result_receipt")),
+                    "sequence": record["sequence"],
+                }
+            )
+        return out
+
+    def reconcile(self) -> dict[str, Any]:
+        """Owner attestation releases admission, never replays an unconfirmed report."""
+        state = self.read()
+        if state is None or state.get("attempt_id") is None:
+            return {"released": False, "reason": "no_local_attempt"}
+        record = self.bridge._read(state["attempt_id"])
+        stopped = self.bridge.stop_receipt(state["attempt_id"])
+        if not has_owner_stop_proof(record, stopped):
+            raise BridgeError("No explicit owner stop attestation; keep the original receipt.")
+        state["released"] = True
+        state["stop_receipt"] = stopped
+        _write_private(self.path, state)
+        return {
+            "released": True,
+            "attempt_id": state["attempt_id"],
+            "pending_preserved": record.get("pending") is not None,
+        }
+
+    def claim(self, task_id: str | None = None) -> dict[str, Any]:
+        # The CLI also holds this gate for progress/result/retry operations.
+        state = self.read()
+        if state and state.get("released"):
+            state = None
+        if state and state.get("attempt_id"):
+            attempt_id = state["attempt_id"]
+            record = self.bridge._read(attempt_id)
+            if record.get("pending"):
+                return {
+                    "claimed": False,
+                    "busy": True,
+                    "attempt_id": attempt_id,
+                    "pending_action": record["pending"]["action"],
+                    "next": "status_then_retry",
+                }
+            try:
+                current = self.bridge.status(attempt_id)
+            except RequestError as exc:
+                if exc.status != 409:
+                    raise
+                current = self.bridge.stop_receipt(attempt_id)
+            stopped = has_owner_stop_proof(record, current)
+            confirmed = bool(record.get("result_receipt")) or stopped
+            if not confirmed or current.get("state") not in COMPLETE_WORKER_STATES:
+                return {"claimed": False, "busy": True, **worker_attempt_view(current)}
+            # Retain historical attempt/worker receipts. Only the dispatch pointer advances.
+            state = None
+        if state and state.get("task_id") != task_id:
+            raise BridgeError(
+                "An unfinished claim uses another task filter; reuse the original filter."
+            )
+        state = state or self.new(task_id)
+        response = self.bridge.claim(state["worker_id"], task_id=task_id)
+        attempt = response.get("attempt")
+        if attempt is None:
+            return {"claimed": False, "idle": True}
+        if (
+            attempt.get("agent_id") != self.bridge.client.agent_id
+            or attempt.get("worker_id") != state["worker_id"]
+            or (task_id is not None and attempt.get("task_id") != task_id)
+            or attempt.get("payload", {}).get("space_id") != self.bridge.client.space_id
+        ):
+            raise RequestError("Claimed task identity mismatch; preserve the original nonce.")
+        state.update({"attempt_id": identifier(attempt["attempt_id"]), "delivered": True})
+        # Persist before stdout: a repeated schedule never re-delivers an execution instruction.
+        _write_private(self.path, state)
+        if (
+            attempt.get("state") not in LIVE_WORKER_STATES
+            or attempt.get("desired_cancel")
+            or attempt.get("desired_state") != "run"
+        ):
+            return {"claimed": False, "busy": True, **worker_attempt_view(attempt)}
+        return {
+            "claimed": True,
+            **worker_attempt_view(attempt),
+            "payload": attempt["payload"],
+            "heartbeat_seconds": 60,
+            "execution": self.execution,
+            "handoff": "once",
+        }
 
 
 def public_result(value: Any, token: str = "") -> Any:
