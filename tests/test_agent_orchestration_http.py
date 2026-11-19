@@ -204,6 +204,57 @@ def test_rotated_worker_can_only_read_its_minimal_stop_receipt(site, agents):
     assert worker.get(path + f"/runs/{run['attempt_id']}/status").status_code == 409
 
 
+def test_revoked_report_requires_owner_stop_proof_with_current_worker_token(site, agents):
+    agent, worker, path = agents()
+    _other, other_worker, other_path = agents("cursor")
+    task = create_task(site, [agent["agent"]["id"]])
+    approve(site, task)
+    run = claim(worker, path)
+    reported = report(worker, path, run, text="Recorded result awaiting owner acceptance.")
+    assert reported.status_code == 200
+    assert reported.json()["state"] == "result_reported"
+    rotated = site.client.post(f"/api/v4/agents/{agent['agent']['id']}/token", headers=site.write)
+    assert rotated.status_code == 200
+    receipt_path = f"/runs/{run['attempt_id']}/stop-receipt"
+    assert worker.get(path + receipt_path).status_code == 401
+    worker.headers["Authorization"] = "Bearer " + rotated.json()["worker_token"]
+    assert worker.get(path + f"/runs/{run['attempt_id']}/status").status_code == 409
+    before = worker.get(path + receipt_path)
+    assert before.status_code == 200
+    assert before.json()["state"] == "revoked" and before.json()["stopped_at"] is None
+    assert other_worker.get(other_path + receipt_path).status_code == 404
+    current = site.client.get(f"/api/v4/tasks/{task['id']}").json()["task"]
+    assert current["state"] == "revoked" and current["steps"][0]["can_confirm_stopped"]
+    proof_input = {
+        "step_id": "step0",
+        "attempt_id": run["attempt_id"],
+        "note": "Verified the original native execution ended after its result was received.",
+    }
+    stopped_path = f"/api/v4/tasks/{task['id']}/stopped"
+    assert worker.post(stopped_path, json=proof_input).status_code == 403
+    assert worker.post(stopped_path, headers=site.write, json=proof_input).status_code == 401
+    stopped = site.client.post(stopped_path, headers=site.write, json=proof_input)
+    assert stopped.status_code == 200, stopped.text
+    saved = stopped.json()["task"]
+    assert saved["state"] == saved["steps"][0]["state"] == "revoked"
+    assert saved["steps"][0]["attempt"]["result"] == current["steps"][0]["attempt"]["result"]
+    assert not saved["steps"][0]["attempt"]["result_eligible"]
+    assert not saved["steps"][0]["can_confirm_stopped"]
+    receipt = worker.get(path + receipt_path).json()
+    assert receipt == {
+        **before.json(),
+        "state": "stopped",
+        "stopped_by": "owner",
+        "stopped_at": saved["steps"][0]["attempt"]["stopped_at"],
+    }
+    assert receipt["stopped_at"] is not None
+    assert worker.get(path + f"/runs/{run['attempt_id']}/status").status_code == 409
+    assert report(worker, path, run, "heartbeat").status_code == 409
+    following = create_task(site, [agent["agent"]["id"]], key="after-revoked-stop")
+    approve(site, following)
+    assert claim(worker, path, nonce="fresh-after-stop")["task_id"] == following["id"]
+
+
 def test_worker_scope_csrf_and_rotation(site, agents):
     agent, worker, path = agents()
     _other, _, other_path = agents("muse")

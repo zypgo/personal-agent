@@ -147,6 +147,138 @@ def test_wakes_share_nonce_across_restart_and_retry_original_result(connected, t
     assert all(call[3] == expected for call in env.state["calls"])
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        ("heartbeat",),
+        ("progress", "--text", "Late progress"),
+        ("ask", "--request-id", "late-question", "--text", "Late question"),
+        ("uncertain", "--text", "Late uncertainty"),
+    ],
+)
+def test_confirmed_result_rejects_late_reports_without_blocking_next_wake(connected, command):
+    env = connected
+    task = create_task(env.site, [env.agent_id])
+    approve(env.site, task)
+    attempt_id = env.run("claim")["attempt_id"]
+    env.run("result", attempt_id, "--text", "Finished candidate.")
+    path = env.home / "attempts" / f"{attempt_id}.json"
+    original_receipt = path.read_bytes()
+    original_dispatch = (env.home / "grok-dispatch.json").read_bytes()
+    calls = len(env.state["calls"])
+
+    with pytest.raises(bridge.BridgeError, match="Result already confirmed"):
+        env.run(command[0], attempt_id, *command[1:])
+
+    assert len(env.state["calls"]) == calls
+    assert path.read_bytes() == original_receipt
+    assert (env.home / "grok-dispatch.json").read_bytes() == original_dispatch
+    assert env.run("local-status")["pending_action"] is None
+
+    # Each CLI invocation rebuilds the bridge and dispatcher from the same home.
+    following = create_task(env.site, [env.agent_id], key="following-wake")
+    approve(env.site, following)
+    claimed = env.run("claim")
+    assert claimed["claimed"] and claimed["task_id"] == following["id"]
+    assert claimed["attempt_id"] != attempt_id
+    assert path.read_bytes() == original_receipt
+
+
+def test_confirmed_result_still_allows_identical_result_replay(connected):
+    env = connected
+    task = create_task(env.site, [env.agent_id])
+    approve(env.site, task)
+    attempt_id = env.run("claim")["attempt_id"]
+    env.run("result", attempt_id, "--text", "Same candidate.")
+    accepted = accept(env.site, task, "step0", {"attempt_id": attempt_id})
+
+    assert env.run("result", attempt_id, "--text", "Same candidate.")["state"] == "accepted"
+    reports = [call for call in env.state["calls"] if call[1].endswith("/result")]
+    assert len(reports) == 2 and reports[0][2] == reports[1][2]
+    assert env.run("local-status")["pending_action"] is None
+    prior = env.site.client.get(f"/api/v4/tasks/{task['id']}").json()["task"]
+    assert prior["steps"][0]["attempt"]["result"] == accepted["steps"][0]["attempt"]["result"]
+
+
+@pytest.mark.parametrize("state", ["accepted", "revoked"])
+def test_confirmed_result_preserves_legacy_pending_heartbeat_until_owner_reconciliation(
+    connected, state
+):
+    env = connected
+    task = create_task(env.site, [env.agent_id])
+    approve(env.site, task)
+    attempt_id = env.run("claim")["attempt_id"]
+    env.run("result", attempt_id, "--text", "Confirmed candidate.")
+    if state == "accepted":
+        accept(env.site, task, "step0", {"attempt_id": attempt_id})
+    else:
+        changed = env.site.client.patch(
+            f"/api/v4/agents/{env.agent_id}",
+            headers=env.site.write,
+            json={"name": "Grok updated after result", "kind": "grok"},
+        )
+        assert changed.status_code == 200
+    original_task = env.site.client.get(f"/api/v4/tasks/{task['id']}").json()["task"]
+    assert original_task["steps"][0]["attempt"]["state"] == state
+    path = env.home / "attempts" / f"{attempt_id}.json"
+
+    # A previous worker version could persist this heartbeat after the result ACK.
+    record = bridge._read_private(path)
+    record["pending"] = {
+        "action": "heartbeat",
+        "payload": {key: record["attempt"][key] for key in ("generation", "lease_token")},
+    }
+    bridge._write_private(path, record)
+    original_receipt = path.read_bytes()
+    calls = len(env.state["calls"])
+
+    assert env.run("claim")["next"] == "status_then_retry"
+    with pytest.raises(bridge.BridgeError, match="earlier report is unconfirmed"):
+        env.run("progress", attempt_id, "--text", "Do not replace pending.")
+    assert len(env.state["calls"]) == calls
+    assert path.read_bytes() == original_receipt
+
+    with pytest.raises(bridge.RequestError) as rejected:
+        env.run("retry", attempt_id)
+    assert rejected.value.status == 409
+    assert env.state["calls"][-1][2] == record["pending"]["payload"]
+    assert path.read_bytes() == original_receipt
+    with pytest.raises(bridge.BridgeError, match="owner stop"):
+        env.run("reconcile")
+    assert path.read_bytes() == original_receipt
+
+    stopped = env.site.client.post(
+        f"/api/v4/tasks/{task['id']}/stopped",
+        headers=env.site.write,
+        json={
+            "step_id": "step0",
+            "attempt_id": attempt_id,
+            "note": "Native execution is confirmed ended.",
+        },
+    )
+    assert stopped.status_code == 200
+    stopped_task = stopped.json()["task"]
+    assert stopped_task["state"] == original_task["state"]
+    assert stopped_task["steps"][0]["state"] == original_task["steps"][0]["state"]
+    assert (
+        stopped_task["steps"][0]["attempt"]["result"]
+        == original_task["steps"][0]["attempt"]["result"]
+    )
+    if state == "revoked":
+        assert stopped_task["state"] == stopped_task["steps"][0]["state"] == "revoked"
+        assert not stopped_task["steps"][0]["attempt"]["result_eligible"]
+    assert env.run("reconcile") == {
+        "released": True,
+        "attempt_id": attempt_id,
+        "pending_preserved": True,
+    }
+    assert path.read_bytes() == original_receipt
+    assert env.run("local-status")["result_confirmed"]
+    following = create_task(env.site, [env.agent_id], key="recovered-wake")
+    approve(env.site, following)
+    assert env.run("claim")["task_id"] == following["id"]
+
+
 def test_lost_accepted_result_after_generation_change_needs_owner_stop_proof(connected):
     env = connected
     task = create_task(env.site, [env.agent_id])
