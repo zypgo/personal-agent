@@ -142,6 +142,7 @@ Grok Bot webhook 使用 POST + Bearer，**只有 HTTP 200 属于接受合同，2
 4. 发progress；执行中每60秒以内heartbeat，继续外部动作前检查取消状态。
    如需输入，ask后用status读取答案；平台工具审批继续走原生流程。
 5. 按任务要求生成文件，用result回传正文与附件，不自行批准计划或验收结果。
+   result收到确认后立即结束该attempt的心跳、进度和问答，不再发送新事件。
 6. 看到cancel先停止后续动作和可控执行，再报告cancelled。
 7. 响应未知先status，再最多retry一次原请求；stale/revoked/uncertain或权限
    异常时停止并保留状态。不要删账本、换nonce或把旧任务当新任务再执行。
@@ -215,6 +216,8 @@ CSV列为nonce,region,order_count,quantity,revenue；包括North、South、TOTAL
 
 结果正文最多 64,000 字符；最多 8 个附件，单个不超过 2 MiB、合计不超过 8 MiB。
 
+结果收到确认后，Bridge 会在写入 outbox、发送网络请求之前拒绝新的心跳、进度、问答和 uncertain 事件。重复提交相同结果仍由服务端核对原回执；已有 pending 不会被这项保护清除，继续按原请求恢复。
+
 | 现象 | 操作 |
 | --- | --- |
 | 变量未注入、401／403 | 核对同一 Agent 的安全凭据与授权；不打印secret，不改用明文文件 |
@@ -224,7 +227,9 @@ CSV列为nonce,region,order_count,quantity,revenue；包括North、South、TOTAL
 | Webhook 200 但没结果 | 分别检查原生运行、平台审批、控制端领取与心跳；不把200当完成 |
 | 电脑恢复或脚本缺失 | 重放经哈希校验的代码安装，保留原状态；状态丢失先核对原attempt，不能另造身份重做 |
 
-若服务端已 `accepted`，本地仍有无法恢复的 pending，owner 必须先确认对应 Grok 执行确实结束。对 uncertain／取消待确认，可在控制台登记停止；对 accepted，当前使用 owner 登录会话调用 `POST /api/v4/tasks/{task_id}/stopped`，正文含 `step_id`、`attempt_id`、`note`，仍遵循 Origin／`X-PA: 1` 鉴权。
+若服务端已 `accepted`，或结果仅收到回执、随后因连接变更成为 `revoked`，本地仍有无法恢复的 pending，owner 必须先确认对应 Grok 执行确实结束。对 revoked／uncertain／取消待确认，可在控制台登记停止；对 accepted，当前使用 owner 登录会话调用 `POST /api/v4/tasks/{task_id}/stopped`，正文含 `step_id`、`attempt_id`、`note`，仍遵循 Origin／`X-PA: 1` 鉴权。
+
+`result_reported` 只表示服务端收到了候选结果，`accepted` 才表示 owner 已验收。对 revoked 的停止确认只把对应 attempt 变为 `stopped`，保留任务和步骤的 revoked 状态、原结果及历史，不恢复旧授权、不重新验收或派发。控制端更新后，原版 Grok Bridge 也能核对这个停止证明。
 
 再运行 `reconcile`。它要求原 attempt／generation 匹配、状态为 stopped 或 accepted、有非空停止确认人及有限正数停止时间。它只释放指针，保留旧 pending 与历史，不补造 `result_receipt`，不改变已经验收的结果，不替用户停止原生进程。
 

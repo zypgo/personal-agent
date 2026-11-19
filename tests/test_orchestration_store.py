@@ -475,6 +475,138 @@ def test_accepted_stop_attestation_preserves_dependency_admission(
     assert second["payload"]["dependencies"][0]["text"] == "Evidence supplied."
 
 
+@pytest.mark.parametrize("change", ["configuration", "credential"])
+def test_revoked_report_stop_confirmation_preserves_evidence_and_fencing(
+    store: OrchestrationStore, clock: ManualClock, change: str
+) -> None:
+    created = store.create_agent("alice", name="Grok", kind="grok")
+    a = created["agent"]["id"]
+    b = agent(store)["agent"]["id"]
+    plan = task(
+        store,
+        a,
+        steps=[step(a), step(b, "after", depends_on=["research"])],
+        visibility="space",
+    )
+    approve(store, plan)
+    attempt = store.claim(a, "reported-before-change")["attempt"]
+    attempt_id = attempt["attempt_id"]
+    reported = report(store, attempt)
+    assert reported["state"] == "result_reported"
+    current_token = created["worker_token"]
+    if change == "configuration":
+        store.update_agent(a, "alice", wake_mode="grok_routine")
+    else:
+        current_token = store.rotate_agent_token(a, "alice")["worker_token"]
+        with pytest.raises(OrchestrationAccessDenied):
+            store.authenticate_worker(created["worker_token"])
+    assert store.authenticate_worker(current_token)["id"] == a
+    before = dict(store.db.row("SELECT * FROM orchestration_attempts WHERE id=?", (attempt_id,)))
+    task_before = dict(store.db.row("SELECT * FROM orchestration_tasks WHERE id=?", (plan["id"],)))
+    steps_before = [
+        dict(row)
+        for row in store.db.query(
+            "SELECT * FROM orchestration_steps WHERE task_id=? ORDER BY position", (plan["id"],)
+        )
+    ]
+    assert before["state"] == task_before["state"] == "revoked"
+    assert not before["result_eligible"]
+    view = store.get_task(plan["id"], "alice")
+    assert view["steps"][0]["can_confirm_stopped"]
+    assert not store.get_task(plan["id"], "bob")["steps"][0]["can_confirm_stopped"]
+    assert store.stop_receipt(attempt_id, a)["stopped_at"] is None
+    note = "Verified the original Grok execution ended; retain its revoked result."
+    with pytest.raises(OrchestrationAccessDenied):
+        store.confirm_stopped(plan["id"], "research", "bob", attempt_id, note)
+    with pytest.raises(OrchestrationConflict, match="current attempt"):
+        store.confirm_stopped(plan["id"], "research", "alice", "attempt_wrong", note)
+    with pytest.raises(OrchestrationError):
+        store.confirm_stopped(plan["id"], "research", "alice", attempt_id, " ")
+    assert store.stop_receipt(attempt_id, a)["stopped_by"] is None
+    with pytest.raises(OrchestrationNotFound):
+        store.stop_receipt(attempt_id, b)
+
+    clock.advance(1)
+    stopped = store.confirm_stopped(plan["id"], "research", "alice", attempt_id, note)
+    assert stopped["state"] == "revoked"
+    assert stopped["steps"][0]["state"] == "revoked"
+    assert not stopped["steps"][0]["can_confirm_stopped"]
+    assert stopped["steps"][0]["attempt"]["state"] == "stopped"
+    after = dict(store.db.row("SELECT * FROM orchestration_attempts WHERE id=?", (attempt_id,)))
+    changed_fields = {"state", "stopped_by", "stopped_at", "stop_note"}
+    assert {key: value for key, value in after.items() if key not in changed_fields} == {
+        key: value for key, value in before.items() if key not in changed_fields
+    }
+    assert after["stopped_by"] == "alice" and after["stopped_at"] == clock.now()
+    assert after["stop_note"] == note
+    assert (
+        dict(store.db.row("SELECT * FROM orchestration_tasks WHERE id=?", (plan["id"],)))
+        == task_before
+    )
+    assert [
+        dict(row)
+        for row in store.db.query(
+            "SELECT * FROM orchestration_steps WHERE task_id=? ORDER BY position", (plan["id"],)
+        )
+    ] == steps_before
+    proof = store.stop_receipt(attempt_id, a)
+    assert proof == {
+        "attempt_id": attempt_id,
+        "state": "stopped",
+        "generation": attempt["generation"],
+        "agent_generation": attempt["agent_generation"],
+        "stopped_by": "alice",
+        "stopped_at": clock.now(),
+    }
+    clock.advance(1)
+    assert store.confirm_stopped(plan["id"], "research", "alice", attempt_id, note) == stopped
+    assert store.stop_receipt(attempt_id, a) == proof
+    with pytest.raises(OrchestrationConflict, match="different stop confirmation"):
+        store.confirm_stopped(plan["id"], "research", "alice", attempt_id, "Different evidence.")
+    for operation in (
+        lambda: store.attempt_status(attempt_id, a),
+        lambda: store.heartbeat(attempt_id, a, **credentials(attempt)),
+        lambda: store.claim(a, "reported-before-change"),
+        lambda: report(store, attempt),
+    ):
+        with pytest.raises(OrchestrationConflict, match="fenced"):
+            operation()
+    with pytest.raises(OrchestrationConflict):
+        accept(store, plan, attempt)
+    assert store.claim(b, "blocked-dependency")["attempt"] is None
+    events = store.events(plan["id"], "alice")["events"]
+    assert sum(event["event_type"] == "attempt.stop_confirmed" for event in events) == 1
+    assert not any(event["event_type"] == "result.accepted" for event in events)
+    following = task(store, a, request_id="fresh-after-confirmed-stop")
+    approve(store, following)
+    assert store.claim(a, "fresh-admission")["attempt"]["task_id"] == following["id"]
+
+
+def test_revoked_private_result_stop_confirmation_does_not_disclose_result(
+    store: OrchestrationStore,
+) -> None:
+    a = agent(store, "bob", allowed_actor_ids=["alice"])["agent"]["id"]
+    plan = task(store, a)
+    approve(store, plan)
+    attempt = store.claim(a, "private-reported")["attempt"]
+    report(store, attempt)
+    store.update_agent(a, "bob", name="Updated native connection")
+    receipt = store.confirm_stopped(
+        plan["id"], "research", "bob", attempt["attempt_id"], "Verified execution ended."
+    )
+    assert receipt == {
+        "task_id": plan["id"],
+        "step_id": "research",
+        "attempt_id": attempt["attempt_id"],
+        "state": "stopped",
+        "redacted": True,
+    }
+    assert (
+        store.get_task(plan["id"], "alice")["steps"][0]["attempt"]["result"]["text"]
+        == "Evidence supplied."
+    )
+
+
 def test_accepted_private_stop_attestation_does_not_disclose_result(
     store: OrchestrationStore,
 ) -> None:
