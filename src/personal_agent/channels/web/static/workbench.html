@@ -8,6 +8,7 @@
     <title>工作空间 · Personal Agent</title>
     <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/static/workbench.css">
+    <link rel="stylesheet" href="/static/orchestration.css">
     <script type="module" src="/static/workbench.js"></script>
   </head>
   <body>
@@ -53,13 +54,20 @@
         </section>
         <nav class="tabs" aria-label="工作空间导航">
           <button type="button" class="tab selected" data-tab="tasks" aria-current="page">任务</button>
-          <button type="button" class="tab" data-tab="spaces">项目与成员</button>
+          <button type="button" class="tab" data-tab="agents">Agents</button>
+          <button type="button" class="tab" data-tab="spaces">项目</button>
           <button type="button" class="tab" data-tab="knowledge">资料</button>
           <button type="button" class="tab" data-tab="devices">设备</button>
         </nav>
 
         <section id="panel-tasks" class="panel">
-          <div class="section-title"><div><h1>把事情交办出去。</h1><p class="muted">任务在电脑上执行，你可以继续聊天或离开页面。</p></div><button id="refresh-tasks" class="ghost">刷新</button></div>
+          <div class="section-title"><div><h1>把事情交办出去。</h1><p id="tasks-intro" class="muted">让已有的 Agent 并行研究、接力完成，每一步都能核对与验收。</p></div><button id="refresh-tasks" class="ghost">刷新</button></div>
+          <div class="task-switch" role="group" aria-label="任务类型"><button id="task-view-collaboration" type="button" class="selected" aria-pressed="true">Agent 协作</button><button id="task-view-computer" type="button" aria-pressed="false">电脑任务</button></div>
+          <div id="collaboration-tasks">
+            <details class="card compose" id="collaboration-compose"><summary>＋ 交办协作任务</summary><div id="collaboration-compose-content"></div></details>
+            <div class="task-layout"><div id="collaboration-list" class="stack"></div><section id="collaboration-detail" class="card task-detail" hidden aria-live="polite"></section></div>
+          </div>
+          <div id="computer-tasks" hidden>
           <section id="task-diagnostics" class="card diagnostics" aria-label="任务与额度状态"></section>
           <section id="review-card" class="card" hidden><h2>等待我批准的执行</h2><p class="hint">这里只展示需要你授权的命令和文件清单。审批将绑定当前这份计划。</p><div id="review-list" class="stack"></div></section>
           <details class="card compose" id="task-compose">
@@ -77,10 +85,17 @@
             </form>
           </details>
           <div class="task-layout"><div id="tasks-list" class="stack"></div><section id="task-detail" class="card task-detail" hidden aria-live="polite"></section></div>
+          </div>
+        </section>
+
+        <section id="panel-agents" class="panel" hidden>
+          <div class="section-title"><div><h1>让已有的 Agent 一起工作。</h1><p class="muted">连接你的 Grok、Muse 或自有执行端，保留各自的运行环境。</p></div><button id="refresh-agents" class="ghost">刷新</button></div>
+          <details class="card compose" id="agent-create"><summary id="agent-create-summary">＋ 连接 Agent</summary><div id="agent-create-content"></div></details>
+          <div id="agents-list" class="or-agent-grid"></div>
         </section>
 
         <section id="panel-spaces" class="panel" hidden>
-          <div class="section-title"><div><h1>一起做事，边界清楚。</h1><p class="muted">个人空间只属于你。项目空间中的对话、任务和资料对项目成员可见。</p></div></div>
+          <div class="section-title"><div><h1>一起做事，边界清楚。</h1><p class="muted">个人空间只属于你。项目资料与共享任务对成员可见；私人协作任务仅发起者可见。</p></div></div>
           <div class="two-columns">
             <section class="card"><h2>创建共享项目</h2><form id="space-form"><label>项目名称<input name="name" required maxlength="60" placeholder="例如：每周研究"></label><button class="primary" type="submit">创建项目</button></form></section>
             <section class="card" id="member-invite-card"><h2>邀请到当前项目</h2><form id="invite-form"><label>邀请备注<input name="label" maxlength="60" placeholder="可选"></label><label>项目角色<select name="role"><option value="member">成员 · 发起任务、编辑资料</option><option value="viewer">访客 · 查看项目内容</option><option value="owner">负责人 · 同时管理成员与规则</option></select></label><button type="submit">生成一次性邀请</button></form></section>

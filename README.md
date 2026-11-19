@@ -13,6 +13,17 @@
 > 监测 GitHub 新 PR 并回收：[docs/PR_PLAYBOOK.md](docs/PR_PLAYBOOK.md)
 > **0.2.0**：[功能、架构与升级](docs/V0_2.md) · [钉钉](docs/DINGTALK.md) · [文件交付](docs/ARTIFACTS.md) · [Provider 配置](docs/PROVIDERS.md) · [最新参考项目复核](docs/REFERENCE_REVIEW.md)
 
+## 0.4.0：多 Agent 协作与云端调度
+
+手机工作台新增 **Agents / Agent 协作任务**：登记多个 Grok Bot、Muse 和自有执行端；确认外发计划后派工，按依赖接力，回传文件，经人工验收后推进下一步。Grok 使用已有 Routine webhook；Muse 使用 HTTP/MCP 或单文件 Python Bridge 主动领取。Muse 的自动唤醒取决于实际账号提供的能力，手动连接不会显示为自动运行。
+
+- [功能、架构、权限与升级](docs/MULTI_AGENT.md)
+- [Grok / Muse 接入与 Routine 模板](docs/CLOUD_AGENTS.md)
+- [本版实现、审查与上线验收](docs/RELEASE_0_4_0.md)
+- 自有 Agent Host 对接 Codex app-server、Cursor ACP 和独立 Personal Agent profile；控制端仍用现有 Railway、SQLite 和持久卷，不新增付费沙箱。
+- 唤醒、领取、结果回传和验收分别记录；断线保留回执，未知执行不会自动重跑。
+- 仓库测试与真实账号验收分别记录。注册连接需要在你的原生 Agent 环境配置，不能用一个模型 API key 代替 Grok Bot 或 Muse 账号。
+
 ## 0.3.2：真实调用与可靠性修复
 
 修复恢复配对、撤权中的流式响应与审批、退出与离开项目、发件箱中断恢复、长工具会话、跨时区提醒、Docker 客户端关闭，以及浏览器响应校验与离线缓存。保持现有控制面、自有 Runner 和 SQLite 架构，不增加云资源。

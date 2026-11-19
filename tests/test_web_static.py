@@ -91,6 +91,8 @@ def test_the_page_is_made_of_exactly_the_expected_files(assets):
         "markdown-parser.js",
         "md.js",
         "media.js",
+        "orchestration.css",
+        "orchestration.js",
         "query.js",
         "store.js",
         "style.css",

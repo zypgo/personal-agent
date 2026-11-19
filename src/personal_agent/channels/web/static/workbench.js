@@ -5,8 +5,8 @@ import { RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest } 
 /** @typedef {{principal:Principal,spaces:Space[],space_id:string,role:string}} Me */
 /** @typedef {import('./workbench').Task} Task */
 
-/** @type {{me:Me|null,space:string,tab:string,epoch:number,pendingInvite:string,taskId:string|null,knowledgeRevision:number|null}} */
-const state = {me:null,space:new URL(location.href).searchParams.get("space") || "",tab:"tasks",epoch:0,pendingInvite:"",taskId:null,knowledgeRevision:null};
+/** @type {{me:Me|null,space:string,tab:string,taskView:string,epoch:number,pendingInvite:string,taskId:string|null,knowledgeRevision:number|null}} */
+const state = {me:null,space:new URL(location.href).searchParams.get("space") || "",tab:"tasks",taskView:"computer",epoch:0,pendingInvite:"",taskId:null,knowledgeRevision:null};
 const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 const input = (id) => /** @type {HTMLInputElement} */ (document.getElementById(id));
 const form = (id) => /** @type {HTMLFormElement} */ (document.getElementById(id));
@@ -16,6 +16,9 @@ const terminal = new Set(["succeeded","failed","cancelled","expired","rejected"]
 let refreshing = false;
 let restoringAccess = false;
 const openLogAttempts = new Set();
+let orchestration = null;
+let orchestrationLoading = null;
+const artifactUrls = new Set();
 
 // Consume the fragment before doing any network work. It never enters storage or an API URL.
 const fragment = new URLSearchParams(location.hash.slice(1));
@@ -84,6 +87,9 @@ function clearSpace() {
   state.taskId = null;
   state.knowledgeRevision = null;
   openLogAttempts.clear();
+  orchestration?.clear();
+  for(const url of artifactUrls) URL.revokeObjectURL(url);
+  artifactUrls.clear();
   form("knowledge-form").reset();
   form("knowledge-search-form").reset();
   input("knowledge-history").disabled=true;
@@ -159,12 +165,45 @@ async function selectTab(tab) {
     button.classList.toggle("selected",active);
     if (active) button.setAttribute("aria-current","page"); else button.removeAttribute("aria-current");
   }
-  for (const name of ["tasks","spaces","knowledge","devices"]) $("panel-" + name).hidden = name !== tab;
+  for (const name of ["tasks","agents","spaces","knowledge","devices"]) $("panel-" + name).hidden = name !== tab;
   await refresh();
 }
-async function refresh() {
+async function agentUI() {
+  if(!orchestrationLoading) orchestrationLoading=import("./orchestration.js").then(module=>{
+    orchestration=module.createOrchestrationUI({api,getContext:()=>state,notice,showSecret,
+      onOpenAgents:()=>selectTab("agents"),
+      downloadArtifact:async(path,name)=>{
+        const epoch=state.epoch,blob=await requests.blob(path);
+        if(epoch!==state.epoch || !state.me) return;
+        const url=URL.createObjectURL(blob);artifactUrls.add(url);
+        const link=node("a");link.href=url;link.download=String(name).replace(/[\\/\u0000-\u001f]/g,"_") || "result";
+        document.body.append(link);link.click();link.remove();
+        setTimeout(()=>{URL.revokeObjectURL(url);artifactUrls.delete(url);},1000);
+      },
+    });return orchestration;
+  }).catch(error=>{orchestrationLoading=null;throw error;});
+  return await orchestrationLoading;
+}
+async function selectTaskView(view) {
+  state.taskView=view;
+  for(const name of ["collaboration","computer"]) {
+    const active=view===name;
+    $(name + "-tasks").hidden=!active;
+    $("task-view-" + name).classList.toggle("selected",active);
+    $("task-view-" + name).setAttribute("aria-pressed",String(active));
+  }
+  $("tasks-intro").textContent=view==="collaboration" ? "让已有的 Agent 并行研究、接力完成，每一步都能核对与验收。" : "任务在电脑上执行，你可以继续聊天或离开页面。";
+  await refresh();
+}
+async function refresh(force = false) {
   if (!state.me) return;
-  if (state.tab === "tasks") await loadTasks();
+  const epoch=state.epoch;
+  if (state.tab === "agents" || (state.tab === "tasks" && state.taskView === "collaboration")) {
+    const ui=await agentUI();
+    if(epoch!==state.epoch || !state.me) return;
+    if(state.tab==="agents") await ui.loadAgents(); else await ui.refreshTasks(force);
+  }
+  if (state.tab === "tasks" && state.taskView === "computer") await loadTasks(force);
   if (state.tab === "spaces") await loadMembers();
   if (state.tab === "knowledge") await loadKnowledge();
   if (state.tab === "devices") await loadDevices();
@@ -603,10 +642,12 @@ $("recovery-button").addEventListener("click",()=>run(async()=>{const data=await
 $("logout-button").addEventListener("click",()=>run(async()=>{showLogin();await api("/api/logout",{method:"POST",body:{}});notice("已退出当前设备。");}));
 $("space-select").addEventListener("change",event=>run(()=>switchSpace(event.target.value)));
 for (const button of document.querySelectorAll("[data-tab]")) button.addEventListener("click",()=>run(()=>selectTab(button.getAttribute("data-tab"))));
-for (const id of ["refresh-tasks","refresh-knowledge","refresh-devices"]) $(id).addEventListener("click",()=>run(refresh));
+for (const id of ["refresh-tasks","refresh-agents","refresh-knowledge","refresh-devices"]) $(id).addEventListener("click",()=>run(()=>refresh(true)));
+for (const view of ["collaboration","computer"]) $("task-view-"+view).addEventListener("click",()=>run(()=>selectTaskView(view)));
 $("secret-close").addEventListener("click",closeSecret);
 $("secret-dialog").addEventListener("close",()=>{input("secret-value").value="";$("secret-extra").textContent="";});
 $("secret-copy").addEventListener("click",()=>run(async()=>{if(navigator.clipboard) {await navigator.clipboard.writeText(input("secret-value").value);$("secret-copy").textContent="已复制";} else {input("secret-value").focus();input("secret-value").select();}}));
 document.addEventListener("visibilitychange",()=>{if(!document.hidden) run(refresh);});
-setInterval(()=>{if(!state.me || document.hidden || refreshing || !["tasks","devices"].includes(state.tab)) return;refreshing=true;run(async()=>{try{await refresh();}finally{refreshing=false;}});},8000);
+setInterval(()=>{if(!state.me || document.hidden || refreshing || !["tasks","agents","devices"].includes(state.tab)) return;refreshing=true;run(async()=>{try{await refresh();}finally{refreshing=false;}});},8000);
+state.taskView="collaboration";
 run(async()=>{if(await loadMe()) await refresh();});

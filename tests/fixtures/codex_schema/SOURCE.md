@@ -1,0 +1,1 @@
+Generated without authentication or model execution by `/opt/codex/bin/codex` version 0.167.0-alpha.4, `codex app-server generate-json-schema --out ...`, on 2026-11-18. Official reference: https://developers.openai.com/codex/app-server . These unmodified request/response schemas validate the adapter protocol in tests.

@@ -788,7 +788,10 @@ class V3Api:
 
 class SpaceRouter:
     def __init__(self, fallback: ASGIApp, root: App, api: WebApi) -> None:
+        from personal_agent.channels.web.agents import AgentApi
+
         self.fallback, self.root, self.api = fallback, root, api
+        self.agents_asgi = AgentApi(root, secure=api.secure).asgi()
         self.v3 = V3Api(root, secure=api.secure)
         self.v3_asgi = FastAPI(
             routes=self.v3.routes(),
@@ -810,6 +813,9 @@ class SpaceRouter:
             await self.fallback(scope, receive, send)
             return
         path = scope["path"]
+        if path.startswith("/api/v4/"):
+            await self.agents_asgi(scope, receive, send)
+            return
         if path.startswith("/api/v3/"):
             await self.v3_asgi(scope, receive, send)
             return
