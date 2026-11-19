@@ -794,6 +794,14 @@ class WorkerBridge:
             raise BridgeError(
                 "An earlier report is unconfirmed. Check status, then retry the saved report unchanged."
             )
+        # A late heartbeat after a result ACK is rejected by the controller and would
+        # otherwise leave a new pending request blocking the next wake indefinitely.
+        # Historical pending requests still need their original retry/reconcile path;
+        # repeated results retain the controller's same-payload idempotency checks.
+        if record.get("result_receipt") and record.get("pending") is None and action != "result":
+            raise BridgeError(
+                "Result already confirmed. Stop reporting activity; check status or claim new work."
+            )
         record["pending"] = pending
         self._save(record)
         try:
