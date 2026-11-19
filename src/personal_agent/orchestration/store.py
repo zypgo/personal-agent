@@ -705,7 +705,7 @@ class OrchestrationStore:
                 and self._agent(step["agent_id"])["owner_id"] == actor_id
                 and attempt
                 and (
-                    attempt["state"] == "uncertain"
+                    attempt["state"] in {"uncertain", "revoked"}
                     or (
                         attempt["desired_state"] == "cancel" and attempt["state"] in ACTIVE_ATTEMPTS
                     )
@@ -1464,17 +1464,25 @@ class OrchestrationStore:
                     attempt_id=attempt_id,
                 )
             else:
-                if attempt["state"] != "uncertain" and not (
+                if attempt["state"] not in {"uncertain", "revoked"} and not (
                     attempt["state"] in ACTIVE_ATTEMPTS and attempt["desired_state"] == "cancel"
                 ):
                     raise OrchestrationConflict(
-                        "Only an accepted, uncertain or cancellation-pending attempt needs confirmation."
+                        "Only an accepted, revoked, uncertain or cancellation-pending attempt needs confirmation."
                     )
                 now = self.clock.now()
+                # Configuration changes fence a reported result as revoked. An explicit
+                # owner attestation can release its native worker without restoring the
+                # result's eligibility or changing when that result was received.
+                finished_at = (
+                    attempt["finished_at"]
+                    if attempt["state"] == "revoked" and attempt["finished_at"] is not None
+                    else now
+                )
                 self.db.execute(
                     """UPDATE orchestration_attempts SET state='stopped',desired_state='cancel',result_eligible=0,
                        stopped_by=?,stopped_at=?,stop_note=?,finished_at=? WHERE id=?""",
-                    (actor_id, now, note, now, attempt_id),
+                    (actor_id, now, note, finished_at, attempt_id),
                 )
                 step_state = (
                     "revoked"
