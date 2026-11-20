@@ -13,8 +13,16 @@ class Element extends FakeElement {
     this.events = new Map(); this.files = []; this.disabled = false; this.open = false;
   }
   append(...nodes) { super.append(...nodes); for (const child of this.children) child.parentElement = this; }
-  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
-  remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(item => item !== this); this.parentElement = null; }
+  replaceChildren(...nodes) {
+    if (this.ownerDocument && elements(this).includes(this.ownerDocument.activeElement)) this.ownerDocument.activeElement = this.ownerDocument.body;
+    for (const child of this.children) child.parentElement = null;
+    this.children = []; this.append(...nodes);
+  }
+  remove() {
+    if (this.ownerDocument && this.contains(this.ownerDocument.activeElement)) this.ownerDocument.activeElement = this.ownerDocument.body;
+    if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(item => item !== this);
+    this.parentElement = null;
+  }
   addEventListener(type, callback, options) {
     if (!this.events.has(type)) this.events.set(type, new Set());
     this.events.get(type).add(callback);
@@ -22,7 +30,14 @@ class Element extends FakeElement {
   }
   removeEventListener(type, callback) { this.events.get(type)?.delete(callback); }
   async fire(type, event = {}) { if (!event.preventDefault) event.preventDefault = () => {}; return await Promise.all([...(this.events.get(type) || [])].map(callback => callback(event))); }
-  focus() {}
+  contains(node) { return node === this || elements(this).includes(node); }
+  get disabled() { return this._disabled; }
+  set disabled(value) {
+    this._disabled = Boolean(value);
+    // A control becoming disabled cannot retain browser keyboard focus.
+    if (this._disabled && this.ownerDocument?.activeElement === this) this.ownerDocument.activeElement = this.ownerDocument.body;
+  }
+  focus() { if (this.ownerDocument && !this.disabled) this.ownerDocument.activeElement = this; }
   showModal() { this.open = true; }
   close() { this.open = false; for (const callback of [...(this.events.get("close") || [])]) callback(); }
   get isConnected() { return this.root === true || Boolean(this.parentElement?.isConnected); }
@@ -40,43 +55,49 @@ function setup({ record, duration = async () => 1, shrink = async file => file, 
   window.visualViewport = viewport; window.innerHeight = 800;
   root.root = true; body.root = true;
   const document = {
-    getElementById: () => root, createElement: tag => new Element(tag),
-    createElementNS: (_ns, tag) => new Element(tag), createTextNode: text => ({ nodeType: 3, textContent: String(text) }),
+    getElementById: () => root, createElement: tag => Object.assign(new Element(tag), { ownerDocument: document }),
+    createElementNS: (_ns, tag) => Object.assign(new Element(tag), { ownerDocument: document }), createTextNode: text => ({ nodeType: 3, textContent: String(text) }),
     addEventListener() {}, querySelectorAll: selector => selector === "dialog" ? elements(body).filter(item => item.tagName === "DIALOG") : [],
-    body, title: "Personal Agent",
+    body, activeElement: body, documentElement: new Element("html"), title: "Personal Agent",
   };
-  const calls = [], cancelled = [], revoked = [];
+  root.ownerDocument = document; body.ownerDocument = document;
+  const calls = [], cancelled = [], revoked = [], timers = [], scrolls = [];
   const context = {
     document, window,
     navigator: {}, location: { href: "https://example.invalid/", origin: "https://example.invalid", search: "", hash: "" },
     URL: class extends URL { static createObjectURL() { return "blob:preview"; } static revokeObjectURL(value) { revoked.push(value); } },
     URLSearchParams, FormData, AbortController, Store,
-    setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; }, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
     onAccessLost() {}, invalidateRequests() {}, setRequestContext() {}, scopedURL: path => path,
     record: record || (async () => ({ done: Promise.resolve(null), cancel: () => cancelled.push(true) })),
     canRecord: () => canRecord, audioDuration: duration, shrinkImage: shrink,
     api: async (path, options) => { calls.push({ path, options }); return respond ? await respond(path, options) : {}; },
-    matchMedia: () => ({ matches: false }), commandHints: () => [], newClientId: () => "client-a",
+    matchMedia: () => ({ matches: false }), commandHints: () => [], newClientId: () => "client-a", scrolls,
     durationLabel: () => "0:00", connectionLabel: () => "已连接", activityLabel: () => "已完成", localStorage: { getItem() { return null; } },
   };
   runInNewContext(source + `
     renderLog = () => {};
-    scrollToBottom = () => {};
+    scrollToBottom = () => { scrolls.push(ui); };
     toast = () => {};
     globalThis.page = {
-      buildComposer, addFiles, startVoice, submit, teardownChat, watchViewport, openPicture, openSettings,
+      buildComposer, addFiles, startVoice, submit, teardownChat, watchViewport, openPicture, openSettings, editPending,
+      failedMessage(text, files = []) {
+        const entry = store.addPending({ clientId: "failed-message", text, files, at: 1 });
+        entry.state = "rejected";
+        return entry;
+      },
       get pending() { return store.pending; },
       get current() { return ui; },
       attach() {
         session = { features: { images: true, voice: true, max_images: 2, max_image_bytes: 8000000, max_voice_bytes: 10000000, voice_seconds: 60 }, agent: "Agent" };
         const composer = buildComposer();
-        ui = { composer, cards: { destroy() {} } };
+        ui = { composer, cards: { destroy() {} }, log: { scrollHeight: 0, scrollTop: 0, clientHeight: 0 } };
         return ui;
       }
     };
   `, context);
   const view = context.page.attach();
-  return { page: context.page, view, root, body, viewport, window, calls, cancelled, revoked };
+  return { page: context.page, view, root, body, document, viewport, window, calls, cancelled, revoked, timers, scrolls };
 }
 
 async function leaving(window) {
@@ -261,4 +282,104 @@ test("explicit sign-out clears draft navigation protection and re-login installs
   s.page.attach();
   assert.equal(s.window.events.get("beforeunload")?.size, 1);
   assert.equal((await leaving(s.window)).prevented, false);
+});
+
+test("a partially failed image batch keeps every attached image visible and removable", async () => {
+  const good = new File(["image"], "good.png", { type: "image/png" });
+  const bad = new File(["broken"], "broken.png", { type: "image/png" });
+  const s = setup({ shrink: async file => { if (file === bad) throw new Error("decode failed"); return file; } });
+  await s.page.addFiles([good, bad]);
+  assert.deepEqual([...s.view.composer.files], [good]);
+  assert.equal(s.view.composer.chips.hidden, false);
+  assert.equal(elements(s.view.composer.chips).filter(item => item.tagName === "IMG").length, 1);
+  assert.equal(s.view.composer.pendingImages, 0);
+  const remove = elements(s.view.composer.chips).find(item => item.getAttribute("aria-label") === "移除图片");
+  await remove.fire("click");
+  assert.equal(s.view.composer.files.length, 0);
+  assert.equal(s.view.composer.chips.hidden, true);
+});
+
+test("editing a failed message never overwrites or merges with an occupied composer", () => {
+  for (const state of ["text", "files", "pendingImages", "pendingAudio", "voiceStarting", "voice"]) {
+    const s = setup(), original = new File(["original"], "original.png", { type: "image/png" });
+    const failed = s.page.failedMessage("失败的消息", [original]);
+    if (state === "text") s.view.composer.input.value = "正在写的新消息";
+    else if (state === "files") s.view.composer.files.push(new File(["draft"], "draft.png", { type: "image/png" }));
+    else s.view.composer[state] = state === "voice" ? { cancel() {} } : 1;
+    const draftText = s.view.composer.input.value, draftFiles = [...s.view.composer.files];
+    s.page.editPending(failed);
+    assert.equal(s.view.composer.input.value, draftText, state);
+    assert.deepEqual([...s.view.composer.files], draftFiles, state);
+    assert.ok(s.page.pending.includes(failed), state);
+    assert.deepEqual([...failed.files], [original], state);
+  }
+});
+
+test("editing a failed message restores it only into an empty composer within attachment limits", () => {
+  const s = setup(), files = ["a", "b"].map(name => new File([name], `${name}.png`, { type: "image/png" }));
+  const failed = s.page.failedMessage("重新编辑", files);
+  s.page.editPending(failed);
+  assert.equal(s.view.composer.input.value, "重新编辑");
+  assert.deepEqual([...s.view.composer.files], files);
+  assert.equal(s.page.pending.includes(failed), false);
+  assert.equal(elements(s.view.composer.chips).filter(item => item.tagName === "IMG").length, 2);
+
+  const oversized = setup(), tooMany = [...files, new File(["c"], "c.png", { type: "image/png" })];
+  const overLimit = oversized.page.failedMessage("超过数量限制", tooMany);
+  oversized.page.editPending(overLimit);
+  assert.equal(oversized.view.composer.input.value, "");
+  assert.equal(oversized.view.composer.files.length, 0);
+  assert.ok(oversized.page.pending.includes(overLimit));
+});
+
+test("a deferred composer focus cannot access a signed-out page or scroll the next session", async () => {
+  for (const replace of [false, true]) {
+    const s = setup();
+    await s.view.composer.input.fire("focus");
+    const pending = s.timers.find(timer => timer.delay === 300);
+    assert.ok(pending);
+    s.page.teardownChat();
+    if (replace) s.page.attach();
+    assert.doesNotThrow(() => pending.callback());
+    assert.equal(s.scrolls.length, 0);
+  }
+});
+
+test("appearance choices preserve the focused button and expose the selected state after each change", async () => {
+  const s = setup();
+  await s.page.openSettings();
+  const dialog = s.body.children[0];
+  const choices = elements(dialog).find(item => item.getAttribute("aria-label") === "外观");
+  assert.equal(choices.getAttribute("role"), "group");
+  const buttons = choices.children.slice();
+  for (const [index, theme] of [[2, "dark"], [1, "light"], [0, "auto"]]) {
+    const selected = buttons[index];
+    selected.focus(); await selected.fire("click");
+    assert.equal(s.document.activeElement, selected);
+    assert.equal(choices.children[index], selected, "the user's focused control must remain connected");
+    assert.equal(s.document.documentElement.dataset.theme, theme);
+    assert.deepEqual(buttons.map(button => button.getAttribute("aria-pressed")), buttons.map(button => String(button === selected)));
+  }
+});
+
+test("recording carries keyboard focus to its controls and back without stealing focus during microphone permission", async () => {
+  for (const movedFocus of [false, true]) {
+    const permission = deferred(), result = deferred();
+    const s = setup({ record: () => permission.promise });
+    s.view.composer.mic.focus();
+    const recording = s.page.startVoice();
+    assert.equal(s.document.activeElement, s.body, "the disabled microphone yields its focus");
+    const otherControl = s.document.createElement("button"); s.body.append(otherControl);
+    if (movedFocus) otherControl.focus();
+    permission.resolve({ done: result.promise, cancel() { result.resolve(null); }, stop() {} });
+    await settle();
+    const cancel = elements(s.view.composer.recording).find(item => item.getAttribute("aria-label") === "放弃录音");
+    assert.ok(cancel);
+    assert.equal(s.document.activeElement, movedFocus ? otherControl : cancel);
+    if (movedFocus) result.resolve(null); else await cancel.fire("click");
+    await recording;
+    assert.equal(s.document.activeElement, movedFocus ? otherControl : s.view.composer.mic);
+    assert.equal(s.view.composer.row.hidden, false);
+    assert.equal(s.view.composer.recording.hidden, true);
+  }
 });

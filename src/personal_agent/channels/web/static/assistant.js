@@ -3,6 +3,7 @@
 // Private form values and one-time credentials never enter chat, storage or a transcript.
 import { buildTaskRequest, buildStepRequest, buildAnswerRequest } from "./query.js";
 import { AGENT_KINDS, statusLabel, wakeDescription, secretReferences, currentAttempt, artifactPath } from "./orchestration.js";
+import { createAgentMark } from "./product-shell.js";
 
 const CLOSED = new Set(["completed", "dismissed", "stale", "executing", "uncertain", "succeeded", "failed", "expired", "revoked", "cancelled", "cancel_requested", "cancelling", "accepted", "rejected", "stopped"]);
 const ROLES = [["member", "成员 · 交办任务、编辑资料"], ["viewer", "访客 · 查看项目内容"], ["owner", "负责人 · 管理项目与成员"]];
@@ -98,17 +99,30 @@ function makeNode(doc, tag, text = "", className = "") {
 
 export function createAssistantWelcome({ document: doc, onPrompt }) {
   const welcome = makeNode(doc, "section", "", "assistant-welcome");
-  welcome.append(makeNode(doc, "p", "你的个人助理", "assistant-eyebrow"), makeNode(doc, "h2", "今天，想一起完成什么？"), makeNode(doc, "p", "整理想法、安排提醒、交办任务。从你的一句话开始。", "assistant-muted"));
+  const scene = makeNode(doc, "div", "", "assistant-scene");
+  scene.setAttribute("aria-hidden", "true");
+  scene.append(createAgentMark(doc), makeNode(doc, "span", "", "assistant-orbit"), makeNode(doc, "span", "", "assistant-spark"));
+  const title = makeNode(doc, "h2");
+  title.append(makeNode(doc, "span", "想做的事，"), makeNode(doc, "span", "从这里开始。", "assistant-title-finish"));
+  welcome.append(scene, makeNode(doc, "p", "给日常，多一点从容", "assistant-eyebrow"), title, makeNode(doc, "p", "一个念头、一份资料，或一件惦记的事。说给我听，我们一起往前走。", "assistant-muted"));
   const prompts = makeNode(doc, "div", "", "assistant-shortcuts");
-  for (const [label, detail, prompt] of [
-    ["梳理待办", "看看有什么需要我处理", "帮我看看现在有哪些需要我处理的事情。"],
-    ["安排提醒", "记住一件接下来要做的事", "帮我安排一个提醒："],
-    ["整理资料", "把零散信息整理成笔记", "帮我整理一份资料："],
-    ["交办任务", "拟好计划，由我确认后开始", "我想交办一项任务，请先帮我拟好计划："],
+  for (const [kind, label, detail, prompt] of [
+    ["organize", "理清眼前的事", "一起看看待办", "帮我看看现在有哪些需要我处理的事情。"],
+    ["remind", "留意重要时刻", "安排一个提醒", "帮我安排一个提醒："],
+    ["collect", "接住零散想法", "整理一份资料", "帮我整理一份资料："],
+    ["begin", "让计划往前走", "交办一项任务", "我想交办一项任务，请先帮我拟好计划："],
   ]) {
     const button = makeNode(doc, "button", "", "assistant-shortcut");
     button.type = "button";
-    button.append(makeNode(doc, "strong", label), makeNode(doc, "span", detail));
+    button.dataset.kind = kind;
+    const motif = makeNode(doc, "span", "", "assistant-shortcut-motif");
+    motif.setAttribute("aria-hidden", "true");
+    motif.append(makeNode(doc, "span"), makeNode(doc, "span"), makeNode(doc, "span"));
+    const copy = makeNode(doc, "span", "", "assistant-shortcut-copy");
+    copy.append(makeNode(doc, "strong", label), makeNode(doc, "span", detail));
+    const arrow = makeNode(doc, "span", "↗", "assistant-shortcut-arrow");
+    arrow.setAttribute("aria-hidden", "true");
+    button.append(motif, copy, arrow);
     button.addEventListener("click", () => onPrompt(prompt));
     prompts.append(button);
   }
@@ -280,6 +294,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
 
   function renderCard(entry) {
     const { card } = entry, data = card.data || {}, task = data.task || {};
+    entry.node.dataset.kind = card.kind;
     entry.node.append(node("p", ({ execution_approval: "等待执行授权", agent_plan: "等待确认计划", agent_result: "等待验收成果", execution_question: "需要你补充", agent_question: "需要你补充", workspace_action: "助理拟好的操作", task_status: "任务进展" })[card.kind] || "待办", "assistant-eyebrow"), node("h3", card.title || task.title || "待处理事项"));
     if (card.summary && !["execution_question", "agent_question", "task_status"].includes(card.kind)) entry.node.append(node("p", card.summary, "assistant-prewrap"));
     if (card.kind === "workspace_action") {

@@ -88,6 +88,7 @@ export function artifactPath(artifact) {
 
 export function createOrchestrationUI({api,getContext,notice,showSecret,downloadArtifact,onOpenAgents,document:doc=globalThis.document,confirm:confirmAction=globalThis.confirm,randomUUID=()=>globalThis.crypto.randomUUID()}) {
   const get = id=>doc.getElementById(id);
+  const motionBehavior = ()=>(doc.defaultView || globalThis).matchMedia?.("(prefers-reduced-motion:reduce)").matches ? "auto" : "smooth";
   const state = {agents:[],members:[],lastTasks:[],task:null,taskId:null,steps:[],generation:0,agentsRead:0,tasksRead:0,detailRead:0,agentFormBuilt:false,taskFormBuilt:false,taskAgentsSignature:"",connections:new Map(),openConnections:new Set(),progress:new Map(),occupancies:new Map(),openOccupancies:new Set()};
   const context = ()=>getContext() || {};
   const key = ()=>{const c=context();return `${c.epoch}:${c.space}:${c.me?.principal?.id}:${c.me?.role}:${c.me?.principal?.authz_version ?? 0}:${state.generation}`;};
@@ -142,7 +143,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       const before=key();form.dataset.busy="1";
       const controls=[...form.elements].filter(el=>"disabled" in el),disabled=controls.map(el=>el.disabled);
       controls.forEach(el=>el.disabled=true);
-      try{await handler(form);delete form.dataset.dirty;}
+      try{if(await handler(form)!==false)delete form.dataset.dirty;}
       catch(error){if(before===key()){reportError(error,true);if(error?.status===409 && state.taskId)await loadTask(true).catch(()=>{});}}
       finally{delete form.dataset.busy;controls.forEach((el,i)=>el.disabled=disabled[i]);}
     });
@@ -194,7 +195,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       if(canWrite() && owns(agent) && !agent.revoked_at && agent.state !== "revoked") {
         const actions=node("div","","actions");
         if(isAdmin() || !Object.keys(agent.secret_env || {}).length)actions.append(action(node("button","编辑连接","ghost"),async()=>{
-          const data=await request(`/api/v4/agents/${encodeURIComponent(agent.id)}`);renderAgentForm(data.agent || agent);get("agent-create").open=true;get("agent-create").scrollIntoView?.({behavior:"smooth",block:"start"});
+          const data=await request(`/api/v4/agents/${encodeURIComponent(agent.id)}`);renderAgentForm(data.agent || agent);get("agent-create").open=true;get("agent-create").scrollIntoView?.({behavior:motionBehavior(),block:"start"});
         }));else card.append(node("p","此连接含实例环境配置，修改需要实例管理员权限。","hint"));
         actions.append(action(node("button","重新生成连接凭据","ghost"),async()=>{
           if(!confirmAction(`重新生成 ${agent.name} 的连接凭据？原凭据会失效，已有计划需要重新确认。`))return;
@@ -352,7 +353,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       if(mode.value==="grok_routine" && (!secret_env.webhook_url || !secret_env.webhook_key))throw new Error("请填写 Routine 网址和认证密钥对应的环境变量名，或改用手动领取。");
       const allowed_actor_ids=[...form.elements].filter(el=>el.name==="allowed_actor_ids" && el.checked).map(el=>el.value);
       const body={name:name.value.trim(),kind:kind.value,allowed_actor_ids,shared_environment:shared.control.checked,capabilities:editAgent?.capabilities || [],secret_env,wake_mode:mode.value};
-      if(editAgent && !confirmAction("保存会使此 Agent 的旧计划失效，并要求进行中的执行停止。确认保存？"))return;
+      if(editAgent && !confirmAction("保存会使此 Agent 的旧计划失效，并要求进行中的执行停止。确认保存？"))return false;
       const data=await request(editAgent ? `/api/v4/agents/${encodeURIComponent(editAgent.id)}` : "/api/v4/agents",{method:editAgent ? "PATCH" : "POST",body});
       if(!editAgent)secretDialog(data,data.agent || body);get("agent-create").open=false;state.agentFormBuilt=false;await loadAgents();notice(editAgent ? "连接已更新。旧计划已失效，请新建并确认计划。" : "连接已保存。完成 Agent 端配置后，才能领取任务。");
     });root.append(form);
@@ -389,9 +390,10 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       if(task.steps?.length)meta.append(node("span",`${task.steps.filter(step=>step.state==="accepted").length}/${task.steps.length} 步已验收`));
       button.append(meta,node("p",when(task.updated_at || task.created_at),"hint"));
       action(button,async()=>{
+        if(state.taskId===task.id && editing(get("collaboration-detail")))return;
         if(state.taskId!==task.id && editing(get("collaboration-detail")) && !confirmAction("切换任务会丢弃尚未提交的回答，继续吗？"))return;
         state.taskId=task.id;await loadTask(true);renderTaskList(tasks);
-        get("collaboration-detail").scrollIntoView?.({behavior:globalThis.matchMedia?.("(prefers-reduced-motion:reduce)").matches ? "auto" : "smooth",block:"nearest"});
+        get("collaboration-detail").scrollIntoView?.({behavior:motionBehavior(),block:"nearest"});
       });root.append(button);
       if(focusedTask===task.id) button.focus?.({preventScroll:true});
     }

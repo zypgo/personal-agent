@@ -8,7 +8,7 @@
 
 import { Live, api, artifactBlob, scopedArtifactBlob, agentSetupBlob, scopedURL, invalidateRequests, setRequestContext, onAccessLost } from "./api.js";
 import { createAssistantCards, createAssistantWelcome } from "./assistant.js";
-import { createProductShell } from "./product-shell.js";
+import { createAgentMark, createProductShell } from "./product-shell.js";
 import { activityLabel, connectionLabel } from "./activity.js";
 import { audioDuration } from "./audio-metadata.js";
 import {
@@ -111,7 +111,7 @@ function applyTheme(value) {
   const dark = value === "dark" || (value === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
   for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
     if (!meta.dataset.original) meta.dataset.original = meta.content;
-    meta.content = value === "auto" ? meta.dataset.original : dark ? "#14110d" : "#f1e9d6";
+    meta.content = value === "auto" ? meta.dataset.original : dark ? "#18221f" : "#f6f5f1";
   }
 }
 
@@ -189,7 +189,7 @@ function showPairing(problem = "") {
     h(
       "main",
       { class: "pair" },
-      h("div", { class: "pair-mark", "aria-hidden": "true" }, h("span", { class: "lamp" })),
+      createAgentMark(document, "pair-brand-mark"),
       h("p", { class: "assistant-eyebrow", text: "Personal Agent" }),
       h("h1", { text: "把日常，交给你的助理。" }),
       h("p", { class: "lede", text: "聊天、整理资料、安排提醒，也把需要执行的事交办好。连接账号，从这里继续。" }),
@@ -219,7 +219,7 @@ function showOffline(message) {
     h(
       "main",
       { class: "pair" },
-      h("div", { class: "pair-mark offline", "aria-hidden": "true" }, h("span", { class: "lamp" })),
+      createAgentMark(document, "pair-brand-mark offline"),
       h("h1", { text: document.title || "Agent" }),
       h("p", { class: "lede", text: message }),
       h("button", { type: "button", class: "primary", text: "重新连接", onclick: () => start() }),
@@ -365,7 +365,7 @@ function buildChat() {
     ui.resizeObserver = new ResizeObserver(() => ui === view && pinned && scrollToBottom(false));
     ui.resizeObserver.observe(ui.log);
   }
-  const header = h("header", { class: "bar" }, h("div", { class: "who" }, name, h("span", { class: "chat-presence" }, lamp, state)), waiting, menu);
+  const header = h("header", { class: "bar" }, createAgentMark(document, "chat-brand-mark"), h("div", { class: "who" }, name, h("span", { class: "chat-presence" }, lamp, state)), waiting, menu);
   ui.page = h("div", { class: "chat" }, header, banner, update, h("div", { class: "stage" }, log, jump), toasts, ui.composer.element);
   ui.shell = createProductShell({ document, content: ui.page, current: "chat", resolve: scopedURL, spaceControl: ui.spaceSelect, onSettings: openSettings });
   header.prepend(ui.shell.toggle);
@@ -815,16 +815,17 @@ function buildComposer() {
     maxlength: "20000",
   });
   const chips = h("div", { class: "chips", hidden: true });
-  const hints = h("div", { class: "hints", hidden: true, role: "listbox", "aria-label": "快捷指令" });
+  const hints = h("div", { class: "hints", hidden: true, role: "group", "aria-label": "快捷指令" });
   const picker = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
   const attach = features.images ? iconButton("clip", "添加图片", () => picker.click(), "attach") : null;
   const send = iconButton("send", "发送", () => submit(), "send primary");
   const mic = features.voice && canRecord() ? iconButton("mic", "录制语音", () => startVoice(), "mic") : null;
   const voicePicker = h("input", { type: "file", accept: "audio/*", hidden: true });
   const audio = features.voice && !canRecord() ? iconButton("mic", "发送语音文件", () => voicePicker.click(), "mic") : null;
-  const row = h("div", { class: "row" }, attach, input, mic, audio, send);
+  const tools = h("div", { class: "composer-tools" }, attach, h("span", { class: "composer-prompt", text: "Enter 发送 · Shift + Enter 换行" }), mic, audio, send);
+  const row = h("div", { class: "row" }, input, tools);
   const recording = h("div", { class: "recording", hidden: true });
-  const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker, voicePicker, h("p", { class: "composer-note", text: "需要你决定的事，会在对话里请你确认。" }));
+  const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker, voicePicker, h("p", { class: "composer-note", text: "先聊想法，再做决定。需要确认时，我会等你。" }));
   const composer = { element, input, files, chips, hints, send, mic, row, recording, picker, voice: null, voiceStarting: false, pendingImages: 0, pendingAudio: 0, disposed: false };
   const current = () => !composer.disposed && ui?.composer === composer;
 
@@ -844,7 +845,7 @@ function buildComposer() {
     hints.hidden = suggestions.length === 0;
     hints.replaceChildren(
       ...suggestions.map(([name, about]) =>
-        h("button", { type: "button", class: "hint", role: "option", onclick: () => { input.value = `${name} `; refresh(); input.focus(); } }, h("b", { text: name }), h("span", { text: about })),
+        h("button", { type: "button", class: "hint", onclick: () => { input.value = `${name} `; refresh(); input.focus(); } }, h("b", { text: name }), h("span", { text: about })),
       ),
     );
   };
@@ -857,7 +858,7 @@ function buildComposer() {
       submit();
     }
   });
-  input.addEventListener("focus", () => setTimeout(() => nearBottom() && scrollToBottom(false), 300));
+  input.addEventListener("focus", () => setTimeout(() => current() && nearBottom() && scrollToBottom(false), 300));
   input.addEventListener("paste", (event) => {
     const pasted = [...(event.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
     if (pasted.length && features.images) {
@@ -944,12 +945,11 @@ async function addFiles(list) {
       composer.pendingImages -= 1; remaining -= 1;
       composer.files.push(file);
     }
-    if (ui === view) renderChips();
   } catch {
     if (ui === view) toast("图片暂时无法添加，请重试。", { error: true });
   } finally {
     composer.pendingImages = Math.max(0, composer.pendingImages - remaining);
-    if (ui === view && !composer.disposed) composer.refresh();
+    if (ui === view && !composer.disposed) { renderChips(); composer.refresh(); }
   }
 }
 
@@ -1030,7 +1030,16 @@ async function deliver(entry) {
 }
 
 function editPending(p) {
+  if (!ui || store.findPending(p.clientId) !== p) return;
   const composer = ui.composer;
+  if (composer.disposed || composer.input.value.trim() || composer.files.length || composer.pendingImages || composer.pendingAudio || composer.voiceStarting || composer.voice) {
+    toast("请先发送或清空当前草稿，再编辑这条消息。");
+    return;
+  }
+  if (p.files.length > session.features.max_images) {
+    toast("这条消息的图片超过当前限制，请重新选择图片。", { error: true });
+    return;
+  }
   composer.input.value = p.text;
   composer.files.push(...p.files);
   store.dropPending(p.clientId);
@@ -1052,6 +1061,7 @@ async function startVoice() {
   if (!view) return;
   const composer = view.composer;
   if (composer.disposed || composer.voice || composer.voiceStarting || composer.pendingImages) return;
+  const startedFromMic = document.activeElement === composer.mic;
   composer.voiceStarting = true;
   composer.refresh();
   const limit = session.features.voice_seconds;
@@ -1076,14 +1086,20 @@ async function startVoice() {
     return;
   }
   composer.voice = take;
+  // Disabling the microphone while permission is pending can move focus to body.
+  // Do not steal it back if the person moved on to another control in the meantime.
+  const restoreRecordingFocus = document.activeElement === composer.input || (startedFromMic && (!document.activeElement || document.activeElement === document.body || document.activeElement === composer.mic));
   composer.row.hidden = true;
   composer.recording.hidden = false;
+  const cancelRecording = iconButton("close", "放弃录音", () => { cancelled = true; take.cancel(); }, "discard");
+  const sendRecording = iconButton("send", "发送录音", () => take.stop(), "send primary");
   composer.recording.replaceChildren(
-    iconButton("close", "放弃录音", () => { cancelled = true; take.cancel(); }, "discard"),
+    cancelRecording,
     h("span", { class: "rec-dot", "aria-hidden": "true" }),
     clock,
-    iconButton("send", "发送录音", () => take.stop(), "send primary"),
+    sendRecording,
   );
+  if (restoreRecordingFocus) cancelRecording.focus({ preventScroll: true });
   try {
     const result = await take.done;
     if (cancelled || !result || ui !== view || composer.disposed) return;
@@ -1094,9 +1110,14 @@ async function startVoice() {
   } catch {
     if (ui === view && !composer.disposed) toast("录音未完成，请重试。", { error: true });
   } finally {
+    const restore = document.activeElement === cancelRecording || document.activeElement === sendRecording;
     composer.voice = null;
     composer.recording.hidden = true;
     composer.row.hidden = false;
+    if (ui === view && !composer.disposed) {
+      composer.refresh();
+      if (restore) (composer.mic?.hidden === false ? composer.mic : composer.input).focus({ preventScroll: true });
+    }
   }
 }
 
@@ -1126,15 +1147,23 @@ async function openSettings() {
       if (ui === view && dialog.open && error?.name !== "AbortError") status.textContent = error.message;
     }
   };
-  const choice = h("div", { class: "segments", role: "radiogroup", "aria-label": "外观" });
+  const choice = h("div", { class: "segments", role: "group", "aria-label": "外观" });
   let selectedTheme = theme();
+  const themeButtons = new Map();
   const paint = () => {
-    choice.replaceChildren(
-      ...THEMES.map((value) =>
-        h("button", { type: "button", role: "radio", "aria-checked": String(selectedTheme === value), class: selectedTheme === value ? "on" : "", text: { auto: "跟随系统", light: "浅色", dark: "深色" }[value], onclick: () => { selectedTheme = value; try { localStorage.setItem("pa-theme", value); } catch { /* The current page still uses the selected theme. */ } applyTheme(value); paint(); } }),
-      ),
-    );
+    for (const [value, button] of themeButtons) {
+      button.className = selectedTheme === value ? "on" : "";
+      button.setAttribute("aria-pressed", String(selectedTheme === value));
+    }
   };
+  for (const value of THEMES) {
+    const button = h("button", { type: "button", text: { auto: "跟随系统", light: "浅色", dark: "深色" }[value], onclick: () => {
+      selectedTheme = value;
+      try { localStorage.setItem("pa-theme", value); } catch { /* The page still uses the selected theme. */ }
+      applyTheme(value); paint();
+    } });
+    themeButtons.set(value, button); choice.append(button);
+  }
   paint();
   const hints = [];
   if (!canRecord() && session.features.voice) hints.push("当前浏览器可以发送语音文件。使用加密连接后，也可以直接录音。");
@@ -1182,7 +1211,8 @@ function watchViewport() {
   const view = ui;
   const fit = () => {
     if (ui !== view) return;
-    const keyboard = window.innerHeight - viewport.height > 120;
+    // Pinch zoom changes the visual viewport too; preserve the person's reading position.
+    const keyboard = (viewport.scale ?? 1) === 1 && window.innerHeight - viewport.height > 120;
     root.style.height = keyboard ? `${viewport.height}px` : "";
     root.style.transform = keyboard ? `translateY(${viewport.offsetTop}px)` : "";
     if (keyboard && ui && pinned) scrollToBottom(false);

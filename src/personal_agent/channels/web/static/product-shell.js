@@ -21,6 +21,15 @@ const PATHS = {
   settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2",
 };
 
+// A small, original mark made from four petals; decorative in every context.
+export function createAgentMark(doc, className = "") {
+  const mark = doc.createElement("span");
+  mark.className = `product-mark ${className}`.trim();
+  mark.setAttribute("aria-hidden", "true");
+  for (let index = 0; index < 4; index++) mark.append(doc.createElement("span"));
+  return mark;
+}
+
 export function createProductShell({ document: doc = globalThis.document, content, current = "chat", resolve = path => path, onNavigate, spaceControl, onSettings }) {
   const view = doc.defaultView || globalThis;
   const node = (tag, text = "", className = "") => {
@@ -55,7 +64,8 @@ export function createProductShell({ document: doc = globalThis.document, conten
   const toggle = control("打开菜单", "menu", "product-menu-toggle");
   toggle.setAttribute("aria-controls", drawer.id);
   const close = control("收起菜单", "menu", "product-drawer-close");
-  const brand = node("a", "Personal Agent", "product-brand");
+  const brand = node("a", "", "product-brand");
+  brand.append(createAgentMark(doc), node("span", "Personal Agent"));
   brand.setAttribute("href", resolve("/"));
   const head = node("div", "", "product-drawer-head"); head.append(brand, close);
   drawer.append(head);
@@ -74,7 +84,9 @@ export function createProductShell({ document: doc = globalThis.document, conten
     const link = node("a", "", "product-nav-link");
     link.dataset.page = page.id;
     link.setAttribute("href", resolve(page.path));
-    link.append(icon(page.icon), node("span", page.label));
+    const symbol = node("span", "", "product-nav-symbol");
+    symbol.append(icon(page.icon));
+    link.append(symbol, node("span", page.label));
     link.addEventListener("click", event => {
       if (event.defaultPrevented || event.button > 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       if (onNavigate && page.id !== "chat") {

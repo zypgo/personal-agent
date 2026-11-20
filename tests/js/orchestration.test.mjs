@@ -292,3 +292,44 @@ test("switching space discards in-flight private reads and one-time token respon
   const other=setup({respond:path=>path==="/api/v4/agents"?reading:undefined});const pending=other.ui.loadAgents();other.context.epoch++;other.ui.clear();finishRead({agents:agentsFixture()});
   await assert.rejects(pending,{name:"AbortError"});assert.equal(other.get("agents-list").textContent,"");
 });
+
+test("reselecting the current collaboration task preserves an unanswered draft",async()=>{
+  const task=taskFixture();task.state="waiting_input";task.steps[0].state="waiting_input";
+  task.questions=[{id:"question-a",step_id:"s1",state:"open",text:"What should be included?",choices:[]}];
+  const {ui,get,calls}=setup({task});
+  await ui.loadTasks();ui.renderTask(task);
+  const editor=find(get("collaboration-detail"),"form").find(item=>item.elements.namedItem("answer"));
+  editor.elements.namedItem("answer").value="Keep my unfinished answer";editor.listeners.get("input")();
+  await ui.loadTasks();
+  const reads=calls.filter(call=>call.path===`/api/v4/tasks/${task.id}`).length;
+  const selected=find(get("collaboration-list"),"button").find(item=>item.dataset.taskId===task.id);
+  await click(selected);
+  assert.ok(find(get("collaboration-detail"),"form").includes(editor));
+  assert.equal(editor.elements.namedItem("answer").value,"Keep my unfinished answer");
+  assert.equal(editor.dataset.dirty,"1");
+  assert.equal(calls.filter(call=>call.path===`/api/v4/tasks/${task.id}`).length,reads);
+});
+
+test("declining an agent edit confirmation keeps the unsaved draft protected",async()=>{
+  const agents=agentsFixture();
+  const {ui,get,calls}=setup({agents,confirm:false,respond:path=>path==="/api/v4/agents/grok-a" ? {agent:agents[0]} : undefined});
+  await ui.loadAgents();await click(button(get("agents-list"),"编辑连接"));
+  const editor=find(get("agent-create-content"),"form")[0];
+  editor.elements.namedItem("name").value="Unfinished agent name";editor.listeners.get("input")();
+  await submit(editor);
+  assert.equal(calls.some(call=>call.method==="PATCH"),false);
+  assert.equal(editor.dataset.dirty,"1");
+  assert.equal(editor.elements.namedItem("name").value,"Unfinished agent name");
+  assert.equal(editor.elements.namedItem("name").disabled,false);
+  assert.equal(get("agent-create").open,true);
+});
+
+for(const reduced of [true,false])test(`opening an agent editor ${reduced ? "honors reduced motion" : "uses the standard scroll transition"}`,async()=>{
+  const {ui,get,document}=setup();
+  const scrolls=[];
+  document.defaultView={matchMedia:query=>({matches:query==="(prefers-reduced-motion:reduce)" && reduced})};
+  get("agent-create").scrollIntoView=options=>scrolls.push(options);
+  await ui.loadAgents();await click(button(get("agents-list"),"编辑连接"));
+  assert.deepEqual(scrolls,[{behavior:reduced ? "auto" : "smooth",block:"start"}]);
+  assert.equal(get("agent-create").open,true);
+});

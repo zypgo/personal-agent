@@ -330,3 +330,39 @@ test("an in-flight knowledge save pins the editor until its revision and dirty s
   assert.equal(editor.elements.namedItem("path").value,"b.md");
   assert.equal(ui.state.knowledgeRevision,30);
 });
+
+test("reselecting the current computer task preserves its unfinished editor", async () => {
+  const {ui,detail,get,calls}=setup();
+  const editor=find(detail,"form").find(item=>item.elements.namedItem("command"));
+  editor.elements.namedItem("command").value="keep this unfinished command";
+  editor.listeners.get("input")();
+  await ui.loadTasks();
+  const reads=calls.filter(call=>call.path.endsWith("/task-a")).length;
+  const selected=find(get("tasks-list"),"button").find(item=>item.dataset.taskId==="task-a");
+  selected.listeners.get("click")();await settled();
+  assert.ok(find(detail,"form").includes(editor));
+  assert.equal(editor.elements.namedItem("command").value,"keep this unfinished command");
+  assert.equal(editor.dataset.dirty,"1");
+  assert.equal(calls.filter(call=>call.path.endsWith("/task-a")).length,reads);
+});
+
+for(const succeeds of [true,false])test(`first knowledge save ${succeeds ? "enables history for the new revision" : "keeps history unavailable after failure"}`,async()=>{
+  const {ui,get,context}=setup(taskFixture(),{respond:(url,options)=>{
+    if(url.pathname!=="/api/v3/knowledge")return;
+    if(options.method==="POST")return {ok:succeeds,status:succeeds ? 200 : 422,json:async()=>succeeds ? {revision:1} : {error:"Invalid document"}};
+    return {ok:true,status:200,json:async()=>({documents:[{path:"new.md",text:"New note",revision:1}]})};
+  }});
+  const editor=get("knowledge-form");
+  for(const [name,value] of [["path","new.md"],["text","New note"]]) {const input=new Element("input");input.name=name;input.value=value;editor.append(input);}
+  const history=get("knowledge-history");history.tagName="BUTTON";history.disabled=true;editor.append(history);
+  editor.dataset.dirty="1";ui.state.knowledgeRevision=null;
+  const start=source.indexOf('bindForm("knowledge-form",');
+  const end=source.indexOf('bindForm("knowledge-search-form"',start);
+  runInNewContext(source.slice(start,end),context);
+  editor.listeners.get("submit")({preventDefault(){}});await settled();
+  assert.equal(history.disabled,!succeeds);
+  assert.equal(ui.state.knowledgeRevision,succeeds ? 1 : null);
+  assert.equal(editor.dataset.dirty,succeeds ? undefined : "1");
+  assert.equal(editor.dataset.busy,undefined);
+  assert.equal(editor.elements.namedItem("text").value,"New note");
+});

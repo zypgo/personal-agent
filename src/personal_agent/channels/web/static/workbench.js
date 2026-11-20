@@ -318,6 +318,7 @@ async function loadTasks(force = false) {
     meta.append(badge(task.state || task.status),node("span",date(task.updated_at || task.created_at)));
     button.append(meta);
     button.addEventListener("click",() => run(async () => {
+      if(state.taskId===task.id && editingTask()) return;
       if(state.taskId!==task.id && editingTask() && !confirm("切换任务会丢弃尚未提交的内容，继续吗？")) return;
       state.taskId=task.id;await loadTasks(true);
       if(matchMedia("(max-width:760px)").matches) $("task-detail").scrollIntoView({behavior:matchMedia("(prefers-reduced-motion:reduce)").matches ? "auto" : "smooth",block:"start"});
@@ -735,6 +736,9 @@ function bindFormElement(f,handler,id="") {
     run(async () => {try {if(await handler(f)!==false) delete f.dataset.dirty;} finally {
       delete f.dataset.busy;f.removeAttribute("aria-busy");
       controls.forEach((item,index)=>{item.disabled=disabled[index] || (id === "knowledge-form" && state.me?.role === "viewer");});
+      // A successful save creates a revision. Restore read-only history from that new state,
+      // not from the disabled value captured before saving a new document.
+      if(id === "knowledge-form") input("knowledge-history").disabled=state.knowledgeRevision===null;
     }});
   });
 }
