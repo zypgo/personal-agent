@@ -95,6 +95,8 @@ def test_the_page_is_made_of_exactly_the_expected_files(assets):
         "media.js",
         "orchestration.css",
         "orchestration.js",
+        "product-shell.css",
+        "product-shell.js",
         "query.js",
         "store.js",
         "style.css",
@@ -255,6 +257,7 @@ FORBIDDEN_CODE = [
         "md.js",
         "markdown-parser.js",
         "media.js",
+        "product-shell.js",
         "query.js",
         "store.js",
         "sw.js",
@@ -396,7 +399,17 @@ needs_node = pytest.mark.skipif(
 @needs_node
 @pytest.mark.parametrize(
     "name",
-    ["api.js", "app.js", "assistant.js", "format.js", "md.js", "media.js", "store.js", "sw.js"],
+    [
+        "api.js",
+        "app.js",
+        "assistant.js",
+        "format.js",
+        "md.js",
+        "media.js",
+        "product-shell.js",
+        "store.js",
+        "sw.js",
+    ],
 )
 def test_every_script_parses(name):
     result = subprocess.run(

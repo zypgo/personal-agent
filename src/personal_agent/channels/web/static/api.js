@@ -22,23 +22,23 @@ export function api(path, options = {}) { return requests.request(path, options)
 
 /** Immutable downloads are authenticated, cancellable and kept outside the query cache. */
 export async function artifactBlob(id) {
-  if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) throw new ApiError(400, "Invalid file reference.");
+  if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) throw new ApiError(400, "文件引用无效，请刷新后重试。");
   try { return await requests.blob(`/api/artifacts/${id}`); }
   catch (error) {
     if (error?.name === "AbortError" || error.status === 0) throw error;
     const messages = {
-      401: "Pair this browser again to download files.",
-      404: "This file is unavailable.",
-      410: "This file has expired. Ask the agent to create it again.",
+      401: "请重新连接此浏览器后下载文件。",
+      404: "此文件已不可用。",
+      410: "此文件已过期，请让助理重新生成。",
     };
-    throw new ApiError(error.status || 0, messages[error.status] ?? "The file could not be downloaded.");
+    throw new ApiError(error.status || 0, messages[error.status] ?? "文件下载失败，请稍后重试。");
   }
 }
 
 /** Agent result files use the same session and selected-space checks as chat files. */
 export async function scopedArtifactBlob(path) {
   if (typeof path !== "string" || !/^\/api\/v4\/artifacts\/[0-9a-f]{32}$/.test(path)) {
-    throw new ApiError(400, "Invalid file reference.");
+    throw new ApiError(400, "文件引用无效，请刷新后重试。");
   }
   try { return await requests.blob(path); }
   catch (error) {

@@ -10,6 +10,7 @@ from agents.tool_context import ToolContext
 
 from personal_agent.assistant import (
     BY_ACTION,
+    MAX_PROPOSALS,
     AssistantConflict,
     AssistantError,
     action_cards,
@@ -344,6 +345,40 @@ def test_expiry_and_rejoined_membership_do_not_revive_proposals(workspace, clock
     clock.advance(86401)
     with pytest.raises(AssistantConflict):
         begin_action(shared, actor, other["id"], {"name": "Attempted"})
+
+
+@pytest.mark.parametrize("status", ["proposed", "executing", "uncertain"])
+def test_invalidated_proposals_do_not_block_new_authorized_cards(workspace, status):
+    root, shared, actor = workspace
+    old_cards = []
+    for number in range(MAX_PROPOSALS):
+        card = propose(shared, actor, key=f"old-{number}")
+        old_cards.append(card)
+        if status != "proposed":
+            receipt = begin_action(shared, actor, card["id"], {"name": "Confirmed project"})
+            if status == "uncertain":
+                finish_action(
+                    shared,
+                    actor,
+                    card["id"],
+                    execution_id=receipt["execution_id"],
+                    outcome="uncertain",
+                )
+    with pytest.raises(AssistantConflict):
+        propose(shared, actor, key="at-capacity")
+
+    root.identities.set_role("owner", shared.space_id, actor, "viewer")
+    root.identities.set_role("owner", shared.space_id, actor, "member")
+    assert action_cards(shared, actor)["cards"] == []
+    fresh = propose(shared, actor, key="new-authority")
+    assert [card["id"] for card in action_cards(shared, actor)["cards"]] == [fresh["id"]]
+    # Retain the original fences and receipts; restored access cannot revive them.
+    with pytest.raises(AccessDenied):
+        begin_action(shared, actor, old_cards[0]["id"], {"name": "Try again"})
+    assert (
+        shared.db.scalar("SELECT COUNT(*) FROM kv WHERE key LIKE 'assistant:proposal:%'")
+        == MAX_PROPOSALS + 1
+    )
 
 
 def test_viewer_and_nonowner_cannot_prepare_privileged_actions(workspace):

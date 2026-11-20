@@ -96,21 +96,9 @@ function makeNode(doc, tag, text = "", className = "") {
   return node;
 }
 
-export function createAssistantNavigation({ document: doc, selected = "assistant", resolve = path => path }) {
-  const nav = makeNode(doc, "nav", "", "primary-tabs");
-  nav.setAttribute("aria-label", "主导航");
-  for (const [key, label, path] of [["assistant", "个人助理", "/"], ["workbench", "工作台", "/workspace"]]) {
-    const link = makeNode(doc, "a", label, key === selected ? "primary-tab selected" : "primary-tab");
-    link.setAttribute("href", resolve(path));
-    if (key === selected) link.setAttribute("aria-current", "page");
-    nav.append(link);
-  }
-  return nav;
-}
-
 export function createAssistantWelcome({ document: doc, onPrompt }) {
   const welcome = makeNode(doc, "section", "", "assistant-welcome");
-  welcome.append(makeNode(doc, "p", "把心思留给重要的事", "assistant-eyebrow"), makeNode(doc, "h2", "今天，想先处理什么？"), makeNode(doc, "p", "说说你的打算。一起整理思路、记下资料，再把需要执行的事安排好。", "assistant-muted"));
+  welcome.append(makeNode(doc, "p", "你的个人助理", "assistant-eyebrow"), makeNode(doc, "h2", "今天，想一起完成什么？"), makeNode(doc, "p", "整理想法、安排提醒、交办任务。从你的一句话开始。", "assistant-muted"));
   const prompts = makeNode(doc, "div", "", "assistant-shortcuts");
   for (const [label, detail, prompt] of [
     ["梳理待办", "看看有什么需要我处理", "帮我看看现在有哪些需要我处理的事情。"],
@@ -124,7 +112,7 @@ export function createAssistantWelcome({ document: doc, onPrompt }) {
     button.addEventListener("click", () => onPrompt(prompt));
     prompts.append(button);
   }
-  welcome.append(prompts, makeNode(doc, "p", "需要你确认、补充或验收时，会在对话中给出可操作的卡片。", "assistant-hint"));
+  welcome.append(prompts);
   return welcome;
 }
 
@@ -139,6 +127,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
   const header = node("div", "", "assistant-inbox-heading");
   header.append(heading, refreshButton); root.append(header, status, list);
   const entries = new Map(), suppressed = new Set(), dialogs = new Set();
+  const inFlight = new Set(), recheckAfter = new Map();
   let alive = true, reading = false, again = false, me = null, memberNames = null, principalId = "", timer = null, serial = 0;
 
   function button(label, callback, className = "") {
@@ -182,6 +171,12 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
     entry.active = false; entry.controls.forEach(control => { control.disabled = true; });
     entry.privateControls.forEach(control => { control.value = ""; });
   }
+  function requireFreshReview(entry, text) {
+    // A read already in flight may describe the state before this failed request. Only a
+    // later successful read may recreate a decision, with fresh consent and permissions.
+    recheckAfter.set(entry.card.id, serial);
+    message(entries.get(entry.card.id) || entry, text, true);
+  }
   async function refresh() {
     if (!alive) return;
     if (reading) { again = true; return; }
@@ -204,11 +199,15 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       const nodes = [];
       for (const card of cards) {
         const signature = cardSignature(card); let entry = entries.get(card.id);
+        const reviewedAgain = recheckAfter.has(card.id) && turn > recheckAfter.get(card.id) && !inFlight.has(card.id);
         // Keep a form only while the server still advertises exactly the same operation.
-        if (!entry || entry.signature !== signature) {
+        if (!entry || entry.signature !== signature || reviewedAgain) {
           if (entry) disableEntry(entry);
           entry = { card, signature, active: true, busy: false, controls: [], privateControls: [], node: node("article", "", "assistant-card"), message: node("p", "", "assistant-hint") };
           entries.set(card.id, entry); renderCard(entry);
+          if (reviewedAgain) recheckAfter.delete(card.id);
+          // Refresh recovery or a new signature cannot unlock a request still being sent.
+          if (inFlight.has(card.id) || recheckAfter.has(card.id)) lock(entry);
         }
         nodes.push(entry.node);
       }
@@ -222,10 +221,12 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       for (const element of [...list.children]) if (!kept.has(element)) element.remove();
       const count = cards.filter(card => (card.actions || []).length && !CLOSED.has(card.status)).length;
       heading.textContent = count ? `${count} 件事等你处理` : "任务与进展";
-      status.textContent = cards.length ? "只展示你在当前空间有权查看和处理的内容。" : "暂无待处理的确认。你可以继续聊天，或交办一件新事情。";
-      onChange(count);
+      root.dataset.empty = String(cards.length === 0);
+      status.textContent = cards.length ? "" : "暂无待处理的事";
+      onChange(count, { total: cards.length });
     } catch (error) {
       if (!alive || error?.name === "AbortError") return;
+      root.dataset.empty = "false";
       status.textContent = "待办暂时无法更新，请稍后刷新。";
       // Keep the content to review, but never allow an action on an unverified stale view.
       for (const entry of entries.values()) { disableEntry(entry); entry.signature = ""; }
@@ -238,11 +239,11 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
   }
 
   async function nativeAction(entry, action, values = {}) {
-    if (!current(entry) || entry.busy) return;
+    if (!current(entry) || entry.busy || inFlight.has(entry.card.id) || recheckAfter.has(entry.card.id)) return;
     let request;
     try { request = nativeCardRequest(entry.card, action, values); }
     catch (error) { message(entry, error.message, true); return; }
-    lock(entry); message(entry, "正在提交…");
+    lock(entry); inFlight.add(entry.card.id); message(entry, "正在提交…");
     try {
       await api(request.path, { method: request.method, json: request.json });
       if (!alive) return;
@@ -250,8 +251,8 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       message(entry, "已处理。"); onNotice("已处理，正在更新任务状态。"); await refresh();
     } catch (error) {
       if (!alive || error?.name === "AbortError") return;
-      message(entry, error.status >= 400 && error.status < 500 ? "这条待办已变化或提交未获允许，请刷新后核对。" : "提交结果尚未确认，请刷新核对实际状态。请勿重复提交。", true);
-    } finally { entry.node.setAttribute("aria-busy", "false"); }
+      requireFreshReview(entry, error.status >= 400 && error.status < 500 ? "这条待办已变化或提交未获允许，请刷新后核对。" : "提交结果尚未确认，请刷新核对实际状态。请勿重复提交。");
+    } finally { inFlight.delete(entry.card.id); entry.node.setAttribute("aria-busy", "false"); }
   }
 
   function actionButton(entry, action, label, options = {}) {
@@ -286,9 +287,11 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       if (can(card, "open")) {
         const open = register(entry, button("核对并填写", () => openWorkspaceForm(entry), "primary")); entry.node.append(open);
         const cancel = register(entry, button("暂不处理", async () => {
-          if (!current(entry) || entry.busy) return; lock(entry);
+          if (!current(entry) || entry.busy || inFlight.has(card.id) || recheckAfter.has(card.id)) return;
+          lock(entry); inFlight.add(card.id);
           try { await api(`/api/assistant/cards/${identifier(card.id)}/dismiss`, { method: "POST", json: {} }); if (alive) { suppressed.add(card.id); await refresh(); } }
-          catch (error) { if (alive) message(entry, "暂未确认是否已收起，请刷新核对。", true); }
+          catch (error) { if (alive && error?.name !== "AbortError") requireFreshReview(entry, "暂未确认是否已收起，请刷新核对。"); }
+          finally { inFlight.delete(card.id); entry.node.setAttribute("aria-busy", "false"); }
         })); entry.node.append(cancel);
       }
     } else if (card.kind === "execution_approval") {
@@ -721,7 +724,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
 
   if (pollMs > 0) timer = setInterval(() => { if (!doc.hidden) void refresh(); }, pollMs);
   function destroy() {
-    alive = false; serial += 1; clearInterval(timer); entries.forEach(disableEntry); entries.clear(); suppressed.clear(); me = null; memberNames = null; principalId = "";
+    alive = false; serial += 1; clearInterval(timer); entries.forEach(disableEntry); entries.clear(); suppressed.clear(); inFlight.clear(); recheckAfter.clear(); me = null; memberNames = null; principalId = "";
     for (const dialog of [...dialogs]) dialog.clearPrivate();
     list.replaceChildren(); onChange(0);
   }

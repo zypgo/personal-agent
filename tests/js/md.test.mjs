@@ -205,7 +205,7 @@ test("reference links and entities are parsed without enabling HTML", () => {
 test("pictures are never loaded, only named", () => {
   const out = html("![a cat](https://tracker.example/cat.png?secret=1234)");
   assert.equal(find(fragment("![x](https://e.example/x.png)"), "img").length, 0);
-  assert.match(out, /image: a cat/);
+  assert.match(out, /图片：a cat/);
   assert.doesNotMatch(out, /<img/i);
 });
 
@@ -302,7 +302,7 @@ test("a long run of unmatched markers is not worked through, only shown", () => 
 
 test("an enormous answer is cut and says so", () => {
   const out = html("word ".repeat(MAX_CHARS));
-  assert.match(out, /more characters not shown/);
+  assert.match(out, /个字符未显示/);
   assert.ok(out.length < MAX_CHARS * 2);
 });
 

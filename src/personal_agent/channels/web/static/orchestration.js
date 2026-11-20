@@ -88,7 +88,7 @@ export function artifactPath(artifact) {
 
 export function createOrchestrationUI({api,getContext,notice,showSecret,downloadArtifact,onOpenAgents,document:doc=globalThis.document,confirm:confirmAction=globalThis.confirm,randomUUID=()=>globalThis.crypto.randomUUID()}) {
   const get = id=>doc.getElementById(id);
-  const state = {agents:[],members:[],task:null,taskId:null,steps:[],generation:0,agentsRead:0,tasksRead:0,detailRead:0,agentFormBuilt:false,taskFormBuilt:false,taskAgentsSignature:"",connections:new Map(),openConnections:new Set(),progress:new Map(),occupancies:new Map(),openOccupancies:new Set()};
+  const state = {agents:[],members:[],lastTasks:[],task:null,taskId:null,steps:[],generation:0,agentsRead:0,tasksRead:0,detailRead:0,agentFormBuilt:false,taskFormBuilt:false,taskAgentsSignature:"",connections:new Map(),openConnections:new Set(),progress:new Map(),occupancies:new Map(),openOccupancies:new Set()};
   const context = ()=>getContext() || {};
   const key = ()=>{const c=context();return `${c.epoch}:${c.space}:${c.me?.principal?.id}:${c.me?.role}:${c.me?.principal?.authz_version ?? 0}:${state.generation}`;};
   const canWrite = ()=>Boolean(context().me && context().me.role !== "viewer");
@@ -159,7 +159,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
 
   function clear() {
     state.generation++;state.agentsRead++;state.tasksRead++;state.detailRead++;
-    state.agents=[];state.members=[];state.task=null;state.taskId=null;state.steps=[];state.agentFormBuilt=false;state.taskFormBuilt=false;state.taskAgentsSignature="";state.connections.clear();state.openConnections.clear();state.progress.clear();state.occupancies.clear();state.openOccupancies.clear();
+    state.agents=[];state.members=[];state.lastTasks=[];state.task=null;state.taskId=null;state.steps=[];state.agentFormBuilt=false;state.taskFormBuilt=false;state.taskAgentsSignature="";state.connections.clear();state.openConnections.clear();state.progress.clear();state.occupancies.clear();state.openOccupancies.clear();
     for(const id of ["agents-list","agent-create-content","collaboration-compose-content","collaboration-list","collaboration-detail"])get(id)?.replaceChildren();
     if(get("collaboration-detail"))get("collaboration-detail").hidden=true;
     if(get("agent-create"))get("agent-create").open=false;
@@ -208,7 +208,11 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       }
       list.append(card);
     }
-    if(!state.agents.length)list.append(node("p","先连接你已有的 Grok、Muse 或自有执行端，再交办第一件事。","empty"));
+    if(!state.agents.length) {
+      const empty=node("section","","empty");empty.append(node("h3","让你的助手一起做事"),node("p","连接已有的 Grok、Muse 或其他 Agent，再把任务分给它们。"));
+      if(canWrite()) empty.append(action(node("button","连接第一个助手","primary"),async()=>{get("agent-create").open=true;get("agent-create-content").querySelector("input")?.focus?.();}));
+      list.append(empty);
+    }
   }
   function occupancyGuide(agent) {
     const ownerScope=key(),details=node("details","","or-disclosure"),content=node("div");details.open=state.openOccupancies.has(agent.id);
@@ -373,9 +377,12 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     if(state.taskId && (force || !editing(get("collaboration-detail"))))await loadTask(force);
   }
   function renderTaskList(tasks) {
-    const root=get("collaboration-list");root.replaceChildren();
+    state.lastTasks=tasks;
+    const root=get("collaboration-list");
+    const focusedTask=root.contains(doc.activeElement) ? doc.activeElement?.closest("button")?.dataset.taskId : null;
+    root.replaceChildren();
     for(const task of tasks) {
-      const button=node("button","","task-card");button.classList.toggle("selected",state.taskId===task.id);
+      const button=node("button","","task-card");button.dataset.taskId=task.id;button.classList.toggle("selected",state.taskId===task.id);
       button.append(node("h3",task.title || "协作任务"));const meta=node("div","","task-meta");
       meta.append(badge(task.state,taskLabel(task)),node("span",task.visibility==="space" ? "项目可见" : "私人"));
       const wake=(task.wakes || []).find(item=>item.claimed_at==null && ["failed","uncertain"].includes(item.state));if(wake)meta.append(badge(wake.state,wakeStatus(wake).label));
@@ -384,10 +391,21 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       action(button,async()=>{
         if(state.taskId!==task.id && editing(get("collaboration-detail")) && !confirmAction("切换任务会丢弃尚未提交的回答，继续吗？"))return;
         state.taskId=task.id;await loadTask(true);renderTaskList(tasks);
-        get("collaboration-detail").scrollIntoView?.({behavior:"smooth",block:"nearest"});
+        get("collaboration-detail").scrollIntoView?.({behavior:globalThis.matchMedia?.("(prefers-reduced-motion:reduce)").matches ? "auto" : "smooth",block:"nearest"});
       });root.append(button);
+      if(focusedTask===task.id) button.focus?.({preventScroll:true});
     }
-    if(!tasks.length)root.append(node("p","还没有协作任务。选择已有的 Agent，一起研究或按步骤接力。","empty"));
+    if(!tasks.length) {
+      const empty=node("section","","empty");empty.append(node("h3","下一件事，交给助手"),node("p","说清楚目标，选好协作方式。确认计划后，进度和成果会留在这里。"));
+      if(canWrite()) {
+        const available=state.agents.some(agent=>!agent.revoked_at && agent.state!=="revoked");
+        empty.append(action(node("button",available ? "交办第一项任务" : "先连接一个助手","primary"),async()=>{
+          if(!available){await onOpenAgents?.();return;}
+          get("collaboration-compose").open=true;get("collaboration-compose-content").querySelector("input")?.focus?.();
+        }));
+      }
+      root.append(empty);
+    }
   }
   function renderTaskForm(draft=null) {
     state.taskFormBuilt=true;const root=get("collaboration-compose-content");root.replaceChildren();if(!canWrite())return;
@@ -465,7 +483,13 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
   function renderTask(task) {
     state.task=task;state.taskId=task.id;
     const root=get("collaboration-detail");root.replaceChildren();root.hidden=false;
-    const heading=node("div","","or-card-heading");heading.append(node("h2",task.title || "协作任务"),badge(task.state,taskLabel(task)));root.append(heading);
+    const heading=node("div","","or-card-heading");
+    const close=action(node("button","返回列表","ghost detail-close"),async()=>{
+      if(root.querySelector('form[data-dirty="1"],form[data-busy="1"]') && !confirmAction("关闭详情会放弃尚未提交的内容。继续吗？"))return;
+      state.taskId=null;state.task=null;root.replaceChildren();root.hidden=true;renderTaskList(state.lastTasks);
+      const previous=[...get("collaboration-list").querySelectorAll("button")].find(button=>button.dataset.taskId===task.id);previous?.focus?.();
+    });
+    heading.append(node("h2",task.title || "协作任务"),close);root.append(heading,badge(task.state,taskLabel(task)));
     const steps=task.steps || [],accepted=steps.filter(step=>step.state==="accepted").length;
     root.append(node("p",`${accepted} / ${steps.length} 步已验收 · ${task.visibility==="space" ? "项目成员可查看" : "仅你可查看"}`,"muted"));
     if(task.deadline_at)root.append(node("p",`任务期限：${when(task.deadline_at)}`,"hint"));

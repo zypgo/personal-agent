@@ -78,13 +78,13 @@ test("connection files reject arbitrary URLs, path components and unknown kinds"
 test("expired, revoked and interrupted downloads explain how to recover", async (t) => {
   let status = 410;
   t.mock.method(globalThis, "fetch", async () => new Response("private server details", { status }));
-  await assert.rejects(artifactBlob("a".repeat(32)), /expired/);
+  await assert.rejects(artifactBlob("a".repeat(32)), /已过期/);
   status = 401;
-  await assert.rejects(artifactBlob("a".repeat(32)), /Pair this browser/);
+  await assert.rejects(artifactBlob("a".repeat(32)), /重新连接此浏览器/);
   status = 404;
-  await assert.rejects(artifactBlob("a".repeat(32)), /unavailable/);
+  await assert.rejects(artifactBlob("a".repeat(32)), /不可用/);
   status = 500;
-  await assert.rejects(artifactBlob("a".repeat(32)), /could not be downloaded/);
+  await assert.rejects(artifactBlob("a".repeat(32)), /下载失败/);
 });
 
 test("the stream dispatches preview snapshots without advancing the history cursor", (t) => {

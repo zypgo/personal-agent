@@ -1,27 +1,20 @@
-/* Shared two-tab product shell; assistant forms keep the existing warm paper palette. */
-.primary-tabs { display:flex; align-items:center; gap:5px; padding:9px 0; font:500 14px/1.4 ui-sans-serif,system-ui,sans-serif; }
-.primary-tab { display:inline-flex; align-items:center; justify-content:center; min-height:40px; padding:9px 22px; border:1px solid transparent; border-radius:9px; text-decoration:none; color:var(--ink-2,var(--muted)); white-space:nowrap; }
-.primary-tab:hover { background:var(--slip,var(--card)); border-color:var(--rule); }
-.primary-tab.selected { color:var(--accent); background:var(--slip,var(--card)); border-color:var(--rule); font-weight:700; }
-.assistant-navigation { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--rule); padding:0 max(16px,calc((100% - 760px)/2)); background:var(--paper); }
-.assistant-space-select { min-width:0; width:auto; max-width:40%; border:0; background:transparent; color:var(--ink-2); font:12px/1.5 ui-sans-serif,system-ui,sans-serif; padding:8px 0; text-overflow:ellipsis; }
-.workbench-caption { font-size:12px; color:var(--muted); }
-.shell>.primary-tabs { border-bottom:1px solid var(--rule); padding:14px 0; }
+/* The conversation and its interactive cards share the product's warm paper palette. */
 .assistant-welcome,.assistant-inbox { font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; line-height:1.65; }
 .assistant-welcome { padding:36px 0 26px; }
-.assistant-welcome h2 { font-size:clamp(24px,4vw,32px); font-weight:650; letter-spacing:-.6px; line-height:1.3; margin:12px 0; }
+.assistant-welcome h2 { font-size:clamp(26px,3.4vw,36px); font-weight:600; letter-spacing:-1px; line-height:1.35; margin:12px 0 16px; }
 .assistant-eyebrow { font-size:12px; color:var(--ink-2,var(--muted)); margin:0 0 8px; }
 .assistant-muted { color:var(--ink-2,var(--muted)); font-size:14px; margin:0 0 18px; max-width:560px; }
-.assistant-shortcuts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:22px 0 18px; }
-.assistant-shortcut { display:flex; flex-direction:column; gap:4px; align-items:flex-start; text-align:start; padding:16px 18px; border:1px solid var(--rule); border-radius:12px; background:var(--slip,var(--card)); }
-.assistant-shortcut:hover { border-color:var(--accent); }
+.assistant-shortcuts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:28px 0 4px; }
+.assistant-shortcut { display:flex; flex-direction:column; gap:5px; align-items:flex-start; text-align:start; padding:15px 17px; min-height:72px; border:1px solid var(--rule); border-radius:12px; background:transparent; transition:background 150ms,border-color 150ms; }
+.assistant-shortcut:hover { border-color:var(--accent); background:var(--slip,var(--card)); }
 .assistant-shortcut strong { color:var(--ink); font-size:14px; font-weight:650; }
 .assistant-shortcut span { color:var(--ink-2,var(--muted)); font-size:12px; }
 .assistant-inbox { margin:22px 0 14px; min-width:0; }
+.assistant-inbox[data-empty="true"] { display:none; }
 .assistant-inbox-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
 .assistant-inbox-heading h2 { margin:0; font-size:15px; font-weight:650; }
 .assistant-card-list { display:grid; gap:14px; }
-.assistant-card { border:1px solid var(--rule); border-radius:13px; padding:20px; background:var(--slip,var(--card)); overflow-wrap:anywhere; min-width:0; scroll-margin-top:18px; }
+.assistant-card { border:1px solid var(--rule); border-radius:15px; padding:24px; background:var(--slip,var(--card)); overflow-wrap:anywhere; min-width:0; scroll-margin-top:18px; }
 .assistant-card h3 { font-size:18px; margin:0 0 12px; line-height:1.45; }
 .assistant-card h4 { font-size:14px; margin:16px 0 8px; }
 .assistant-card h5 { font-size:13px; margin:14px 0 6px; }
@@ -58,13 +51,75 @@
 .assistant-secret-dialog h2 { margin:0 0 12px; font-size:20px; }
 .assistant-secret-dialog textarea { font-family:ui-monospace,monospace; margin:8px 0 15px; }
 @media(max-width:600px) {
-  .assistant-navigation { padding:0 14px; gap:8px; }
-  .primary-tab { padding:9px 16px; }
   .assistant-welcome { padding-top:22px; }
   .assistant-shortcut { padding:14px 12px; }
-  .assistant-shortcut span { font-size:11px; }
+  .assistant-shortcut span { font-size:12px; }
   .assistant-card { padding:16px; }
   .assistant-field input,.assistant-field select,.assistant-field textarea { font-size:16px; }
-  .assistant-space-select { max-width:38%; font-size:11px; }
-  .workbench-caption { display:none; }
 }
+
+/* A calm conversation surface, with the same composer and controls in every state. */
+.product-main.chat { --column:720px; font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+.chat .bar { min-height:72px; padding:calc(10px + env(safe-area-inset-top)) 24px 10px; gap:12px; border-bottom:1px solid var(--rule); }
+.chat .who { align-items:flex-start; flex-direction:column; gap:3px; margin-right:auto; }
+.chat .who h1 { font:600 16px/1.4 ui-sans-serif,system-ui,sans-serif; letter-spacing:0; font-variant-caps:normal; }
+.chat-presence { display:flex; align-items:center; gap:6px; min-width:0; }
+.chat .state { font:400 11px/1.4 ui-sans-serif,system-ui,sans-serif; letter-spacing:0; text-transform:none; }
+.chat .lamp { width:6px; height:6px; background:var(--ok); }
+.chat .lamp.down { background:transparent; }
+.chat .lamp.on { background:var(--accent); }
+.chat .waiting { min-height:34px; padding:7px 12px; border-radius:8px; font:600 12px/1.4 ui-sans-serif,system-ui,sans-serif; letter-spacing:0; text-transform:none; }
+.chat .stage::before { display:none; }
+.chat .log { padding-top:28px; padding-bottom:16px; }
+.chat .turn { margin-bottom:24px; }
+.chat .turn.agent .body { font-size:15px; line-height:1.8; }
+.chat .turn.mine .body { font-size:15px; line-height:1.7; padding:12px 16px; border:1px solid var(--rule); border-radius:16px 16px 4px 16px; box-shadow:none; }
+.chat .speaker { font:600 12px/1.5 ui-sans-serif,system-ui,sans-serif; letter-spacing:0; text-transform:none; margin-bottom:9px; }
+.chat .meta,.chat .day,.chat .working { font-family:ui-sans-serif,system-ui,sans-serif; letter-spacing:0; text-transform:none; }
+.chat .day { margin:16px 0 24px; font-size:11px; }
+.chat .day::before,.chat .day::after { background:var(--rule); }
+.chat .composer { padding:10px 24px calc(20px + env(safe-area-inset-bottom)); border:0; }
+.chat .composer>.row { align-items:flex-end; gap:6px; padding:12px; border:1px solid var(--rule-strong); border-radius:18px; background:var(--slip); box-shadow:0 3px 14px -10px var(--shade); }
+.chat .composer>.row:focus-within { border-color:var(--pencil); }
+.chat .input { border:0; border-radius:8px; padding:11px 4px; background:transparent; line-height:1.5; }
+.chat .input:focus { outline:none; }
+.chat .icon-button.mic { border:0; }
+.chat .icon-button.send { border-radius:11px; }
+.composer-note { margin:9px auto 0; color:var(--ink-2); font-size:11px; text-align:center; line-height:1.5; }
+.chat-empty .stage { align-items:flex-end; }
+.chat-empty .log { flex:1; max-height:100%; padding-top:32px; padding-bottom:18px; }
+.chat-empty .assistant-welcome { padding:16px 0 0; }
+.chat-empty .composer { padding-bottom:clamp(28px,16vh,160px); }
+.chat .assistant-inbox { margin:24px 0; padding-top:10px; border-top:1px solid var(--rule); }
+.chat .assistant-inbox-heading { margin-bottom:12px; }
+.chat .assistant-inbox-heading>.assistant-button { margin:0; padding:7px 11px; min-height:36px; background:transparent; }
+.pair { max-width:500px; font-family:ui-sans-serif,system-ui,sans-serif; }
+.pair h1 { font-size:32px; line-height:1.25; letter-spacing:-.6px; font-variant-caps:normal; }
+.pair .lede { font-size:15px; line-height:1.7; color:var(--ink-2); }
+.pair .steps { font-size:14px; line-height:1.75; }
+.pair-options { display:flex; gap:18px; flex-wrap:wrap; margin-top:4px; font-size:13px; }
+.pair-options a { color:var(--pencil); text-underline-offset:4px; }
+.pair details { color:var(--ink-2); font-size:13px; line-height:1.7; }
+.pair summary { cursor:pointer; min-height:36px; }
+.sheet { font-family:ui-sans-serif,system-ui,sans-serif; }
+.sheet .activity-list li { border-bottom-color:var(--rule); }
+.sheet h3 { font-family:inherit; letter-spacing:0; text-transform:none; }
+.settings-link { display:block; margin:8px 0 18px; color:var(--pencil); font-size:14px; text-underline-offset:4px; }
+@media(max-width:600px) {
+  .chat .bar { padding:calc(7px + env(safe-area-inset-top)) 12px 7px; min-height:64px; gap:8px; }
+  .chat .who h1 { max-width:45vw; font-size:15px; }
+  .chat .waiting { padding:6px 9px; font-size:11px; }
+  .chat .bar>.icon-button { width:36px; height:40px; }
+  .chat .composer { padding:8px 12px calc(12px + env(safe-area-inset-bottom)); }
+  .chat .composer>.row { gap:2px; padding:8px; border-radius:15px; }
+  .chat .input { font-size:16px; padding-left:4px; }
+  .chat-empty .composer { padding-bottom:calc(30px + env(safe-area-inset-bottom)); }
+  .chat-empty .log { padding-top:20px; }
+  .chat-empty .assistant-welcome { padding-top:8px; }
+  .assistant-shortcuts { margin-top:24px; }
+  .composer-note { font-size:10px; }
+}
+@media(max-height:650px) {
+  .chat-empty .composer { padding-bottom:calc(12px + env(safe-area-inset-bottom)); }
+}
+@media(prefers-reduced-motion:reduce) { .assistant-shortcut { transition:none; } }

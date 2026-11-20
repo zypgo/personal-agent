@@ -67,7 +67,7 @@ function inlineNodes(doc, nodes) {
         // never loaded: only said what it was, and where
         const href = safeUrl(node.href);
         const label = el(doc, "span", "image-ref");
-        label.textContent = node.alt ? `image: ${node.alt}` : "image";
+        label.textContent = node.alt ? `图片：${node.alt}` : "图片";
         if (href) {
           const link = el(doc, "a", "", label);
           link.setAttribute("href", href);
@@ -109,8 +109,8 @@ function blockNodes(doc, blocks) {
         const copy = el(doc, "button", "copy");
         copy.setAttribute("type", "button");
         copy.setAttribute("data-copy", "");
-        copy.setAttribute("aria-label", "Copy code");
-        copy.textContent = "Copy";
+        copy.setAttribute("aria-label", "复制代码");
+        copy.textContent = "复制";
         bar.append(lang, copy);
         const code = el(doc, "code", "");
         code.textContent = block.text;
@@ -148,7 +148,7 @@ function blockNodes(doc, blocks) {
       }
       case "cut": {
         const note = el(doc, "p", "cut");
-        note.textContent = `… ${block.hidden.toLocaleString("en")} more characters not shown`;
+        note.textContent = `… 还有 ${block.hidden.toLocaleString("zh-CN")} 个字符未显示`;
         out.push(note);
         break;
       }

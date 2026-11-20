@@ -35,7 +35,7 @@
 .or-plan-review { padding:18px; border:1px solid var(--accent); border-radius:10px; background:var(--paper); }
 .or-plan-review>h3 { color:var(--accent); }
 .or-plan-review form { gap:10px; }
-.or-step { padding-top:20px; border-top:1px solid var(--rule); }
+.or-step { padding-top:94px; border-top:1px solid var(--rule); }
 .or-prewrap { white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.7; }
 .or-attention { padding:12px 14px; border:1px solid var(--rule); border-left:3px solid var(--accent); border-radius:7px; font-size:13px; line-height:1.7; }
 .or-result { font-family:inherit; font-size:13px; max-height:480px; line-height:1.7; }
@@ -50,7 +50,7 @@
 #collaboration-detail progress::-webkit-progress-bar { background:var(--rule); border-radius:10px; }
 #collaboration-detail progress::-webkit-progress-value { background:var(--good); border-radius:10px; }
 #collaboration-detail progress::-moz-progress-bar { background:var(--good); border-radius:10px; }
-#collaboration-detail { max-height:calc(100dvh - 40px); overflow:auto; }
+#collaboration-detail { max-height:calc(100dvh - 118px); overflow:auto; }
 #collaboration-list .task-card>.hint { margin-bottom:0; }
 @media(max-width:720px) {
   .or-agent-grid,.or-agent-choices { grid-template-columns:1fr; }
@@ -65,3 +65,17 @@
   .or-small { min-height:42px; }
   #collaboration-detail { max-height:none; overflow:visible; }
 }
+
+.or-agent-card .or-card-heading { padding-bottom:10px; border-bottom:1px solid var(--rule); margin-bottom:16px; }
+.or-agent-card h2 { font-size:19px; font-weight:600; margin-bottom:6px; }
+.or-agent-card .eyebrow { font-size:11px; }
+.or-agent-card .or-connection-note { margin-bottom:16px; }
+.or-agent-card .actions button { padding:7px 11px; font-size:12px; min-height:38px; }
+.or-agent-grid>.empty { padding-block:48px; }
+.or-agent-grid>.empty h3 { font-size:22px; }
+#collaboration-detail>.badge { margin-bottom:12px; }
+#collaboration-detail>.or-card-heading { margin-bottom:4px; }
+#collaboration-detail>.or-card-heading h2 { font-size:19px; line-height:1.5; }
+.or-result { background:transparent; border:0; padding:0; }
+@media(max-width:1100px) and (min-width:761px) { .or-agent-grid { grid-template-columns:1fr; } }
+@media(max-width:760px) { .or-agent-card .actions button,.detail-close { min-height:42px; } .or-agent-grid { grid-template-columns:1fr; } #collaboration-detail { max-height:none; overflow:visible; } }

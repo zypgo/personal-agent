@@ -354,11 +354,12 @@ def prepare_action(
     immutable = {"action": action, "target_id": target_id, "draft": draft}
     with app.db.tx():
         _authorize_action(app, actor_id, action, target_id, draft)
+        authority = app.actor_snapshot(actor_id)
         key = _prefix(actor_id) + identifier
         previous = app.db.kv_get(key)
         if previous is not None:
             saved = json.loads(previous)
-            if saved["authority"] != app.actor_snapshot(actor_id):
+            if saved["authority"] != authority:
                 raise AccessDenied("The action's authorization changed; request a new proposal.")
             if any(saved[name] != value for name, value in immutable.items()):
                 raise AssistantConflict("This action_key already identifies a different proposal.")
@@ -368,6 +369,9 @@ def prepare_action(
         if (
             sum(
                 record["status"] in {"proposed", "executing", "uncertain"}
+                # Old authority is permanently fenced and hidden from the inbox;
+                # those receipts must not occupy the new authority's card quota.
+                and record["authority"] == authority
                 and (record["status"] != "proposed" or record["expires_at"] > app.clock.now())
                 for record in _records(app, actor_id)
             )
@@ -378,7 +382,7 @@ def prepare_action(
             "id": identifier,
             "principal_id": actor_id,
             "space_id": app.space_id,
-            "authority": app.actor_snapshot(actor_id),
+            "authority": authority,
             "status": "proposed",
             "created_at": app.clock.now(),
             "expires_at": app.clock.now() + PROPOSAL_SECONDS,

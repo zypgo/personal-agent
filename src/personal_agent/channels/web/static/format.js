@@ -2,8 +2,8 @@
 
 const pad2 = (n) => String(n).padStart(2, "0");
 
-/** "14:05" or "2:05 PM", whichever the owner's locale writes. `seconds` is a Unix time. */
-export function clockTime(seconds, locale) {
+/** Chinese display by default; callers can select another locale. `seconds` is a Unix time. */
+export function clockTime(seconds, locale = "zh-CN") {
   return new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit" }).format(
     new Date(seconds * 1000),
   );
@@ -15,13 +15,13 @@ export function dayKey(seconds) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-/** "Today", "Yesterday", or a short date. Days are calendar days (a night's sleep is not 24 h). */
-export function dayLabel(seconds, nowSeconds, locale) {
+/** "今天", "昨天", or a short date. Days are calendar days (a night's sleep is not 24 h). */
+export function dayLabel(seconds, nowSeconds, locale = "zh-CN") {
   const key = dayKey(seconds);
   const now = new Date(nowSeconds * 1000);
-  if (key === dayKey(nowSeconds)) return "Today";
+  if (key === dayKey(nowSeconds)) return "今天";
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  if (key === dayKey(yesterday.getTime() / 1000)) return "Yesterday";
+  if (key === dayKey(yesterday.getTime() / 1000)) return "昨天";
   const then = new Date(seconds * 1000);
   const options = { weekday: "short", day: "numeric", month: "short" };
   if (then.getFullYear() !== now.getFullYear()) options.year = "numeric";
@@ -41,14 +41,14 @@ export function bytesLabel(bytes) {
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
-/** How long until something that expires at `expiresAt` does: "9 min", "2 h", or "expired". */
+/** How long until something that expires at `expiresAt` does: "9 分钟", "2 小时", or "已过期". */
 export function expiresIn(expiresAt, nowSeconds) {
   const left = Math.floor(expiresAt - nowSeconds);
-  if (left <= 0) return "expired";
-  if (left < 90) return `${left} s`;
-  if (left < 5400) return `${Math.round(left / 60)} min`;
-  if (left < 86400 * 2) return `${Math.round(left / 3600)} h`;
-  return `${Math.round(left / 86400)} d`;
+  if (left <= 0) return "已过期";
+  if (left < 90) return `${left} 秒`;
+  if (left < 5400) return `${Math.round(left / 60)} 分钟`;
+  if (left < 86400 * 2) return `${Math.round(left / 3600)} 小时`;
+  return `${Math.round(left / 86400)} 天`;
 }
 
 /** A pairing code out of whatever the owner pasted: the whole link, or just the code. */
@@ -68,12 +68,12 @@ export function newClientId(random = globalThis.crypto) {
 }
 
 export const COMMANDS = [
-  ["/new", "start a fresh conversation"],
-  ["/status", "what is running, what it cost today"],
-  ["/approvals", "actions waiting for your yes or no"],
-  ["/approve", "allow a waiting action"],
-  ["/deny", "refuse it"],
-  ["/help", "every command"],
+  ["/new", "开始新的对话"],
+  ["/status", "查看当前进度与今日花费"],
+  ["/approvals", "查看等待你确认的操作"],
+  ["/approve", "允许一项待确认的操作"],
+  ["/deny", "拒绝一项待确认的操作"],
+  ["/help", "查看全部命令"],
 ];
 
 /** The commands that start with what has been typed, while it is still just a command word. */

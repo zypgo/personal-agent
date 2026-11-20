@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FakeElement, elements, find, toHtml } from "./fake_dom.mjs";
-import { createAssistantCards, createAssistantNavigation, createAssistantWelcome, nativeCardRequest, workspaceRequest } from "../../src/personal_agent/channels/web/static/assistant.js";
+import { createAssistantCards, createAssistantWelcome, nativeCardRequest, workspaceRequest } from "../../src/personal_agent/channels/web/static/assistant.js";
 
 class Element extends FakeElement {
   constructor(tag) { super(tag); this.value = ""; this.disabled = false; this.checked = false; this.hidden = false; this.dataset = {}; }
@@ -65,11 +65,8 @@ function setup({ cards = [], respond, admin = false, role = "owner" } = {}) {
   return { ui, document, state, calls, notices, prompts, downloads, setupDownloads, contextChanges };
 }
 
-test("primary navigation has exactly two scoped tabs and welcome shortcuts only prepare messages", async () => {
+test("welcome shortcuts prepare messages without sending or creating work", async () => {
   const document = documentFixture(), prompts = [];
-  const nav = createAssistantNavigation({ document, resolve: path => `${path}?space=one` });
-  assert.deepEqual(find(nav, "a").map(link => [link.textContent, link.getAttribute("href")]), [["个人助理", "/?space=one"], ["工作台", "/workspace?space=one"]]);
-  assert.equal(find(nav, "a")[0].getAttribute("aria-current"), "page");
   const welcome = createAssistantWelcome({ document, onPrompt: value => prompts.push(value) });
   await click(find(welcome, "button")[0]);
   assert.deepEqual(prompts, ["帮我看看现在有哪些需要我处理的事情。"]);
