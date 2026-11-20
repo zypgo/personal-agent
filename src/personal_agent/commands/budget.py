@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Annotated
 
 import typer
@@ -30,8 +31,11 @@ def extend(
     amount: Annotated[float, typer.Argument(help="Dollars to add to today's limit.")],
 ) -> None:
     """Raise today's limit and let paused work continue. Tomorrow the normal limit applies."""
-    if amount <= 0:
-        raise typer.BadParameter("the amount must be positive")
+    if not math.isfinite(amount) or amount <= 0:
+        raise typer.BadParameter("the amount must be finite and positive")
     with opened() as agent:
-        limit, released = agent.extend_budget(amount)
+        try:
+            limit, released = agent.extend_budget(amount)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         say(f"Today's limit is now ${limit:.2f}; {released} waiting event(s) released.")

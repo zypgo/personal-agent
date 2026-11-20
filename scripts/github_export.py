@@ -17,7 +17,7 @@ script stops: it never forces a push and never moves a tag.
 
 Before anything leaves this machine, what is new there is read, and any one finding stops it all:
 
-- every author and committer address is a GitHub noreply address;
+- every author, committer and annotated-tag address is a GitHub noreply address;
 - no `.env`, key, certificate or database file, and no file over 5 MiB;
 - nothing the owner keeps private: the patterns in the private config, and the values in the
   `.env` files it names (a value shorter than 12 characters is not looked for);
@@ -76,6 +76,7 @@ MAX_BLOB_BYTES = 5 * 1024 * 1024
 MIN_NEEDLE = 12  # a shorter value would be found everywhere
 MAX_LISTED = 5  # places named per finding
 REMOTE_REF = "refs/export/remote"
+REMOTE_TAGS = "refs/export/tags"
 
 
 class Refusal(Exception):
@@ -193,7 +194,7 @@ def env_needles(path: Path) -> dict[str, list[bytes]]:
         readings = {value, value.strip("'\""), re.split(r"\s+#", value)[0].strip().strip("'\"")}
         picked = sorted(v.encode() for v in readings if len(v) >= MIN_NEEDLE)
         if picked:
-            found[name.strip()] = picked
+            found.setdefault(name.strip(), []).extend(picked)
     return found
 
 
@@ -285,7 +286,10 @@ class Rules:
 
 def range_args(exclude: bool) -> list[str]:
     """What is new on GitHub: everything `main` and the tags reach, less what GitHub has."""
-    return ["--branches", "--tags", *([f"^{REMOTE_REF}"] if exclude else [])]
+    return [
+        "--branches", "--tags", *([f"^{REMOTE_REF}"] if exclude else []),
+        "--not", f"--glob={REMOTE_TAGS}/*",
+    ]  # fmt: skip
 
 
 def objects_of(work: Path, exclude: bool) -> dict[str, str]:
@@ -357,10 +361,23 @@ def check_paths_and_sizes(
 
 def check_contents(work: Path, paths: Mapping[str, str], rules: Rules) -> list[str]:
     hits: dict[str, list[str]] = {}
+    problems = []
     for oid, kind, content in read_objects(work, list(paths)):
+        if kind == "tag":
+            # `git log` checks commit identities, but never an annotated tag's own author.
+            # Read tag objects too, including a tag pointing at another annotated tag.
+            header = content.partition(b"\n\n")[0]
+            tagger = next(
+                (line for line in header.splitlines() if line.startswith(b"tagger ")), b""
+            )
+            address = re.search(rb" <([^<>]*)> [0-9]+ [+-][0-9]{4}$", tagger)
+            if address is None or not NOREPLY.fullmatch(
+                address.group(1).decode("utf-8", "replace")
+            ):
+                problems.append(f"tag {oid[:7]}: the tagger address is not a GitHub noreply one")
         for label in rules.matching(content):
             hits.setdefault(label, []).append(place(oid, kind, paths, rules))
-    return [
+    return problems + [
         f"{label} is in {len(places)} place(s): {', '.join(sorted(set(places))[:MAX_LISTED])}"
         for label, places in hits.items()
     ]
@@ -420,13 +437,22 @@ def export(
         raise Setup(f"env_files lists a file that is not there: {', '.join(missing)}")
     if config.gitleaks_config and not config.gitleaks_config.is_file():
         raise Setup(f"gitleaks_config names a file that is not there: {config.gitleaks_config}")
-    env = {name: values for f in env_files for name, values in env_needles(f).items()}
+    # Reusing a variable name in another environment must not erase the first secret from
+    # the privacy check: both values are private, regardless of which configuration wins.
+    env: dict[str, list[bytes]] = {}
+    for path in env_files:
+        for name, values in env_needles(path).items():
+            env.setdefault(name, []).extend(values)
     url = git("remote", "get-url", remote, cwd=source).strip()
     tip_there, tags_there = remote_state(url, branch, source)
 
     with tempfile.TemporaryDirectory(prefix="pa-export-") as scratch:
         work = Path(scratch) / "work"
         rewritten = filtered_clone(source, work, branch, url if tip_there else None)
+        if tags_there:
+            # A published tag can reach objects outside main, including nested tag authors.
+            # Exclude those already-public objects without moving any local publication tag.
+            git("fetch", "--quiet", "--no-tags", url, f"refs/tags/*:{REMOTE_TAGS}/*", cwd=work)
         new_tip = git("rev-parse", branch, cwd=work).strip()
         say(
             f"{branch} is {new_tip[:7]} here ({'workflow files left out' if rewritten else 'as it is'})"

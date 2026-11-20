@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+import pytest
 from agents.testing import ScriptedModel, assistant_message, function_call
 
 from helpers import invoke
@@ -253,6 +254,15 @@ def test_budget_shows_the_limits_and_extending_lets_paused_work_continue(wired):
     assert app.budget.daily_limit() == 3.0
     assert "including $2.00 you added" in invoke("budget").output
     assert invoke("budget", "extend", "0").exit_code == 2
+
+
+@pytest.mark.parametrize("amount", ["nan", "inf", "1e309"])
+def test_budget_command_rejects_nonfinite_extensions(wired, amount):
+    app = wired()
+    result = invoke("budget", "extend", amount)
+    assert result.exit_code == 2
+    assert "finite" in result.output
+    assert app.budget.daily_limit() == app.config.budget.daily_usd
 
 
 # ---- status and the service -------------------------------------------------------------

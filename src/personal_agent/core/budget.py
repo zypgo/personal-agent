@@ -7,6 +7,7 @@ midnight (events wait in the inbox, nothing is lost). The owner can lift today's
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import tzinfo
@@ -57,17 +58,33 @@ class BudgetGuard:
         return f"budget_extra:{to_local(self.clock.now(), self.tz):%Y-%m-%d}"
 
     def extra_today(self) -> float:
+        return self._extra_for(self._day_key())
+
+    def _extra_for(self, key: str) -> float:
         try:
-            return float(self.db.kv_get(self._day_key(), "0") or 0)
+            extra = float(self.db.kv_get(key, "0") or 0)
         except ValueError:
             return 0.0
+        # Older versions accepted NaN and infinity via `pa budget extend`. A malformed
+        # saved allowance must not turn the daily comparison into an always-false one.
+        if extra < 0 or not math.isfinite(extra) or not math.isfinite(self.cfg.daily_usd + extra):
+            return 0.0
+        return extra
 
     def extend_today(self, amount: float) -> float:
         """Raise today's cap by `amount` dollars. Returns today's new limit."""
-        if amount <= 0:
-            raise ValueError("the extension must be positive")
-        self.db.kv_set(self._day_key(), repr(self.extra_today() + amount), now=self.clock.now())
-        return self.daily_limit()
+        if not math.isfinite(amount) or amount <= 0:
+            raise ValueError("the extension must be a finite positive amount")
+        # Read and write one day's allowance under the same transaction, so concurrent
+        # extensions cannot overwrite each other or carry yesterday's allowance forward.
+        with self.db.tx():
+            key = self._day_key()
+            extra = self._extra_for(key) + amount
+            limit = self.cfg.daily_usd + extra
+            if not math.isfinite(limit):
+                raise ValueError("the extension would exceed the supported budget limit")
+            self.db.kv_set(key, repr(extra), now=self.clock.now())
+        return limit
 
     def daily_limit(self) -> float:
         return self.cfg.daily_usd + self.extra_today()

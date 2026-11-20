@@ -110,6 +110,39 @@ def test_a_wrong_code_is_refused_without_a_cookie(stranger):
     assert response.status_code == 403 and "set-cookie" not in response.headers
 
 
+@pytest.mark.parametrize(
+    "path", ["/api/pair", "/api/approvals/1", "/api/v3/spaces", "/api/v4/agents"]
+)
+def test_deeply_nested_json_is_a_client_error_without_mutations(web, path):
+    # Well below the request byte limit, but beyond Python's recursive JSON decoder.
+    payload = '{"value":' + "[" * 20_000 + "0" + "]" * 20_000 + "}"
+    response = web.client.post(
+        path,
+        content=payload,
+        headers={**web.write, "Content-Type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert "traceback" not in response.text.lower()
+    assert not web.events()
+    assert web.app.db.scalar("SELECT COUNT(*) FROM orchestration_agents") == 0
+
+
+def test_deeply_nested_pairing_requests_count_toward_rate_limit(stranger):
+    payload = '{"code":' + "[" * 20_000 + "0" + "]" * 20_000 + "}"
+    count, _ = PAIR_ATTEMPTS
+    for _ in range(count):
+        response = stranger.client.post(
+            "/api/pair",
+            content=payload,
+            headers={**stranger.write, "Content-Type": "application/json"},
+        )
+        assert response.status_code == 400
+    code = stranger.app.web_auth.invite("phone").code
+    response = stranger.client.post("/api/pair", json={"code": code}, headers=stranger.write)
+    assert response.status_code == 429
+    assert "set-cookie" not in response.headers
+
+
 @pytest.mark.parametrize("body", [b"not json", b"[]", b'{"code": 5}', b"{}", b"null"])
 def test_a_malformed_pairing_request_is_a_400(stranger, body):
     response = stranger.client.post(

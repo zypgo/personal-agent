@@ -185,6 +185,20 @@ test("a revoked project is cleared when a parallel request is cancelled before t
   assert.doesNotMatch(get("task-diagnostics").textContent, /999/);
 });
 
+test("sign-out removes private diagnostics and notices before another account can reuse the workspace", async () => {
+  const {ui, get} = setup(taskFixture(), { respond: url => {
+    if (url.pathname === "/api/v3/diagnostics") return {ok: true, status: 200, json: async () => ({
+      budget: {space_spent_usd: 731}, nodes: [{online: true}], tasks: {queued: 4},
+    })};
+  } });
+  await ui.loadTasks();
+  ui.notice("Saved private-project-report.md", true);
+  for (const id of ["task-diagnostics", "device-diagnostics"]) assert.match(get(id).textContent, /731/);
+  ui.showLogin();
+  for (const id of ["task-diagnostics", "device-diagnostics", "notice"]) assert.equal(get(id).textContent, "");
+  assert.equal(get("notice").hidden, true);
+});
+
 test("leaving a project switches to an accessible space before requesting any more private data", async () => {
   let left = false;
   const rejectedSpaceReads = [];

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from agents.testing import ModelStep, ScriptedModel, assistant_message, function_call
+from pydantic import ValidationError
 
 from helpers import owner_message, usage
 from personal_agent.clock import get_tz
@@ -50,6 +51,21 @@ def tiny(text: str) -> ModelStep:
 
 
 DAILY = BudgetConfig(per_run_usd=1.0, daily_usd=0.004)
+
+
+@pytest.mark.parametrize("field", ["per_run_usd", "daily_usd"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), "1e309"])
+def test_configured_budget_limits_must_be_finite(field, value):
+    with pytest.raises(ValidationError):
+        BudgetConfig.model_validate({field: value})
+    with pytest.raises(ValidationError):
+        Config.model_validate({"budget": {field: value}})
+
+
+@pytest.mark.parametrize("value", [0.004, 1.0, "5.5"])
+def test_finite_budget_limits_keep_their_configured_amount(value):
+    config = Config.model_validate({"budget": {"per_run_usd": value, "daily_usd": value}})
+    assert config.budget.per_run_usd == config.budget.daily_usd == float(value)
 
 
 # ---- the guard on its own -----------------------------------------------------------------
@@ -117,6 +133,35 @@ def test_extending_today_raises_only_todays_limit(guard, clock):
     assert budget.daily_limit() == 5.0  # tomorrow is back to the configured cap
     with pytest.raises(ValueError):
         budget.extend_today(0)
+
+
+@pytest.mark.parametrize("amount", [float("nan"), float("inf"), -float("inf")])
+def test_invalid_extensions_cannot_disable_the_daily_cap(guard, amount):
+    runs, budget = guard
+    spend(runs, "main", 5.0)
+    with pytest.raises(ValueError):
+        budget.extend_today(amount)
+    assert budget.daily_limit() == 5.0
+    with pytest.raises(BudgetExceeded):
+        budget.check_day()
+
+
+def test_extensions_that_overflow_leave_the_previous_cap_intact(guard):
+    _, budget = guard
+    previous = budget.extend_today(1e308)
+    with pytest.raises(ValueError):
+        budget.extend_today(1e308)
+    assert budget.daily_limit() == previous
+
+
+@pytest.mark.parametrize("saved", ["nan", "inf", "-inf", "-5"])
+def test_an_invalid_saved_extension_does_not_disable_the_daily_cap(guard, saved):
+    runs, budget = guard
+    budget.db.kv_set(budget._day_key(), saved)
+    spend(runs, "main", 5.0)
+    assert budget.daily_limit() == 5.0
+    with pytest.raises(BudgetExceeded):
+        budget.check_day()
 
 
 # ---- inside runs ------------------------------------------------------------------------------

@@ -51,7 +51,10 @@ function pullDown(dialog, handle) {
     dialog.style.setProperty("--sheet-alpha", String(Math.max(0, 1 - amount / Math.max(dialog.offsetHeight, 1)).toFixed(3)));
   };
   handle.addEventListener("pointerdown", event => {
-    if (event.pointerType === "mouse" || wide() || dialog.dataset.closing === "true") return;
+    if (event.pointerType === "mouse" || event.isPrimary === false || drag || wide() || dialog.dataset.closing === "true") return;
+    // A header can contain the close button. Capturing its pointer at the header would
+    // retarget the subsequent click there too, preventing the button from being activated.
+    if (event.target?.closest?.("button,a,input,select,textarea,[role='button'],[contenteditable],[data-no-swipe]")) return;
     drag = { id: event.pointerId, y: event.clientY, at: event.timeStamp, last: event.clientY, lastAt: event.timeStamp, speed: 0, amount: 0 };
     handle.setPointerCapture?.(event.pointerId);
   });

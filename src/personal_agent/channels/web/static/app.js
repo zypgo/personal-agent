@@ -448,7 +448,8 @@ function onHello(data) {
 }
 
 function onTurn(turn) {
-  store.matchIncoming(turn);
+  const delivered = store.matchIncoming(turn);
+  if (delivered) releasePreviews(delivered.files);
   const fresh = store.addTurns([turn]);
   if (!fresh.length) return;
   const mine = turn.direction === "in" && turn.channel === "web";

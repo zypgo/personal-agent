@@ -6,6 +6,7 @@ import { createProductShell } from "../../src/personal_agent/channels/web/static
 class Element extends FakeElement {
   constructor(tag, doc) {
     super(tag); this.ownerDocument = doc; this.dataset = {}; this.hidden = false; this.disabled = false;
+    this.style = { setProperty(name, value) { this[name] = value; }, removeProperty(name) { delete this[name]; } };
     const change = (name, present) => { const names = new Set(this.className.split(/\s+/).filter(Boolean)); if (present) names.add(name); else names.delete(name); this.className = [...names].join(" "); };
     this.classList = { add: name => change(name, true), remove: name => change(name, false), toggle: (name, value) => change(name, value) };
   }
@@ -162,4 +163,20 @@ test("an interrupted drag leaves the drawer as it was", () => {
   s.listeners.get("pointercancel")(touch({ clientX: 220, clientY: 302, timeStamp: 120 }));
   assert.equal(isOpen(s), "false"); assert.equal(s.shell.element.dataset.dragging, undefined);
   s.shell.destroy(); assert.equal(s.listeners.size, 0);
+});
+
+test("changing the viewport during a drag discards its partial position and accepts a new gesture", () => {
+  const s = setup({ narrow: true });
+  s.listeners.get("pointerdown")(touch({ clientX: 100, clientY: 300, timeStamp: 0 }));
+  s.listeners.get("pointermove")(touch({ clientX: 220, clientY: 302, timeStamp: 100 }));
+  assert.equal(s.shell.element.dataset.dragging, "true");
+  assert.equal(s.shell.element.style["--drawer-p"], "0.375");
+  s.resize(false);
+  assert.equal(s.shell.element.dataset.dragging, undefined);
+  assert.equal(s.shell.element.style["--drawer-p"], undefined);
+  assert.equal(isOpen(s), "true");
+  s.resize(true);
+  assert.equal(isOpen(s), "false");
+  swipe(s, [[100, 300, 200], [200, 302, 500], [300, 303, 800]], { pointerId: 2 });
+  assert.equal(isOpen(s), "true", "a gesture interrupted by rotation cannot keep the next finger locked out");
 });

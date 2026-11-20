@@ -47,7 +47,7 @@ const source = readFileSync(new URL("../../src/personal_agent/channels/web/stati
   .replace(/^import\b[\s\S]*?;\n/gm, "")
   .replace("import.meta.url", '"https://example.invalid/static/app.js"')
   .replace(/\nmain\(\);\s*$/, "");
-const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+const deferred = () => { let resolve, reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; };
 const settle = async () => { for (let index = 0; index < 8; index++) await Promise.resolve(); };
 
 function setup({ record, duration = async () => 1, shrink = async file => file, canRecord = true, respond } = {}) {
@@ -82,7 +82,7 @@ function setup({ record, duration = async () => 1, shrink = async file => file, 
     scrollToBottom = () => { scrolls.push(ui); };
     toast = () => {};
     globalThis.page = {
-      buildComposer, addFiles, startVoice, submit, teardownChat, watchViewport, openPicture, openSettings, editPending,
+      buildComposer, addFiles, startVoice, submit, teardownChat, watchViewport, openPicture, openSettings, editPending, onTurn,
       failedMessage(text, files = []) {
         const entry = store.addPending({ clientId: "failed-message", text, files, at: 1 });
         entry.state = "rejected";
@@ -176,6 +176,19 @@ test("a completed image import cannot repopulate a signed-out composer's private
   s.page.teardownChat(); s.page.attach(); resizing.resolve(picture); await importing;
   assert.equal(s.view.composer.files.length, 0);
   assert.equal(s.page.current.composer.files.length, 0);
+});
+
+test("a stream-confirmed image releases its preview even when the POST response is lost", async () => {
+  const response = deferred();
+  const s = setup({ respond: () => response.promise });
+  await s.page.addFiles([new File(["picture"], "photo.png", { type: "image/png" })]);
+  const sending = s.page.submit();
+  s.page.onTurn({ id: 1, direction: "in", channel: "web", text: "", at: 1, meta: { client_request_id: "client-a" } });
+  assert.equal(s.page.pending.length, 0);
+  assert.deepEqual(s.revoked, ["blob:preview"]);
+  response.reject(Object.assign(new Error("Connection lost"), { status: 0 }));
+  await sending;
+  assert.deepEqual(s.revoked, ["blob:preview"], "the late response must not revoke an already released preview twice");
 });
 
 test("sign-out clears open private image dialogs and releases viewport listeners", () => {

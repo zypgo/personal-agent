@@ -110,6 +110,18 @@ def test_a_folder_swapped_for_a_link_after_the_check_is_not_followed_when_readin
         files._read(app, real, 1, 10)
 
 
+@pytest.mark.parametrize("name", ["d", "d/nested"])
+def test_listing_does_not_follow_a_folder_swapped_after_validation(app, ws, outside, name):
+    put(ws, f"{name}/inside.txt", "inside")
+    (outside / "nested").mkdir()
+    (outside / "nested" / "private-filename.txt").write_text("outside")
+    real = resolve_path(app, name, write=False)
+    swap_for_a_link(ws, "d", outside)
+
+    with pytest.raises(FileProblem, match="changed while it was being opened"):
+        files._list(app, real, 3)
+
+
 def test_a_file_swapped_for_a_link_after_the_check_is_not_followed_either(app, ws, outside):
     put(ws, "f.txt", "inside")
     real = resolve_path(app, "f.txt", write=False)
