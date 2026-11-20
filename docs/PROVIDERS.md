@@ -1,26 +1,26 @@
 # Model, speech and search providers
 
-The agent runs locally. Model inference, speech transcription and hosted search use the configured
-services. This guide describes their separate configuration boundaries and what remains shared.
+The agent runs on your own computer. Three things go out to services you choose: the model, speech transcription and hosted web search. This guide shows how to set up each one, and which settings they still share.
 
-## Existing configurations keep working
+## If you already have a working setup
 
-Without new settings:
+Nothing changes unless you add new settings:
 
-- Text models use `[model] base_url`, then `OPENAI_BASE_URL`, then the OpenAI default.
-- Credentials come from `OPENAI_API_KEY`.
-- Speech inherits the text-model endpoint and credential. Its model name still comes from
-  `[media] transcribe_model`.
-- `model.main`, `model.fast` and `context.model` select model names at the same endpoint. They do
-  not select separate providers.
+- The text model's address comes from `[model] base_url`. If that is not set, `OPENAI_BASE_URL`. If that is not set either, the OpenAI default.
+- The key comes from `OPENAI_API_KEY`.
+- Speech uses the same address and key as the text model. Its model name still comes from `[media] transcribe_model`.
+- `model.main`, `model.fast` and `context.model` only pick model names at the same address. They do not pick a different provider.
 
-Two checks are stricter: explicitly writing the native OpenAI URL still requires a key, and hosted
-search is no longer offered to every server that implements Responses. Both prevent requests that
-the configured service has not advertised it can handle.
+Two checks are stricter than before:
 
-## Select a model credential
+- If you write the native OpenAI URL yourself, a key is now required.
+- Hosted search is no longer offered to every server that merely implements the Responses API.
 
-`api_key_env` is the **name** of an environment variable, never the secret itself:
+Both stop the agent from sending requests that the service never said it could handle.
+
+## Choose the model's key
+
+`api_key_env` is the **name** of an environment variable. It is never the secret itself:
 
 ```toml
 [model]
@@ -31,22 +31,13 @@ main = "your-main-model"
 fast = "your-fast-model"
 ```
 
-Set `MODEL_GATEWAY_KEY` in the agent's own `.env` file or its process environment. A missing
-explicitly named custom variable is an error; the client never substitutes `OPENAI_API_KEY` for it.
-`pa doctor`, `pa service install` and `pa eval run --live` use the same credential resolution.
+Put `MODEL_GATEWAY_KEY` in the agent's own `.env` file, or in the process environment. If you name a custom variable and it is missing, that is an error. The agent never quietly falls back to `OPENAI_API_KEY`. `pa doctor`, `pa service install` and `pa eval run --live` all find the key the same way.
 
-For compatibility, a custom endpoint with the default credential name can still run without a key;
-the client supplies `not-needed`, which local servers may ignore. If a local server needs no
-authentication but you also hold cloud credentials, give it its own variable with a dummy value.
-That keeps an unrelated cloud key out of its requests.
+For compatibility, a custom endpoint that still uses the default key name can run without a key. The agent then sends `not-needed`, which local servers can ignore. If your local server needs no login but you also have cloud keys, give the local server its own variable with a dummy value. That keeps an unrelated cloud key out of its requests.
 
-Credential names use uppercase letters, digits and underscores, up to 64 characters, and cannot
-start with a digit. Configured credential values participate in the agent's output and log
-redaction even when their variable names do not contain `KEY`, `TOKEN` or `SECRET`.
-`pa service install --pass-env` also refuses these configured variables: credentials belong in the
-agent's `.env`, not in a LaunchAgent job definition or its dry-run output.
+A key name uses uppercase letters, digits and underscores, is at most 64 characters long, and cannot start with a digit. Any key value you configure is hidden from the agent's output and logs, even if its name does not contain `KEY`, `TOKEN` or `SECRET`. `pa service install --pass-env` also refuses these variables. Keys belong in the agent's `.env`, not in a LaunchAgent job file or in its dry-run output.
 
-## Use a local text model and a separate speech service
+## A local text model with a separate speech service
 
 ```toml
 [model]
@@ -71,23 +62,20 @@ LOCAL_MODEL_AUTH=not-needed
 OPENAI_API_KEY=put-your-speech-service-key-here
 ```
 
-Replace the model names and addresses with those your services actually provide. The speech model
-above is the project's configured default, not a promise that every account or compatible service
-offers it.
+Replace the model names and addresses with the ones your services really offer. The speech model above is this project's default. It does not mean every account or compatible service has it.
 
-`transcribe_base_url` takes precedence over the model URL and `OPENAI_BASE_URL`.
-`transcribe_api_key_env` independently overrides the model credential name. An omitted setting
-inherits its corresponding model setting, preserving existing installations. When providers
-differ, set **both** overrides so their relationship is explicit.
+How the speech settings combine:
 
-An OpenAI-compatible speech service must implement `POST /audio/transcriptions` and return the
-transcribed `text`. Changing the text-model endpoint alone does not give that server speech
-recognition. `pa doctor` reports the speech route and missing credentials without sending audio;
-it does not claim to have probed speech compatibility.
+- `transcribe_base_url` wins over the model URL and over `OPENAI_BASE_URL`.
+- `transcribe_api_key_env` separately overrides the model's key name.
+- A setting you leave out inherits the matching model setting, so existing installs keep working.
+- When the two providers differ, set **both** overrides so the link between them is explicit.
 
-## Declare hosted-search support
+An OpenAI-compatible speech service must implement `POST /audio/transcriptions` and return the transcribed `text`. Pointing the text model at a new server does not give that server speech recognition. `pa doctor` reports the speech route and any missing key without sending audio. It does not claim to have tested speech compatibility.
 
-The model endpoint and tool settings must both permit hosted search:
+## Say whether hosted search is supported
+
+Hosted search needs both the model endpoint and the tool settings to allow it:
 
 ```toml
 [model]
@@ -102,43 +90,23 @@ hosted_web_search = true
 web_search = "auto"
 ```
 
-| `model.capabilities.hosted_web_search` | Behaviour |
+| `model.capabilities.hosted_web_search` | What happens |
 | --- | --- |
-| Omitted | Enabled automatically only for the native `https://api.openai.com/v1` endpoint, including its default configuration. |
-| `true` | The owner declares that this Responses-compatible service supports the hosted `web_search` tool. This is not a capability probe. |
-| `false` | Never offer hosted search at this endpoint. |
+| Not set | Turned on automatically only for the native `https://api.openai.com/v1` endpoint, including the default setup. |
+| `true` | You are telling the agent that this Responses-compatible service supports the hosted `web_search` tool. The agent does not test this. |
+| `false` | Hosted search is never offered at this endpoint. |
 
-The automatic check uses the resolved endpoint, including `OPENAI_BASE_URL`; lookalike domains,
-alternate ports and arbitrary gateway paths are not treated as OpenAI. Chat Completions never
-receives this Responses-only tool, even when the capability is declared `true`.
+The automatic check looks at the final address, including `OPENAI_BASE_URL`. Lookalike domains, other ports and arbitrary gateway paths do not count as OpenAI. Chat Completions never gets this tool, which exists only in the Responses API, even if you set the capability to `true`.
 
-Existing restrictions still apply: `tools.web_search = "off"`, deny rules and the run's tool profile
-can remove search. `cached` still queries the provider's search index; it is not an offline local
-cache. The `web_fetch` and `http_request` tools remain separate local HTTP clients and are not
-disabled when hosted search is unavailable. Another search provider can be added through MCP or a
-Python tool plugin; there is no generic `SearchProvider` registry yet.
+The usual limits still apply. `tools.web_search = "off"`, deny rules and the run's tool profile can all remove search. `cached` still queries the provider's search index; it is not an offline cache on your machine. The `web_fetch` and `http_request` tools are separate local HTTP clients, and they stay on when hosted search is unavailable. To add another search provider, use an MCP server or a Python tool plugin. There is no general `SearchProvider` registry yet.
 
-## Data, costs and compatibility
+## Data, cost and compatibility
 
-- The model endpoint receives the instructions, history, remembered context and tool results used
-  in a request. Images in the active context are uploaded with model requests.
-- Speech sends audio bytes to the selected speech endpoint. Transcribed text then enters the model
-  conversation. Local `ffmpeg` conversion does not make transcription local.
-- `store = false` requests stateless Responses handling; SDK tracing is disabled. Neither setting
-  means that inference data stays on the computer or determines every provider's retention policy.
-- Main and fast models still share one provider configuration. Model failover, provider-specific
-  pricing and provider-independent checkpoint migration are outside this change. Unknown model
-  prices retain the conservative estimate documented by `pa doctor`; a free local model can
-  therefore still consume the agent's estimated budget.
-- A compatible URL alone does not guarantee compatibility. Tools, history replay, reasoning
-  parameters, images and Guardian structured output must be supported by the chosen endpoint.
-  `pa doctor --live` makes two paid model requests to exercise tools and replay; it does not test
-  every speech, multimodal or approval-resume path.
-- Interactive Web chats can request streaming answer previews. For a compatible endpoint that
-  only implements complete responses, set `[web] stream_responses = false`; final answers still
-  use the durable delivery path.
+- The model endpoint receives what a request needs: instructions, history, remembered context and tool results. Images in the current context are uploaded with the request.
+- Speech sends the audio bytes to the speech endpoint you chose. The transcribed text then goes into the model conversation. Converting audio locally with `ffmpeg` does not make the transcription local.
+- `store = false` asks for stateless Responses handling, and SDK tracing is off. Neither setting means the data stays on your computer, and neither decides how long a provider keeps it.
+- The main and fast models still share one provider setup. Model failover, per-provider pricing and moving checkpoints between providers are not covered. If a model's price is unknown, the agent keeps the cautious estimate that `pa doctor` describes. So a free local model can still use up the agent's estimated budget.
+- A URL that looks compatible is not a guarantee. The endpoint you choose has to support tools, history replay, reasoning parameters, images and Guardian's structured output. `pa doctor --live` makes two paid model requests to try tools and replay. It does not test every speech, image or approval-resume path.
+- Interactive web chats can ask for a streaming preview of the answer. If your compatible endpoint only returns complete responses, set `[web] stream_responses = false`. Final answers still go through the durable delivery path.
 
-For a speech implementation with another protocol, implement the public `Transcriber` interface
-(`async transcribe(data, *, mime, name) -> str`) and inject it with `build_app(transcriber=...)`.
-An optional `async aclose()` is called when services stop. This is a code-level extension point;
-it is not yet an install-and-select speech-provider registry.
+If your speech service uses another protocol, implement the public `Transcriber` interface (`async transcribe(data, *, mime, name) -> str`) and pass it in with `build_app(transcriber=...)`. If you add an `async aclose()`, it is called when services stop. This is a code-level hook. You cannot yet install a speech provider and pick it in the settings.

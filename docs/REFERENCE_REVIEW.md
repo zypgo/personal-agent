@@ -1,82 +1,87 @@
-# Reference review — 2026-11-16
+# Reference review, 2026-11-16
 
-This review informed independently written Personal Agent changes. Branch snapshots, release
-tags and reconstructed code are distinct evidence. No reference implementation was imported.
-Personal Agent's comparison base is `215358b6ce2b6e66315552ecbd156f263234aa8b`.
+Before changing Personal Agent, we read three outside projects. Everything in Personal Agent was written
+independently, and no code from these projects was imported. The comparison base for Personal Agent is
+`215358b6ce2b6e66315552ecbd156f263234aa8b`.
 
-## Pinned references
+A branch snapshot, a release tag and a reconstruction are three different kinds of evidence.
+So the table below says exactly what was read for each project.
 
-| Reference | Release/version evidence | Source inspected |
+## What we looked at
+
+| Reference | Release or version | What we read |
 | --- | --- | --- |
-| OpenClaw | Stable `v2026.11.4`, released 2026-11-16; release commit `d843d6af39a42cd3c30084edbeabeece732fd93a` | Newer `main` snapshot [`6f5d3b399b31855501cc3f38f1221f7165554c59`](https://github.com/openclaw/openclaw/tree/6f5d3b399b31855501cc3f38f1221f7165554c59). Claims below concern this inspected snapshot, not automatically the stable release. |
-| DeepSeek Harness | Latest observed release `dsh-v0.2.2-rc.3`, 2026-11-13, marked prerelease | `master` [`39163dd30f703a79079e2d2446545cff3c453738`](https://github.com/deepseek-ai/deepseek-harness/tree/39163dd30f703a79079e2d2446545cff3c453738). The project explicitly labels itself a developer preview. |
-| Grok Bot reconstruction | Unofficial reconstruction of shipped `0.18.0`; original repository archived 2026-08-28 | [`b-nnett/grok-bot-0.18-reconstructed@a9f633e09d49a85829b8236331b9e21f7e612634`](https://github.com/b-nnett/grok-bot-0.18-reconstructed/tree/a9f633e09d49a85829b8236331b9e21f7e612634), not an official xAI release or complete original source tree. |
+| OpenClaw | Stable `v2026.11.4`, released 2026-11-16; release commit `d843d6af39a42cd3c30084edbeabeece732fd93a` | A newer `main` snapshot, [`6f5d3b399b31855501cc3f38f1221f7165554c59`](https://github.com/openclaw/openclaw/tree/6f5d3b399b31855501cc3f38f1221f7165554c59). The claims below are about this snapshot, not automatically about the stable release. |
+| DeepSeek Harness | Latest release seen: `dsh-v0.2.2-rc.3` (2026-11-13), marked prerelease | `master` at [`39163dd30f703a79079e2d2446545cff3c453738`](https://github.com/deepseek-ai/deepseek-harness/tree/39163dd30f703a79079e2d2446545cff3c453738). The project calls itself a developer preview. |
+| Grok Bot reconstruction | An unofficial reconstruction of the shipped `0.18.0`. The original repository was archived on 2026-08-28. | [`b-nnett/grok-bot-0.18-reconstructed@a9f633e09d49a85829b8236331b9e21f7e612634`](https://github.com/b-nnett/grok-bot-0.18-reconstructed/tree/a9f633e09d49a85829b8236331b9e21f7e612634). It is not an official xAI release, and it is not the complete original source. |
 
 Release sources: [OpenClaw release](https://github.com/openclaw/openclaw/releases/tag/v2026.11.4),
 [DeepSeek release](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3).
 
-## What the comparison actually supports
+## What the comparison tells us
 
-| Area | Reference strengths | Implication for Personal Agent |
+| Area | What the references do well | What it means for Personal Agent |
 | --- | --- | --- |
-| Runtime/provider substitution | OpenClaw registers and selects multiple runtimes. DeepSeek formally registers LLM adapters, the agent factory, persistence and many other services through Cordis. | Explicit provider contracts and capability checks are useful now. Personal Agent's SDK runner and SQLite stores remain deliberately coupled; an endpoint URL is not a replaceable agent runtime. |
-| Long-running work | OpenClaw has session and outbound delivery recovery. DeepSeek has persisted schedules, goal state and session logs. | Reliable persistence is not unique to this project. Keep the small Inbox/Outbox state machine and test its boundary with each channel. |
-| Recovery meaning | DeepSeek's scheduler recovers pending inbox deliveries; restored goals start disarmed and need authorized resumption. Local in-process jobs do not become durable merely because session history exists. | Distinguish replaying history, recovering a pending task, and avoiding duplicate external actions. Do not equate them. |
-| Channels and delegation | OpenClaw has broader channel plugins and subagent lifecycle support. DeepSeek exposes multiple subagent providers, SDK/ACP integration and richer desktop/Web composition. | A declared channel capability contract helps expand gradually. This PR does not introduce a new distributed multi-agent scheduler. |
-| Output and interaction | Grok's reconstructed protocol makes file attachments and other typed outputs explicit. DeepSeek and OpenClaw expose richer runtime/UI state. | Add real artifact delivery and bounded transient streaming while retaining durable final messages as the authoritative history. |
-| Isolation | DeepSeek has OS sandbox implementations in addition to plugin scopes. OpenClaw's larger plugin surface creates more trust and operational boundaries. | Plugin lifecycle, scope and type declarations do not themselves isolate processes or untrusted code. Existing sandbox, approval and egress checks remain necessary. |
-| Adoption cost | The broader frameworks offer more extension points and integrations, with more configuration and recovery paths to understand. DeepSeek warns of breaking changes during preview. | Adopt small interfaces around existing functionality first; a wholesale framework migration needs separate compatibility and recovery tests. |
+| Swapping runtimes and providers | OpenClaw registers several runtimes and picks one. DeepSeek registers LLM adapters, the agent factory, persistence and many other services through Cordis. | Clear provider contracts and capability checks are useful now. We keep the SDK runner and the SQLite stores tightly coupled on purpose. Having an endpoint URL does not make something a replaceable agent runtime. |
+| Long-running work | OpenClaw can recover sessions and outbound deliveries. DeepSeek keeps schedules, goal state and session logs on disk. | Other projects store this reliably too, so it is not something only we do. Keep the small Inbox/Outbox state machine, and test where it meets each channel. |
+| What "recovery" means | DeepSeek's scheduler recovers pending inbox deliveries. Restored goals start disarmed and need an authorized resume. Local in-process jobs do not become durable just because session history exists. | Keep three things apart: replaying history, recovering a pending task, and not repeating an action in the outside world. Do not treat them as the same thing. |
+| Channels and delegation | OpenClaw has more channel plugins and supports subagent lifecycles. DeepSeek offers several subagent providers, SDK/ACP integration and a richer desktop/Web setup. | A declared channel capability contract lets us add channels gradually. This PR does not add a new distributed multi-agent scheduler. |
+| Output and interaction | Grok's reconstructed protocol spells out file attachments and other typed outputs. DeepSeek and OpenClaw expose more runtime and UI state. | Add real artifact delivery and limited, temporary streaming. The saved final messages stay the official history. |
+| Isolation | DeepSeek has OS sandbox implementations on top of plugin scopes. OpenClaw's larger plugin surface means more trust and operating boundaries. | Plugin lifecycle, scope and type declarations do not isolate processes or untrusted code by themselves. The existing sandbox, approval and egress checks are still needed. |
+| Cost of adopting | The bigger frameworks have more extension points and integrations, and more configuration and recovery paths to learn. DeepSeek warns about breaking changes during the preview. | Start with small interfaces around what already exists. Moving to a whole framework would need its own compatibility and recovery tests. |
 
-### OpenClaw code anchors
+### OpenClaw: files worth reading
 
 - [Runtime registry](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/agents/harness/registry.ts) and [runtime selection](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/agents/harness/selection.ts).
 - [Session delivery recovery](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/infra/session-delivery-queue-recovery.ts) and [SQLite outbound queue](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/infra/delivery-queue-sqlite.ts).
 - [Channel catalog registry](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/plugins/channel-catalog-registry.ts).
 
-### DeepSeek code anchors and boundaries
+### DeepSeek: files worth reading, and its limits
 
 - [LLM service](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/llm/llm/src/index.ts), [agent service](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/core/agent/src/index.ts), and [architecture](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/docs/architecture.md).
 - [Persistence](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/session/session-persistence/src/index.ts), [schedule recovery](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/schedule/schedule/src/runtime.ts), and [goal activation](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/goal/goal/src/index.ts).
-- [Experimental webhook documentation](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/docs/subsystems/webhook.md) describes a different delivery boundary from a durable Inbox: do not assume automatic deduplication/replay.
-- Cordis reversible effects dispose registrations/listeners and lifecycle resources. They do not automatically undo an already sent network request or an arbitrary file write. Agent/plugin scopes are not OS sandboxes. See [safety notice](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/SAFETY.md).
+- The [experimental webhook documentation](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/docs/subsystems/webhook.md) describes a different delivery model from a durable Inbox. Do not assume it deduplicates or replays automatically.
+- Cordis's reversible effects clean up registrations, listeners and lifecycle resources. They do not undo a network request that was already sent, or an arbitrary file write. Agent and plugin scopes are not OS sandboxes. See the [safety notice](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/SAFETY.md).
 
-## Grok provenance and version check
+## Where the Grok code comes from, and which version it is
 
 The [README](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/README.md)
-distinguishes reconstructed runtime/control-plane code, a retained shipped renderer, and a
-partial readable frontend. It expressly says the shipped frontend did not include original
-source or source maps. Describing the repository as complete source-map recovery would be wrong.
+separates three parts: reconstructed runtime and control-plane code, a shipped renderer that was kept as it was,
+and a partly readable frontend. It says plainly that the shipped frontend did not include the original source or
+source maps. So it would be wrong to describe the repository as a full source-map recovery.
 
 Its [NOTICE](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/NOTICE.md)
-does not grant an upstream source-code license. Research here uses architectural ideas and
-observable protocol boundaries only; no reconstructed source, renderer assets, installers,
-account cookies or authentication transport are copied or executed.
+does not give a license to the upstream source code. We took only architectural ideas and observable protocol boundaries
+from it. We did not copy or run any reconstructed source, renderer assets, installers, account cookies or authentication transport.
 
-The reconstruction contains file-oriented output contracts and persisted send acceptance:
+The reconstruction defines how files are returned as output, and it stores a record when a send is accepted:
 [send-message schema](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/source/host/runner/tools/send-message-schema.ts),
 [acceptance records](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/source/host/extensions/transcript/send-acceptance.ts).
-The inference router for Cursor/Claude Code/Codex/OpenRouter, routed MCP tools, local usage
-tracking, optional local Docker connector and router-settings UI are identified by the author
-as later experiments. They are not evidence that official Grok Bot 0.18 shipped those features.
+The inference router for Cursor/Claude Code/Codex/OpenRouter, routed MCP tools, local usage tracking, the optional local Docker
+connector and the router-settings UI are described by the author as later experiments. They are not evidence that official
+Grok Bot 0.18 shipped those features.
 
-Checked follow-up repositories:
+We also checked two follow-up repositories:
 
-| Repository | Fixed commit | What was verified |
+| Repository | Fixed commit | What we found |
 | --- | --- | --- |
-| `ElizantOS/ant-bots` | [`1378374adf12e10cb4871c0d2bdac3343049ad6e`](https://github.com/ElizantOS/ant-bots/tree/1378374adf12e10cb4871c0d2bdac3343049ad6e) | Still based on the 0.18 reconstruction; later activity does not establish a new upstream reconstruction. |
-| `smartyua/Grok-Bot-reconstruction-` | [`2beb2f9409ed507385c09753d33977591aa59963`](https://github.com/smartyua/Grok-Bot-reconstruction-/tree/2beb2f9409ed507385c09753d33977591aa59963) | Its 0.43 wording concerns comparison with an installed app; the reconstructed base remains 0.18. |
+| `ElizantOS/ant-bots` | [`1378374adf12e10cb4871c0d2bdac3343049ad6e`](https://github.com/ElizantOS/ant-bots/tree/1378374adf12e10cb4871c0d2bdac3343049ad6e) | Still built on the 0.18 reconstruction. Its later activity does not show a new upstream reconstruction. |
+| `smartyua/Grok-Bot-reconstruction-` | [`2beb2f9409ed507385c09753d33977591aa59963`](https://github.com/smartyua/Grok-Bot-reconstruction-/tree/2beb2f9409ed507385c09753d33977591aa59963) | Its mention of 0.43 is about comparing against an installed app. The reconstructed base is still 0.18. |
 
-No newer reconstruction tied to a verifiable newer shipped version was established in this
-review. That is a bounded search result, not proof that none exists.
+We did not find a newer reconstruction that ties back to a newer shipped version we could verify.
+That is the result of a limited search. It does not prove that none exists.
 
-## Adopted and deferred
+## What we took, and what we left for later
 
-This PR applies the useful boundaries to the existing Python system: explicit provider/channel
-capabilities; independent speech configuration; streamed progress separate from committed
-history; and immutable, authenticated artifact delivery through the existing Outbox. The
-[artifact contract](ARTIFACTS.md) documents its limits, retention and uncertain-delivery behavior.
+This PR takes the useful boundaries and applies them to the existing Python system:
 
-Grok-inspired acceptance obligations, durable background-job state, structured questions and
-priority lanes are possible later work. They are not represented as implemented here. The
-current PR does not replace the SDK agent loop, migrate storage, promise rollback of external
-effects, or add unattended execution privileges.
+- explicit provider and channel capabilities;
+- separate speech settings;
+- streamed progress kept apart from the committed history;
+- file delivery through the existing Outbox, where the file cannot change after it is created and downloading needs authentication.
+
+The [artifact contract](ARTIFACTS.md) describes its limits, how long files are kept, and what happens when delivery is uncertain.
+
+Possible later work: acceptance obligations (an idea from Grok), durable background-job state, structured questions, and priority lanes.
+None of these is implemented here. This PR does not replace the SDK agent loop, migrate storage, promise to roll back effects in
+the outside world, or give the agent any new permission to run unattended.

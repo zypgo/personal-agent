@@ -1,74 +1,79 @@
-# 从手机使用 Personal Agent
+# 在手机上使用 Personal Agent
 
-手机通过网页聊天、发送图片和语音、查看审批及最近任务；0.2.0 增加生成中的正文预览和文件成果下载。电脑运行 agent，手机不需要模型 API key。也可使用 [钉钉私聊](DINGTALK.md)，通过出站 Stream 连接，无需公网回调地址。
+用手机浏览器就能聊天、发图片和语音、看审批和最近的任务。0.2.0 起，回复生成时能先看到正文预览，生成的文件也能下载。agent 跑在电脑上，手机不需要模型 API key。
 
-## 选择连接方式
+你也可以用[钉钉私聊](DINGTALK.md)：由电脑主动连钉钉，不需要公网回调地址。
+
+## 选一种连接方式
 
 | | 局域网 | Tailscale |
 |---|---|---|
-| 适合 | 手机和电脑连接同一个可信 Wi-Fi | 在家、出门或移动网络下使用 |
+| 适合 | 手机和电脑连着同一个可信的 Wi-Fi | 在家、出门、用移动网络都行 |
 | 地址 | `http://192.168.x.x:8765` | `https://电脑名.tailnet.ts.net` |
-| 加密 | HTTP；只用于可信局域网 | Tailscale 隧道 + HTTPS |
-| 手机需要安装 | 无；用 Safari/Chrome | Tailscale；登录有权访问电脑的 tailnet |
-| 语音 | 上传已有录音文件 | 上传录音或直接使用网页麦克风 |
-| 配对 | 电脑生成的一次性链接/二维码 | 同样需要配对，不靠网络身份自动登录 |
+| 加密 | HTTP，只能在可信的局域网里用 | Tailscale 隧道加 HTTPS |
+| 手机上要装什么 | 什么都不用，用 Safari 或 Chrome | 装 Tailscale，并登录有权访问这台电脑的 tailnet |
+| 语音 | 上传已有的录音文件 | 上传录音，或直接用网页麦克风 |
+| 配对 | 电脑生成的一次性链接或二维码 | 同样要配对，不会因为在同一个网络就自动登录 |
 
 ## 方式一：同一个 Wi-Fi
 
-在电脑的项目目录运行：
+在电脑上，进入项目目录运行：
 
 ```bash
 uv run pa web connect --via lan
 ```
 
-只有一个私有 IPv4 地址时自动选择；有多个网卡时会列出候选，指定 Wi-Fi 地址即可：
+如果电脑只有一个私网 IPv4 地址，会自动选它。有多个网卡时，会列出候选地址，你用 `--host` 指定 Wi-Fi 的那个：
 
 ```bash
 uv run pa web connect --via lan --host 192.168.1.23
 ```
 
-命令打开 `[web] enabled`，只监听指定私有地址，保留其余配置和注释，并打印手机配对二维码。默认沿用配置中的端口；可加 `--port 9000`。
+这条命令会：打开 `[web] enabled`；只监听你指定的那个私网地址；保留其余配置和注释；打印手机配对用的二维码。端口默认沿用配置里的，想换就加 `--port 9000`。
 
-随后重启前台 `pa serve`；如果已经安装后台服务，运行：
+然后重启 agent：
+
+- 如果你在前台运行 `pa serve`，重启它；
+- 如果已经装了后台服务，运行：
 
 ```bash
 uv run pa service restart
 ```
 
-首次使用、尚未启动服务时：
+- 如果是第一次用、服务还没启动：
 
 ```bash
 uv run pa serve
 ```
 
-手机扫描二维码，或打开打印的完整链接。配对默认十分钟有效、只能使用一次；过期后重新运行 `uv run pa web pair --label phone`。
+用手机扫二维码，或者打开打印出来的完整链接。配对链接默认 10 分钟有效，只能用一次；过期了就重新运行 `uv run pa web pair --label phone`。
 
-局域网 HTTP 无法启用浏览器麦克风和部分 PWA 能力。文字、图片、录音文件上传、审批和任务状态仍可使用。希望直接录音或加密访问时，选择 Tailscale。
+局域网用的是 HTTP，浏览器的麦克风和部分 PWA 功能用不了。文字、图片、上传录音文件、审批、看任务状态都不受影响。想直接录音，或者想加密访问，请选 Tailscale。
 
 ## 方式二：Tailscale HTTPS
 
-1. 在电脑和手机安装并登录 Tailscale，确认两台设备的访问策略允许连接。
-2. 在电脑运行：
+1. 在电脑和手机上都安装并登录 Tailscale，确认两台设备的访问策略允许互相连接。
+2. 在电脑上运行：
 
 ```bash
 uv run pa web connect --via tailscale
 ```
 
-命令检测 Tailscale 登录状态和 HTTPS 名称，验证已有 Serve 配置，再设置指向本机 agent 的私有 HTTPS 代理；之后将 HTTPS 地址写入配置，打印一次性二维码。macOS App 安装方式和 PATH 中的 `tailscale` CLI 均支持。
+这条命令会依次：检查 Tailscale 的登录状态和 HTTPS 名称；核对已有的 Serve 配置；设置一个指向本机 agent 的私有 HTTPS 代理；把 HTTPS 地址写进配置；打印一次性二维码。macOS 的 Tailscale App 和 PATH 里的 `tailscale` 命令行，两种装法都支持。
 
-如果 tailnet 尚未开启 MagicDNS/HTTPS/Serve，按照 Tailscale 的提示先完成开启，再重试。命令不会使用 Funnel，不会覆盖已占用同一 HTTPS 地址的其他服务。如果 443 已经被使用，可选择其他端口：
+如果你的 tailnet 还没开 MagicDNS / HTTPS / Serve，先照 Tailscale 的提示开好，再重试。这条命令不会用 Funnel，也不会覆盖已经占着同一个 HTTPS 地址的其他服务。如果 443 端口已被占用，换一个端口：
 
 ```bash
 uv run pa web connect --via tailscale --https-port 8443
 ```
 
-重启 agent 后，手机保持 Tailscale 已连接，扫描二维码。网页麦克风仍需要浏览器授权。
+重启 agent 之后，手机保持 Tailscale 在连接状态，扫二维码就行。网页麦克风还需要浏览器授权。
 
-Safari 可通过“分享 → 添加到主屏幕”使用；主屏幕 App 可能使用独立的 cookie，需要在新窗口里重新配对。Android Chrome 可通过浏览器的安装/添加到主屏幕入口使用。
+Safari 里用“分享 → 添加到主屏幕”。主屏幕 App 的 cookie 可能和 Safari 是分开的，要在新窗口里重新配对一次。Android Chrome 用浏览器自带的安装或添加到主屏幕入口。
 
-设置命令操作的是 [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)，仅在 tailnet 策略允许的设备间提供服务；应用自己的配对、HttpOnly cookie、Host/Origin 检查仍然生效。
+上面的命令设置的是 [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)，只在 tailnet 策略允许的设备之间提供服务。应用自己的配对、HttpOnly cookie、Host/Origin 检查照样生效。
 
-## 排查连接
+## 连不上怎么办
 
 ```bash
 uv run pa web check
@@ -76,35 +81,35 @@ uv run pa web
 uv run pa doctor
 ```
 
-`check` 分别检查本地监听和配置的手机地址，不修改设置。电脑检查通过不等于手机网络一定通畅：
+`check` 会分别检查本机监听和配置里的手机地址，不会改任何设置。电脑上检查通过，不代表手机那边的网络一定通。
 
-- **局域网打不开**：确认两台设备同一网络；客用 Wi-Fi 常隔离客户端；检查电脑防火墙是否允许该端口；更换 Wi-Fi/IP 后重新运行 `connect --via lan --host ...`。
-- **Tailscale 打不开**：检查两端连接状态、tailnet 访问规则、MagicDNS/HTTPS，以及 `tailscale serve status`。不要用 Funnel 暴露聊天页面。
-- **配置已保存但仍打不开**：重新启动 agent；运行中的进程不会自动重载监听地址。
-- **提示配对失效**：在电脑重新生成链接。不要在消息或公开截图里分享配对二维码。
-- **关盖后无法连接**：服务仍运行在电脑上，睡眠或关机期间不能响应；需要保持电脑唤醒，或部署到常开的设备。
+- **局域网打不开**：确认两台设备在同一个网络；访客 Wi-Fi 常会把设备互相隔离；检查电脑的防火墙有没有放行这个端口；换了 Wi-Fi 或 IP 之后，重新运行 `connect --via lan --host ...`。
+- **Tailscale 打不开**：检查两端的连接状态、tailnet 的访问规则、MagicDNS / HTTPS，以及 `tailscale serve status`。不要用 Funnel 暴露聊天页面。
+- **配置保存了，还是打不开**：重启 agent。正在运行的进程不会自己重新加载监听地址。
+- **提示配对失效**：在电脑上重新生成链接。不要把配对二维码发到消息里，也不要放进公开的截图。
+- **合上电脑盖子后连不上**：服务跑在电脑上，电脑睡眠或关机时它没法响应。要保持电脑唤醒，或者把它部署到一台一直开着的设备上。
 
-## 查看任务与管理设备
+## 看任务，管设备
 
-网页“设置 → Recent tasks”显示排队、执行、等待审批、预算暂停、下次重试和最终停止。点 Refresh status 从持久化状态重新读取；失败任务不会仅显示成仍在工作。
+网页里的“设置 → Recent tasks”会显示：排队中、执行中、等待审批、因预算暂停、下次重试时间、最终停止。点 Refresh status 会从保存的状态重新读一遍；失败的任务不会被显示成“还在干活”。
 
-语音消息先持久化接收记录，再调用转录服务。相同消息 ID 的重投使用已经完成的转录；并发重投不会启动第二次调用。如果转录在确认结果前被中断，会明确提示重新发送新消息，不自动重复付费。外部服务在断线前是否已经计费无法从本地可靠判断。
+语音消息的处理顺序：先把收到的记录存下来，再调用转写服务。同一条消息 ID 被重复投递时，直接用已经完成的转写结果；同时重复投递，也不会发起第二次调用。如果转写在拿到结果之前被打断，会明确提示你重新发一条新消息，不会自动再调一次（再调一次是要花钱的）。外部服务在断线前有没有已经计费，本地没法可靠判断。
 
 ```bash
-uv run pa web sessions          # 查看已配对浏览器
-uv run pa web revoke 3          # 撤销指定浏览器
+uv run pa web sessions          # 查看已配对的浏览器
+uv run pa web revoke 3          # 撤销指定的浏览器
 uv run pa web revoke --all      # 全部退出
-uv run pa web unpair            # 撤销尚未使用的链接
+uv run pa web unpair            # 撤销还没用过的配对链接
 ```
 
-需要关闭本命令配置的 Tailscale 443 入口时，运行 `tailscale serve --bg --https=443 off`；使用其他端口时替换端口。浏览器会话的撤销独立于网络入口。
+想关掉这条命令配置的 Tailscale 443 入口，运行 `tailscale serve --bg --https=443 off`；用了其他端口就替换成那个端口。撤销浏览器会话和关掉网络入口是两件互不相干的事。
 
-手机页面保留 SSE 重连机制；关闭网页后不提供系统级 Web Push。需要后台主动提醒时，可启用 Telegram 或钉钉渠道。
+手机页面断线后会自动用 SSE 重连。关掉网页之后，不会有系统级的 Web Push。想在后台收到主动提醒，请启用 Telegram 或钉钉渠道。
 
-## 流式回复与下载
+## 流式回复和下载
 
-默认 `[web] stream_responses = true`：仅来自 Web 的可信交互请求显示生成中的正文。推理、工具参数和后台任务正文不会进入预览。预览是内存快照，最终回复通过发件箱写入对话历史；手机断线不取消任务，重连后重新读取当前预览与已提交历史。预览最多显示 32,000 个字符，完成后显示完整答复。
+默认 `[web] stream_responses = true`：只有来自网页的、可信的交互请求，才会在生成过程中显示正文。推理过程、工具参数、后台任务的正文，都不会出现在预览里。预览是内存里的快照；最终的回复通过发件箱写进对话历史。手机断线不会取消任务，重连后会重新读取当前的预览和已经提交的历史。预览最多显示 32,000 个字符，完成后显示完整的回复。
 
-兼容端点不支持流式时，在 `[web]` 设置 `stream_responses = false` 并重启。系统不会在一次流式请求失败后自动切成非流式重做；任务仍沿用既有的明确失败、重试和审批恢复规则。
+如果你用的兼容端点不支持流式，在 `[web]` 里设置 `stream_responses = false`，再重启。一次流式请求失败后，系统不会自动改成非流式重来；任务仍按原有的规则处理：明确报失败、重试、审批后恢复。
 
-让 agent 用 `publish_artifact` 发布工作区里的文件后，历史中会出现下载卡片。下载沿用当前配对 cookie，支持局域网和 Tailscale；复制文件 ID 不会给予别人访问权限。有效期、额度、Telegram 上传和备份要求见 [ARTIFACTS.md](ARTIFACTS.md)。已过期文件需要重新生成；撤销网页会话后必须重新配对。
+让 agent 用 `publish_artifact` 发布工作区里的文件后，历史里会出现一张下载卡片。下载用的是当前配对的 cookie，局域网和 Tailscale 都能用。把文件 ID 复制给别人，并不会让别人获得访问权限。有效期、额度、Telegram 上传和备份要求，见 [ARTIFACTS.md](ARTIFACTS.md)。过期的文件要重新生成；撤销了网页会话之后，必须重新配对。

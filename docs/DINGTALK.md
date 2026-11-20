@@ -1,60 +1,60 @@
 # 钉钉私聊机器人
 
-钉钉渠道让手机通过企业内部应用机器人与 Personal Agent 私聊。电脑主动连接钉钉 Stream，接收消息后走现有的 Ingress、SQLite Inbox、Worker 和 Outbox；回复、审批提示和主动通知统一走钉钉 OpenAPI。
+用钉钉渠道，你可以在手机上通过企业内部应用机器人，和 Personal Agent 私聊。电脑主动连上钉钉的 Stream 服务；收到的消息走现有的流程（入口 → SQLite 收件箱 → worker → 发件箱）；回复、审批提示和主动通知，都通过钉钉 OpenAPI 发出去。
 
-**不需要公网 IP、域名、入站端口或内网穿透。** 手机和电脑都需要访问钉钉云，电脑上的 `pa serve` 必须持续运行。想完全通过自己的局域网或 Tailscale 访问，请使用[网页手机连接](MOBILE.md)。钉钉文字经过钉钉云；模型请求由项目的模型配置决定。
+**不需要公网 IP、域名、入站端口，也不需要内网穿透。** 手机和电脑都要能访问钉钉云，电脑上的 `pa serve` 要一直开着。如果你想完全走自己的局域网或 Tailscale，请用[网页手机连接](MOBILE.md)。钉钉上的文字会经过钉钉云；模型请求发到哪里，由项目的模型配置决定。
 
-## 支持范围
+## 支持什么
 
-| 能力 | 当前实现 |
+| 功能 | 现状 |
 | --- | --- |
-| 单聊文字 | 支持；仅本机批准的账号能进入 Agent |
-| Markdown 回复 | 支持；长消息按 UTF-8 字节分段 |
-| 主动通知 | 支持；无需等待用户新发消息，也不依赖会话 Webhook 的有效期 |
-| 审批 | `/approvals`、`/approve ID`、`/deny ID`；提示包含可复制的命令 |
-| 状态查询 | `/status`；命令在本机执行，不调用模型 |
-| 自动重连 | 支持；每次获取新 ticket，带退避和抖动 |
-| 消息去重 | 业务 `msgId` 经应用与组织作用域后写入本地持久状态 |
-| 图片、语音、文档发送 | 尚未支持；收到非文字会回复提示 |
-| 群聊、互动卡片、审批按钮、逐字流式回复 | 尚未支持 |
+| 单聊文字 | 支持。只有在本机批准过的账号，才能和 Agent 说话 |
+| Markdown 回复 | 支持。长消息按 UTF-8 字节分段 |
+| 主动通知 | 支持。不用等你先发消息，也不依赖会话 Webhook 的有效期 |
+| 审批 | `/approvals`、`/approve ID`、`/deny ID`；提示里带着可以直接复制的命令 |
+| 查状态 | `/status`。命令在本机执行，不调用模型 |
+| 自动重连 | 支持。每次重新取 ticket，带退避和随机抖动 |
+| 消息去重 | 业务 `msgId` 加上应用和组织的范围后，写进本地持久状态 |
+| 发图片、语音、文档 | 暂不支持。收到非文字消息，会回一条提示 |
+| 群聊、互动卡片、审批按钮、逐字流式回复 | 暂不支持 |
 
-这是**企业内部应用机器人**接入，不是群自定义 Webhook 机器人。当前只实现单个应用、单个凭据配置；本机可以批准多个账号，获批账号均具有 owner 身份。
+这里接的是**企业内部应用机器人**，不是群里的自定义 Webhook 机器人。现在只支持一个应用、一套凭据；本机可以批准多个账号，批准后的账号都是 owner 身份。
 
 ## 1. 创建并发布应用机器人
 
-在[钉钉开放平台](https://open.dingtalk.com/)创建企业内部应用，启用应用机器人。按平台页面完成以下设置：
+在[钉钉开放平台](https://open.dingtalk.com/)创建企业内部应用，启用应用机器人。按平台页面的提示，完成这几项设置：
 
-1. 将接收模式设置为 **Stream**，开启机器人单聊能力。
-2. 保存应用的 **Client ID / AppKey**、**Client Secret / AppSecret** 和 **RobotCode**。有些应用的 RobotCode 与 Client ID 相同；不同则显式配置。
-3. 为应用申请并授权机器人向企业成员发送单聊消息的权限，平台通常显示为“企业内机器人发送消息”。本实现使用 `robot/oToMessages/batchSend`，只开接收能力不够。
-4. 将自己加入应用可见范围，发布应用或使用允许当前账号访问的测试版本。权限与可见范围由所在组织的管理员管理。
+1. 把接收模式设成 **Stream**，打开机器人的单聊能力。
+2. 记下应用的 **Client ID / AppKey**、**Client Secret / AppSecret** 和 **RobotCode**。有的应用 RobotCode 和 Client ID 一样；不一样的话，要单独配置。
+3. 给应用申请并授权“机器人向企业成员发送单聊消息”的权限，平台上通常叫“企业内机器人发送消息”。这里用的是 `robot/oToMessages/batchSend`，只开接收能力是不够的。
+4. 把你自己加进应用的可见范围，再发布应用，或者使用允许你当前账号访问的测试版本。权限和可见范围由你所在组织的管理员管理。
 
-相关说明：[应用机器人概述](https://open-dingtalk.github.io/developerpedia/docs/learn/bot/appbot/overview/)、[机器人类型](https://open-dingtalk.github.io/developerpedia/docs/learn/bot/overview/)、[单聊发送 API](https://open.dingtalk.com/document/orgapp/chatbots-send-one-on-one-chat-messages-in-batches)。后台界面的具体名称可能调整，以当前页面为准。
+参考：[应用机器人概述](https://open-dingtalk.github.io/developerpedia/docs/learn/bot/appbot/overview/)、[机器人类型](https://open-dingtalk.github.io/developerpedia/docs/learn/bot/overview/)、[单聊发送 API](https://open.dingtalk.com/document/orgapp/chatbots-send-one-on-one-chat-messages-in-batches)。后台界面上的具体名称可能会变，以当前页面为准。
 
 ## 2. 配置本机
 
-初次使用先执行 `uv run pa init`。默认配置目录是 `~/.personal-agent`；使用了 `PA_HOME` 时，以下文件位于对应目录。
+第一次用，先执行 `uv run pa init`。默认的配置目录是 `~/.personal-agent`；如果设了 `PA_HOME`，下面说的文件就在那个目录里。
 
-在这个目录的 `.env` 中填入自己的凭据：
+在这个目录的 `.env` 里填你自己的凭据：
 
 ```dotenv
 DINGTALK_CLIENT_ID=你的应用ClientID
 DINGTALK_CLIENT_SECRET=你的应用ClientSecret
 ```
 
-在 `config.toml` 中添加：
+在 `config.toml` 里加上：
 
 ```toml
 [dingtalk]
 enabled = true
-# 以下均为可选项：
+# 以下都是可选项：
 # client_id_env = "DINGTALK_CLIENT_ID"
 # client_secret_env = "DINGTALK_CLIENT_SECRET"
-# robot_code = "应用的RobotCode"  # 默认使用 Client ID；不同则必须填写
-# corp_id = "ding组织ID"         # 建议填写，进一步固定允许的组织
+# robot_code = "应用的RobotCode"  # 默认用 Client ID；不一样就必须填
+# corp_id = "ding组织ID"         # 建议填，进一步限定允许的组织
 ```
 
-`client_id_env`、`client_secret_env` 只能填大写环境变量名，最长 64 字符，不能填凭据本身。凭据放在本机 `.env` 或进程环境中，不要提交到仓库。更新配置后重启常驻进程。
+`client_id_env` 和 `client_secret_env` 只能填大写的环境变量名，最长 64 个字符，不能直接填凭据。凭据放在本机的 `.env` 或进程环境里，不要提交到仓库。改完配置，要重启常驻进程。
 
 ```bash
 uv run pa doctor
@@ -62,17 +62,17 @@ uv run pa channels
 uv run pa channels capabilities
 uv run pa channels test dingtalk
 uv run pa serve
-# 已安装后台服务时，修改配置后使用：
+# 已经装了后台服务的话，改完配置用：
 # uv run pa service restart
 ```
 
-`pa channels` 和 `pa doctor` 展示启用、凭据存在、配对等本地检查结果；**配置完整不等于 Stream 已连接，也不等于发送权限已通过**。运行中的渠道在成功握手后记录 `DingTalk Stream connected`，断开后记录重连；`health()` 提供该实例实际观察到的状态和时间，不保存凭据或消息内容。
+`pa channels` 和 `pa doctor` 显示的是本地检查：有没有启用、凭据在不在、有没有配对。**配置完整，不等于 Stream 已经连上，也不等于发送权限已经通过。** 运行中的渠道握手成功后，会记一条 `DingTalk Stream connected`，断开后会记重连；`health()` 能给出这个实例实际观察到的状态和时间，不保存凭据或消息内容。
 
-`pa channels capabilities` 不连接外部服务，展示各渠道实际声明的功能。`pa channels test dingtalk` 只请求一次 Stream ticket 来验证网关鉴权，不打印 ticket、不建立常驻连接、不发送聊天消息；成功后仍需完成配对和真实回复验证发送权限。
+`pa channels capabilities` 不连外部服务，只显示各个渠道实际声明了哪些功能。`pa channels test dingtalk` 只请求一次 Stream ticket，用来验证网关鉴权：不打印 ticket，不建立常驻连接，不发聊天消息。它通过之后，还要完成配对、实际收到一次回复，才能确认发送权限没问题。
 
 ## 3. 从手机配对
 
-在钉钉中打开这个应用机器人，发送任意一句话。机器人会回复短期配对码和本机批准命令：
+在钉钉里打开这个应用机器人，随便发一句话。机器人会回一个短期有效的配对码，以及要在本机运行的批准命令：
 
 ```bash
 uv run pa channels pending
@@ -80,21 +80,21 @@ uv run pa channels approve dingtalk ABCD-EFGH
 uv run pa channels senders
 ```
 
-只批准自己手机上看到的配对码。代码默认一小时过期；过期后重新给机器人发消息即可。批准之前的内容只用于请求配对，不会排入模型队列；批准后请再发一次实际任务。
+只批准你自己手机上看到的配对码。配对码默认一小时过期；过期了，再给机器人发一条消息就行。批准之前发的内容，只用来申请配对，不会进模型队列；批准之后，请再发一次真正的任务。
 
-身份以 `Client ID + Corp ID + Staff ID` 三项绑定。换应用需要重新配对；相同 Staff ID 在另一组织也不会继承权限。收消息时还要求私聊、发送者组织与机器人组织相同、RobotCode 匹配；配置了 `corp_id` 时必须一致。
+身份由 `Client ID + Corp ID + Staff ID` 三项一起绑定。换了应用，要重新配对；同一个 Staff ID 出现在另一个组织，也不会继承权限。收消息时还要求：是私聊、发送者所在的组织和机器人所在的组织相同、RobotCode 匹配；配置了 `corp_id` 的话，必须一致。
 
-撤销账号时，从 `pa channels senders` 复制完整 ID，并用单引号包住它：
+撤销账号时，从 `pa channels senders` 复制完整的 ID，用单引号括起来：
 
 ```bash
 uv run pa channels revoke dingtalk '["你的ClientID","你的CorpID","你的StaffID"]'
 ```
 
-每次发送前和长消息分段之间都会重新检查批准状态。撤销后不会再向该账号交付已排队的普通回复。
+每次发送前、长消息每一段之间，都会重新检查这个账号还在不在批准名单里。撤销之后，已经排队的普通回复也不会再发给这个账号。
 
-## 4. 聊天、审批与主动通知
+## 4. 聊天、审批和主动通知
 
-配对后可以直接发送任务。以下命令无需模型参与：
+配对之后可以直接发任务。下面这些命令不经过模型：
 
 ```text
 /status
@@ -103,15 +103,15 @@ uv run pa channels revoke dingtalk '["你的ClientID","你的CorpID","你的Staf
 /deny 12
 ```
 
-审批通知会附上具体 ID 的命令；本版本没有钉钉卡片按钮。命令的审批结果、去重标记和回复在同一个本地事务中提交，重复回调不会重复执行命令。
+审批通知里会附上带具体 ID 的命令；这个版本没有钉钉卡片按钮。命令的审批结果、去重标记和回复，在同一个本地事务里提交，所以重复的回调不会让命令执行两次。
 
-当前对话的回复返回原账号；没有显式收件人的钉钉主动通知，发送给最近使用该渠道的已配对账号。提醒和定时任务沿用现有调度、Outbox、安静时段与通知限制，不需要额外 Webhook URL。可以在钉钉中要求创建一条短期提醒，确认任务后用实际收到的通知验证整条链路。
+当前对话的回复，发回原来的账号。没有指定收件人的钉钉主动通知，发给最近用过这个渠道的、已配对的账号。提醒和定时任务沿用现有的调度、发件箱、安静时段和通知限制，不需要额外的 Webhook URL。你可以在钉钉里让它建一条短期提醒，确认任务后，看实际收到的通知，就能验证整条链路。
 
-本渠道统一使用应用 access token 发消息，不读取、保存或调用回调中的 `sessionWebhook`。短期 ticket 和 access token 只驻留在内存中；关闭渠道会关闭自建 HTTP 客户端，断线时重新获取 ticket。接收 WebSocket 只接受网关签发的钉钉 TLS 地址，并拒绝连接重定向。
+这个渠道统一用应用的 access token 发消息，不读取、不保存、也不调用回调里的 `sessionWebhook`。短期 ticket 和 access token 只放在内存里；关闭渠道时会关掉自己建的 HTTP 客户端，断线后重新获取 ticket。接收用的 WebSocket 只接受网关发的钉钉 TLS 地址，并拒绝连接重定向。
 
-## 5. 可靠性与状态的含义
+## 5. 可靠性，以及各种状态是什么意思
 
-接收路径是：
+消息的接收路径如下：
 
 ```mermaid
 flowchart TD
@@ -126,56 +126,56 @@ flowchart TD
     T --> K[提交后返回 ACK]
 ```
 
-业务消息使用回调正文的 `msgId` 去重；协议头的 `messageId` 用来回复当前推送的 ACK，二者不能混用。SQLite 提交成功后才返回成功 ACK，写入失败返回失败状态。
+业务消息用回调正文里的 `msgId` 去重；协议头里的 `messageId` 用来回复当前这次推送的 ACK，两者不能混用。SQLite 提交成功之后，才返回成功的 ACK；写入失败，就返回失败状态。
 
-**这不意味着上游保证重放。** 钉钉官方协议说明，机器人消息当前采用 fire-and-forget；与事件订阅不同，机器人回调不会因为超时而重推。本地去重保护已经收到的重复消息，持久队列保护已经提交的工作；电脑离线或消息在提交前丢失时，应重新发送任务。不要为同一个应用启动多个互不共享状态的机器人实例：平台可能将消息分配给不同连接。
+**这不代表钉钉保证重放。** 钉钉官方协议说明，机器人消息目前是 fire-and-forget（发了就不管）：和事件订阅不同，机器人的回调不会因为超时而重推。本地去重，保护的是已经收到的重复消息；持久队列，保护的是已经提交的工作。电脑离线、或者消息在提交前丢了，就要重新发一遍任务。不要给同一个应用启动多个互不共享状态的机器人实例：平台可能把消息分给不同的连接。
 
-发送结果按以下规则交给项目 Dispatcher：
+发送结果按下面的规则交给项目的 Dispatcher：
 
-| 结果 | 处理 |
+| 结果 | 怎么处理 |
 | --- | --- |
-| `processQueryKey` 存在，目标用户不在失败列表 | 记为平台已接受；不代表用户已读，也不是最终送达回执 |
-| 目标在 `invalidStaffIdList` / `filteredStaffIdList` | 明确拒绝；停止自动重试 |
-| HTTP 429 或目标在 `flowControlledStaffIdList` | 明确未接受；按退避时间重试 |
-| 发送时 token 被明确拒绝 | 清除旧缓存、取新 token，只重试一次 |
-| 建连失败，消息尚未发出 | 明确未交付；允许重试 |
-| 发送后超时、写入中断、HTTP 5xx/408、异常成功或重定向响应、无法解释的回执 | 结果未知；渠道本身不盲目重发 |
-| 长消息已有部分被接受，后续片段失败 | 结果未知，不能当成整条都没发出 |
+| 有 `processQueryKey`，目标用户不在失败列表里 | 记为平台已接受。这不代表用户已读，也不是最终的送达回执 |
+| 目标在 `invalidStaffIdList` / `filteredStaffIdList` 里 | 明确被拒绝，不再自动重试 |
+| HTTP 429，或目标在 `flowControlledStaffIdList` 里 | 明确没被接受，按退避时间重试 |
+| 发送时 token 被明确拒绝 | 清掉旧缓存、取新 token，只重试一次 |
+| 建连失败，消息还没发出去 | 明确没送到，允许重试 |
+| 发送后超时、写入中断、HTTP 5xx/408、异常的成功响应或重定向响应、读不懂的回执 | 结果未知，渠道本身不会盲目重发 |
+| 长消息已有部分被接受，后面的片段失败 | 结果未知，不能当成整条都没发出去 |
 
-Dispatcher 对普通后台通知会将未知结果停在 `maybe_sent`；对交互回复、审批请求或紧急消息，沿用“宁可重复也要尽量送达”的现有策略，仍可能重试。因此长消息在故障时可能出现部分内容重复；本版本不承诺 exactly-once 交付。平台接受回执与通知限制、收件人的客户端状态是不同层次。
+Dispatcher 对普通的后台通知，会把结果未知的停在 `maybe_sent` 状态；对交互回复、审批请求和紧急消息，沿用现有的“宁可重复，也要尽量送到”的策略，仍可能重试。所以长消息在出故障时，可能出现部分内容重复；这个版本不承诺 exactly-once（恰好一次）投递。平台接受回执、通知限制、收件人客户端上的状态，是不同层面的事情。
 
 ## 6. 排障
 
-| 现象 | 检查 |
+| 现象 | 检查什么 |
 | --- | --- |
-| 提示缺少凭据 | 检查当前 `PA_HOME` 的 `.env`、环境变量名和实际运行进程的环境；然后重启 |
-| 可以看到机器人，消息无反应 | 检查 Stream 模式、应用发布/可见范围、RobotCode、组织限制；确认 `pa serve` 正在运行 |
-| 本机已有待配对请求，手机没收到代码 | 接收已经到达；检查单聊发送权限、用户可见范围和 API 限流。修复后再发一句话重试 |
-| 配对后仍请求新配对 | 检查是否换了 Client ID、组织或账号；从本机重新批准正确手机上的代码 |
-| 一直重连或无法连接 | 允许电脑向 `api.dingtalk.com` 和网关返回的钉钉 WebSocket 域名发起 HTTPS/WSS；检查 DNS、代理及防火墙出站规则 |
-| 文字正常，图片/语音没有被处理 | 当前渠道只接收文字；使用网页渠道上传图片和录音 |
-| 回复被平台接受但手机没看到 | 检查应用可见范围、接收账号、钉钉通知设置；平台接受不等于已读 |
-| 电脑重启后漏了离线期间的消息 | Stream 机器人回调没有离线补拉承诺；重新发送实际任务 |
+| 提示缺少凭据 | 检查当前 `PA_HOME` 的 `.env`、环境变量名，以及实际运行的进程里的环境；然后重启 |
+| 能看到机器人，但发消息没反应 | 检查 Stream 模式、应用有没有发布、可见范围、RobotCode、组织限制；确认 `pa serve` 正在运行 |
+| 本机有待配对的请求，手机却没收到配对码 | 说明消息已经收到了。检查单聊发送权限、用户的可见范围和 API 限流。修好后，再发一句话重试 |
+| 配对后又要求重新配对 | 检查是不是换了 Client ID、组织或账号；在本机重新批准正确那部手机上的配对码 |
+| 一直重连，或者连不上 | 允许电脑向 `api.dingtalk.com` 和网关返回的钉钉 WebSocket 域名发起 HTTPS/WSS；检查 DNS、代理和防火墙的出站规则 |
+| 文字正常，图片、语音没有被处理 | 这个渠道目前只收文字；图片和录音请用网页渠道上传 |
+| 平台已接受回复，手机上却没看到 | 检查应用的可见范围、接收账号、钉钉的通知设置。平台接受，不等于已读 |
+| 电脑重启后，漏了离线期间的消息 | Stream 机器人回调没有离线补拉的保证；请重新发送真正的任务 |
 
-不要通过记录整个回调来排障：回调可能包含临时 Webhook bearer URL。适配器日志只记录连接状态和经过约束的错误类别，不启用会打印 ticket URL、帧内容的 WebSocket 调试日志。
+不要靠记录整个回调来排障：回调里可能带着临时的 Webhook bearer URL。适配器日志只记连接状态和经过限制的错误类别，不会打开会打印 ticket URL、帧内容的 WebSocket 调试日志。
 
-## 实现与验证
+## 代码和测试
 
-| 文件 | 责任 |
+| 文件 | 负责什么 |
 | --- | --- |
-| `channels/dingtalk/config.py` | 独立配置模型及环境变量名校验 |
-| `channels/dingtalk/api.py` | 固定 OpenAPI 地址、token 缓存、鉴权重试、单收件人的批量结果解析 |
-| `channels/dingtalk/channel.py` | Stream 生命周期、系统 ping/disconnect、身份与配对、持久消息接收、Outbox 发送 |
-| `channels/base.py` | 可选能力声明；DingTalk 声明 text、markdown、proactive |
-| `channels/registry.py` | 开启配置后把渠道注册为收消息服务与发消息适配器 |
+| `channels/dingtalk/config.py` | 独立的配置模型，以及环境变量名的校验 |
+| `channels/dingtalk/api.py` | 固定的 OpenAPI 地址、token 缓存、鉴权重试、单个收件人的批量结果解析 |
+| `channels/dingtalk/channel.py` | Stream 的生命周期、系统 ping/disconnect、身份与配对、持久的消息接收、从发件箱发送 |
+| `channels/base.py` | 可选的能力声明；钉钉声明了 text、markdown、proactive |
+| `channels/registry.py` | 配置开启后，把渠道注册为收消息服务和发消息适配器 |
 
-使用 `httpx` 和 `websockets` 的原生异步薄适配器，不依赖同步网络调用，也不引入第三方常驻进程。协议和字段来自钉钉官方文档与官方生成 SDK。
+它是用 `httpx` 和 `websockets` 写的原生异步薄适配器，不依赖同步的网络调用，也不引入第三方的常驻进程。协议和字段来自钉钉官方文档和官方生成的 SDK。
 
 ```bash
 uv run pytest -q tests/test_dingtalk_api.py tests/test_dingtalk_channel.py tests/test_dingtalk_stream.py tests/test_dingtalk_cli.py
 ```
 
-测试使用 HTTP MockTransport、真实本机 WebSocket 服务器和临时 SQLite：覆盖 token 轮换、部分失败、未知发送结果、跨应用/跨组织隔离、配对、重开数据库去重、审批事务回滚、提交后 ACK、重连和取消清理。测试不访问钉钉云，不发送真实消息；实际组织授权、应用发布和手机接收仍需按上述步骤验证。
+测试用的是 HTTP MockTransport、一个真实的本机 WebSocket 服务器和临时的 SQLite，覆盖：token 轮换、部分失败、发送结果未知、跨应用和跨组织的隔离、配对、重开数据库后的去重、审批事务回滚、提交后才 ACK、重连，以及取消后的清理。测试不访问钉钉云，也不发真实的消息；实际的组织授权、应用发布和手机接收，仍然要按上面的步骤自己验证。
 
 官方资料：
 

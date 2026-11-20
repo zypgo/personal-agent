@@ -1,33 +1,33 @@
 # Muse 原生 Vault 与定时接单
 
-这个示例只负责 HTTP 传输和持久接单记录。任务由现有 Muse 会话执行，不启动新模型，不创建沙箱，也不复制任务协议。领取、租约、进展序号、文件校验和待重试请求均复用 `personal_agent.agent_adapters.bridge.WorkerBridge`。
+这个示例只管两件事：HTTP 传输，和持久的接单记录。任务由现有的 Muse 会话去执行：不启动新模型，不创建沙箱，也不另造一套任务协议。领取、租约、进展序号、文件校验和待重试的请求，都直接用 `personal_agent.agent_adapters.bridge.WorkerBridge`。
 
-需要 Python 3.11+、Linux/macOS、Muse 官方 custom connector helper，以及 Git 目录之外的持久私密目录。MCP 可选；这个适配器直接使用已有 worker HTTP 接口。
+需要：Python 3.11 以上、Linux 或 macOS、Muse 官方的 custom connector helper，以及一个放在 Git 目录之外的持久私密目录。MCP 是可选的；这个适配器直接用已有的 worker HTTP 接口。
 
 ## 安装与授权
 
-1. 在 Personal Agent 控制台注册独立的 Muse Agent，记录控制端 HTTPS origin、Agent ID 和空间 ID。
-2. 通过 Muse 官方 Secure Vault 表单保存该 Agent 的 worker token。凭据名使用 `custom.<provider>`，令牌字段为 `access_token`，Bearer 注入只允许自己的**精确控制端主机**。不要将令牌写入提示、脚本、命令参数或 Git。
-3. 安装本示例及原版 bridge。选择下面一种来源：
-   - 安装同一版本的 Personal Agent；适配器直接导入该安装中的 bridge。
-   - 使用 `pa agents export-bridge --output pa-agent-bridge.py` 导出，或从自己的 `/api/v4/bridge.py` 下载。审阅来源并独立记录 SHA-256；启动时同时指定 `--bridge` 和 `--bridge-sha256`。程序只执行通过该哈希校验的字节，不自动下载或更新代码。
-4. 在创建测试任务前运行 `probe`，完成 Muse 对连接器和具体请求的权限确认。
+1. 在 Personal Agent 控制台注册一个独立的 Muse Agent，记下服务端的 HTTPS origin、Agent ID 和空间 ID。
+2. 通过 Muse 官方的 Secure Vault 表单，保存这个 Agent 的 worker token。凭据名用 `custom.<provider>`，令牌字段是 `access_token`，Bearer 注入只允许发往你自己的**精确服务端主机**。不要把令牌写进提示、脚本、命令行参数或 Git。
+3. 安装这个示例和原版 bridge。下面两种来源任选一种：
+   - 安装同一版本的 Personal Agent；适配器直接导入这份安装里的 bridge。
+   - 用 `pa agents export-bridge --output pa-agent-bridge.py` 导出，或者从你自己的 `/api/v4/bridge.py` 下载。审阅来源，并单独记下 SHA-256；启动时同时指定 `--bridge` 和 `--bridge-sha256`。程序只执行通过这个哈希校验的字节，不会自动下载或更新代码。
+4. 创建测试任务之前，先运行 `probe`，在 Muse 里完成对这个连接器和具体请求的权限确认。
 
-Muse 官方 helper 位于 `/opt/muse/skills/custom-connector-setup/bin/dynamic_credentials.py`。适配器只从该位置加载，不在缺失时搜索第三方同名模块。每次请求调用 `add_surrogate_to_request(request, credential, allowed_hosts=[exact_host])`，通过 `read_json_response` 读取结果；不读取或导出 Vault 中的真实值。
+Muse 官方的 helper 在 `/opt/muse/skills/custom-connector-setup/bin/dynamic_credentials.py`。适配器只从这个位置加载；缺了也不会去找第三方的同名模块。每次请求都调用 `add_surrogate_to_request(request, credential, allowed_hosts=[exact_host])`，通过 `read_json_response` 读结果；不会读取或导出 Vault 里的真实值。
 
-`--url` 和 `--credential` 均须显式提供，没有部署地址或账号默认值。URL 必须是单一 HTTPS origin，不能含路径、用户名、密码、通配主机或查询。保留平台默认代理与 TLS 验证，拒绝重定向，单次请求超时 120 秒，以容纳平台权限等待。
+`--url` 和 `--credential` 都必须显式给出，没有部署地址或账号的默认值。URL 必须是单一的 HTTPS origin，不能带路径、用户名、密码、通配主机或查询。保留平台默认的代理和 TLS 验证，拒绝重定向，单次请求超时 120 秒，给平台的权限等待留出时间。
 
-**长期授权只按平台实际展示的范围批准。** 若 “Always allow” 同时包含其他主机、所有子域名或更多动作，不能把它当成精确主机授权。此时保留单次确认，明确说明后台定时请求可能等待审批；不要修改代理、导出密钥或替换审批流程来完成无人值守测试。
+**长期授权，只按平台实际展示的范围来批准。** 如果 “Always allow” 同时包含了其他主机、所有子域名或更多动作，就不能把它当成精确主机的授权。这时保留单次确认，并说明后台的定时请求可能要等审批；不要为了跑通无人值守的测试，去改代理、导出密钥或替换审批流程。
 
-### 仅为该定时任务授予持久权限
+### 只给这个定时任务持久权限
 
-在 Muse 原生任务已经创建后，从**该 scheduled job 的审批菜单**选择 `Always allow for this scheduled task`。逐条核对授权绑定的是这个任务及自己的精确控制端主机、端口 `443`，保持账户全局默认审批策略不变。其他任务、其他主机或新工具仍按它们原有的权限处理。
+Muse 的原生任务建好之后，在**这个 scheduled job 的审批菜单**里选 `Always allow for this scheduled task`。逐条核对授权绑定的是这个任务、你自己的精确服务端主机和端口 `443`，并保持账户全局的默认审批策略不变。其他任务、其他主机或新工具，仍按它们原来的权限处理。
 
-2026-11-18 的真实配置核对到 **3 条 durable 授权记录**，均绑定同一个定时任务及控制端主机的 `443` 端口；没有修改全局默认策略。三条是本次实际记录数，不是安装要求。持久授权表示后续匹配请求可按已授权范围运行，仍可撤销；不要把菜单中未明确包含的范围视为已获授权。
+2026-11-18 的真实配置核对到 **3 条 durable 授权记录**，都绑定同一个定时任务和服务端主机的 `443` 端口；没有修改全局默认策略。三条是这次实际的记录数，不是安装的要求。持久授权的意思是：之后匹配的请求，可以在已授权的范围内运行，而且仍可撤销。菜单里没有明确包含的范围，不要当作已经授权。
 
 ## 命令
 
-以下为 Bash 示例。替换占位值；每次定时和交互调用必须使用相同的 origin、Agent、空间和状态目录。
+下面是 Bash 示例。替换占位值；每次定时调用和交互调用，必须用相同的 origin、Agent、空间和状态目录。
 
 ```bash
 worker=(python3 /workspace/muse_vault_worker.py
@@ -50,31 +50,31 @@ worker=(python3 /workspace/muse_vault_worker.py
   --text-file /workspace/summary.md --file /workspace/report.csv
 ```
 
-| 命令 | 行为 |
+| 命令 | 作用 |
 | --- | --- |
-| `probe` | 验证 Vault 请求并登记 worker 能力；不领取任务 |
-| `claim` | 领取该 Agent 的任意已批准任务；可用 `--task TASK_ID` 限定；空队列退出 |
-| `local-status` | 离线查看脱敏本地指针与待确认操作；不加载 Vault helper、不建立 HTTP opener、不发网络请求 |
-| `status [ATTEMPT_ID]` | 联网核对远端状态，并显示本地待确认操作；需要相应网络／Vault 权限，不输出租约令牌 |
-| `progress` / `heartbeat` | 按原版协议递增序号或续租；活跃任务建议每 60 秒以内心跳 |
-| `result` | 提交 `succeeded`、`failed` 或 `cancelled` 候选结果；正文用 `--text` 或 `--text-file`，附件用重复的 `--file` |
-| `retry ATTEMPT_ID` | 从私密 outbox 重发原请求，包括原始文件字节、租约和序号；不重新执行任务 |
-| `ask ATTEMPT_ID --request-id ID --text QUESTION` | 提问；可重复指定 `--choice`；用 `status` 查看答案 |
-| `uncertain ATTEMPT_ID --text REASON` | 记录执行状态无法确认，阻止以新任务掩盖旧执行 |
-| `files ATTEMPT_ID --out DIRECTORY` | 下载当前任务获准使用的依赖文件，校验大小及 SHA-256 |
-| `reconcile` | 只在 owner 已明确确认远端停止后释放本地接单指针；保留原 pending 和历史记录 |
+| `probe` | 验证 Vault 请求，并登记 worker 的能力；不领任务 |
+| `claim` | 领取这个 Agent 的任意一个已批准的任务；可以用 `--task TASK_ID` 限定；队列是空的就退出 |
+| `local-status` | 离线查看脱敏后的本地指针和待确认的操作；不加载 Vault helper，不建 HTTP opener，不发网络请求 |
+| `status [ATTEMPT_ID]` | 联网核对远端状态，并显示本地待确认的操作；需要相应的网络 / Vault 权限，不输出租约令牌 |
+| `progress` / `heartbeat` | 按原版协议递增序号，或续租；任务活跃时，建议每 60 秒内发一次心跳 |
+| `result` | 提交 `succeeded`、`failed` 或 `cancelled` 的候选结果；正文用 `--text` 或 `--text-file`，附件重复写 `--file` |
+| `retry ATTEMPT_ID` | 从私密的 outbox 重发原来的请求，包括原始的文件字节、租约和序号；不重新执行任务 |
+| `ask ATTEMPT_ID --request-id ID --text QUESTION` | 提问；可以重复写 `--choice`；答案用 `status` 查看 |
+| `uncertain ATTEMPT_ID --text REASON` | 记录“执行状态没法确认”，防止用新任务掩盖旧的执行 |
+| `files ATTEMPT_ID --out DIRECTORY` | 下载这个任务获准使用的依赖文件，校验大小和 SHA-256 |
+| `reconcile` | 只有在 owner 已经明确确认远端停止之后，才释放本地的接单指针；原来的 pending 和历史记录保留 |
 
-状态目录为 0700，回执与 outbox 为 0600。它们包含租约和任务正文，不应打印、作为结果附件或同步进 Git。结果正文上限 64,000 字符，最多 8 个附件，每个 2 MiB，合计 8 MiB。成功结果必须包含正文或附件；服务端收到结果后仍需请求方验收，worker 无权批准任务或验收自身结果。
+状态目录的权限是 0700，回执和 outbox 是 0600。里面有租约和任务正文，不要打印出来，不要当成结果附件，也不要同步进 Git。结果正文上限 64,000 个字符，最多 8 个附件，每个 2 MiB，合计 8 MiB。成功的结果必须有正文或附件；服务端收到结果后，还要请求方来验收，worker 无权批准任务，也无权验收自己的结果。
 
-### 优先离线诊断
+### 先用离线诊断
 
-在聊天中排查空闲、busy 或 pending 时，先使用 `"${worker[@]}" local-status`，沿用相同的 `--url`、`--credential`、`--agent`、`--space` 和 `--home`。它校验 origin、Agent 与空间身份，在既有 `muse-dispatch` 锁下只读取脱敏本地元数据，保留账本原字节；不加载 Vault helper、不建立 HTTP opener、不发网络请求，因此不会为了查看本地状态而触发只授权给 cron 的联网操作。
+在聊天里排查空闲、busy 或 pending 时，先用 `"${worker[@]}" local-status`，并沿用相同的 `--url`、`--credential`、`--agent`、`--space` 和 `--home`。它会校验 origin、Agent 和空间的身份；在已有的 `muse-dispatch` 锁下，只读脱敏后的本地元数据，账本的原始字节保持不变；不加载 Vault helper，不建 HTTP opener，不发网络请求，所以不会因为看本地状态，去触发那些只授权给 cron 的联网操作。
 
-本地没有 attempt 不代表远端队列一定为空。需要确认远端执行或取消状态时，再使用联网 `status [ATTEMPT_ID]`；定时任务的持久授权不会自动扩展到交互聊天。只有存在 attempt 时才返回 `pending_action`、`result_confirmed` 等相应字段，不能把缺失字段补成 `false`。
+本地没有 attempt，不代表远端队列一定是空的。要确认远端的执行或取消状态，再用联网的 `status [ATTEMPT_ID]`；定时任务的持久授权，不会自动扩展到交互聊天。只有存在 attempt 时，才会返回 `pending_action`、`result_confirmed` 等字段；缺失的字段，不能补成 `false`。
 
 ## Muse 原生定时任务模板
 
-先在实际账号支持的原生调度工具中创建任务，再把控制台连接模式改为 `native_schedule`。这个模式只记录配置，不代替 Muse 创建定时器。频率以实际账号支持的周期和可接受额度为准；每轮唤醒可能消耗 Muse 用量，空队列不等于免费。
+先在你的账号实际支持的原生调度工具里创建任务，再把控制台里的连接模式改成 `native_schedule`。这个模式只记录配置，不会替 Muse 创建定时器。频率按你账号实际支持的周期和能接受的额度来定；每轮唤醒都可能消耗 Muse 的用量，空队列也不是免费的。
 
 ```text
 你是已登记的 Personal Agent Muse 工作方。
@@ -97,32 +97,32 @@ worker=(python3 /workspace/muse_vault_worker.py
 9. 不批准新任务、不自行验收结果、不将单次权限变成长久授权。
 ```
 
-**验收自动接单必须同时检查** Muse 的真实定时触发记录、服务端新增 attempt、心跳/进展和结果附件，并由请求方验收结果。手动 “Run now” 或控制台中的 `native_schedule` 字段本身不能证明定时触发成功。
+**验收自动接单，必须同时检查：** Muse 真实的定时触发记录、服务端新增的 attempt、心跳和进展、结果附件，并由请求方验收结果。手动点 “Run now”，或者控制台里有 `native_schedule` 这个字段，本身都证明不了定时触发成功。
 
 ## 持续运行与停止
 
-原生定时计划由 Muse 保存。关闭聊天窗口不会暂停已经启用的计划；worker CLI 在每轮唤醒时运行，控制服务需要持续可达。本次使用原生 `every: 5m`，每五分钟检查一次队列。**空队列轮询也消耗 Muse 用量**，因为仍会先唤醒原生 Agent；适配器没有在唤醒前检查空队列的免费旁路。
+原生的定时计划由 Muse 保存。关掉聊天窗口，不会暂停已经启用的计划；worker CLI 在每轮唤醒时运行，服务端需要一直连得上。这次用的是原生的 `every: 5m`，每五分钟查一次队列。**空队列的轮询也消耗 Muse 用量**，因为它仍然要先唤醒原生 Agent；适配器没有“唤醒前先免费看一眼队列是不是空”的旁路。
 
-worker 只自动领取**已经批准**且授权有效的任务。它不创建或批准新计划，候选结果回传后仍由 owner 验收；任务进入队列、领取成功、结果上报和验收完成是不同状态。
+worker 只会自动领取**已经批准**、授权也有效的任务。它不会创建或批准新计划，回传的候选结果仍由 owner 验收。“任务进了队列”“领取成功”“结果已上报”“验收完成”，是四个不同的状态。
 
-需要停止后续唤醒时，在 Muse 任务页暂停该计划；需要收回访问能力时，在该任务的授权管理中撤销对应持久授权。仅关闭聊天或撤销某项访问权限不会等同于暂停定时计划。对于已经领取的执行，还应在控制台请求取消并核对远端停止，保留原账本用于确认。
+想停止后续的唤醒，在 Muse 的任务页暂停这个计划；想收回访问能力，在这个任务的授权管理里撤销对应的持久授权。只关聊天窗口，或者只撤销某一项访问权限，都不等于暂停定时计划。对已经领取的执行，还要在控制台请求取消，并核对远端确实停了；原账本保留下来，用于确认。
 
-## 断线、重启与停止恢复
+## 断线、重启和停止后的恢复
 
-空队列复用同一 claim nonce；领取成功后先保存交付记录，再输出 payload。随后定时轮询返回 busy，直到结果确认完成或存在明确停止证明。其中带有 `next: status_then_retry` 的待确认请求须先进入回执恢复分支，其余 busy 才静默退出。脚本不会在后台延长失联任务租约，也不自动续接等待回答的 Muse 会话；活跃原生任务负责心跳和等待管理。
+空队列时复用同一个 claim nonce；领取成功后，先保存交付记录，再输出 payload。之后定时轮询会返回 busy，直到结果确认完成，或者有明确的停止证明。其中带 `next: status_then_retry` 的待确认请求，要先走回执恢复的分支；其余的 busy 才静默退出。脚本不会在后台替失联的任务延长租约，也不会自动续接正在等回答的 Muse 会话；活跃的原生任务负责心跳和等待管理。
 
-这是防重复交付机制，不保证外部操作恰好执行一次。如果写好交付记录后、输出被消费前崩溃，必须核对原生会话与控制端记录，不能自动重放。租约过期或晚到结果保持 uncertain，不开放新的执行容量。
+这套机制防的是重复交付，不保证外部操作恰好执行一次。如果写好交付记录之后、输出被取走之前崩溃了，必须核对原生会话和服务端的记录，不能自动重放。租约过期或者晚到的结果，保持 uncertain，不会腾出新的执行容量。
 
-进展或结果请求未知时，保持原文件和状态目录，用 `status ATTEMPT_ID` 核对原任务和授权，本轮最多调用一次 `retry ATTEMPT_ID`，然后结束本轮。核对或重试失败时保留账本并报告，不重执行任务、不循环重试。HTTP 200 但响应合同不符同样保留 outbox，不当作成功；文件后来改变也不会改变保存的重试正文。
+进展或结果的请求结果未知时，保持原文件和状态目录不动，用 `status ATTEMPT_ID` 核对原任务和授权，本轮最多调用一次 `retry ATTEMPT_ID`，然后结束本轮。核对或重试失败，就保留账本并报告，不重新执行任务，也不循环重试。HTTP 200 但响应不符合约定，同样保留 outbox，不当成功；文件后来变了，也不会改变保存好的重试正文。
 
 ### 已验收结果与本地待确认请求的恢复
 
-控制端已验收结果，不代表本地一定收到结果回执。响应丢失或权限轮换后，服务端可能已是 `accepted`、任务已成功，本地仍保留 pending；原生定时历史的 success 也不能代替这份回执。
+服务端已经验收了结果，不代表本地一定收到了结果回执。响应丢了，或者权限轮换之后，服务端可能已经是 `accepted`、任务已成功，而本地仍然保留着 pending；原生定时历史里的 success，也不能代替这份回执。
 
-若旧 pending 已无法按上述顺序恢复，先由资源 owner 核对**对应的 Muse 原生执行确实结束**，再登记停止证明，最后释放本地接单指针。不要删除状态目录、改 nonce 或把 `accepted` 本身视为停止证明。控制端与适配器均须包含本节所述的恢复支持。
+如果旧的 pending 已经没法按上面的顺序恢复，先由资源 owner 核对**对应的 Muse 原生执行确实结束了**，再登记停止证明，最后释放本地的接单指针。不要删状态目录，不要改 nonce，也不要把 `accepted` 本身当成停止证明。服务端和适配器，都必须包含本节说的恢复支持。
 
-1. 核对原 task、step、attempt 及原生运行记录，确认没有仍在运行的会话、进程或外部动作。
-2. 对 `uncertain` 或取消待确认的执行，资源 owner 可在控制台登记停止。对已经 `accepted` 的执行，当前界面没有该按钮，使用同一 owner 的正规登录会话调用 `POST /api/v4/tasks/TASK_ID/stopped`；写请求仍须携带允许的 `Origin` 与 `X-PA: 1`，worker token 无此权限。正文示例：
+1. 核对原来的 task、step、attempt 和原生运行记录，确认没有仍在运行的会话、进程或外部动作。
+2. 对 `uncertain` 或取消待确认的执行，资源 owner 可以在控制台登记停止。对已经 `accepted` 的执行，当前界面没有这个按钮：用同一个 owner 的正规登录会话，调用 `POST /api/v4/tasks/TASK_ID/stopped`；写请求仍然要带上允许的 `Origin` 和 `X-PA: 1`，worker token 没有这个权限。正文示例：
 
    ```json
    {
@@ -132,16 +132,16 @@ worker 只自动领取**已经批准**且授权有效的任务。它不创建或
    }
    ```
 
-   对 `accepted` 只追加 `stopped_by`、`stopped_at`、`stop_note` 及 `attempt.stop_confirmed` 事件；保留已验收状态、结果、验收资格、任务状态和后续依赖。同一 owner、相同说明重试幂等，已有不同确认不能覆盖。
-3. 在 Muse 中使用原来的 origin、Agent、空间和状态目录运行 `"${worker[@]}" reconcile`。它通过 `stop-receipt` 核对原 attempt、原 generation，要求状态为 `stopped` 或 `accepted`、`stopped_by` 为非空字符串、`stopped_at` 为有限正数且不是布尔值；缺少任一条件都保持阻塞。
+   对 `accepted` 的执行，只会追加 `stopped_by`、`stopped_at`、`stop_note` 和 `attempt.stop_confirmed` 事件；已验收的状态、结果、验收资格、任务状态和后续依赖，都保留不变。同一个 owner、相同说明再次提交，结果一样（幂等）；已有不同的确认，不能覆盖。
+3. 在 Muse 里，用原来的 origin、Agent、空间和状态目录，运行 `"${worker[@]}" reconcile`。它通过 `stop-receipt` 核对原来的 attempt 和 generation，要求：状态是 `stopped` 或 `accepted`，`stopped_by` 是非空字符串，`stopped_at` 是有限的正数、而且不是布尔值；缺任何一条，都保持阻塞。
 
-恢复只将本地接单指针标记为 `released`，保留原 pending、outbox 和历史，不补写 `result_receipt`、不重发结果、不重新执行旧任务。此时 `released: true` 与 `result_confirmed: false` 可以同时存在，表示接单已获明确停止证明而释放，原结果响应仍未经本地确认。下一轮可继续领取新任务；`reconcile` 本身不会停止 Muse 会话，也不会替 owner 作出停止声明。
+恢复只会把本地的接单指针标记为 `released`；原来的 pending、outbox 和历史都保留，不补写 `result_receipt`，不重发结果，不重新执行旧任务。这时 `released: true` 和 `result_confirmed: false` 可以同时存在：意思是接单已经因为有明确的停止证明而释放，但原来那条结果的响应，本地仍没有确认。下一轮可以继续领新任务；`reconcile` 本身不会停止 Muse 的会话，也不会替 owner 做停止声明。
 
 ## 验证记录
 
-### 仓库离线测试
+### 仓库的离线测试
 
-仓库测试使用原版 WorkerBridge 与离线 HTTP/Vault 边界，覆盖空队列 nonce 复用、重启后一次交付、完成后换 nonce、丢失结果响应及原文件字节重试、显式停止恢复、异常 HTTP 200 保留 outbox、精确 HTTPS 主机、官方 helper 来源与 bridge 哈希验证。它不使用真实账号、令牌或网络。
+仓库测试用的是原版 WorkerBridge，加上离线的 HTTP / Vault 边界，覆盖：空队列时复用 nonce、重启后只交付一次、完成后换 nonce、结果响应丢失后用原文件字节重试、显式的停止恢复、异常的 HTTP 200 保留 outbox、精确的 HTTPS 主机、官方 helper 的来源和 bridge 的哈希验证。它不使用真实的账号、令牌或网络。
 
 ```bash
 uv run pytest tests/test_muse_vault_worker_example.py tests/test_v4_agent_bridge.py
@@ -149,35 +149,35 @@ uv run pytest tests/test_muse_vault_worker_example.py tests/test_v4_agent_bridge
 
 ### 2026-11-18 真实 Muse 验收
 
-以下是一次已完成的真实账号联调记录，时间均为 **Asia/Shanghai**。在事先为该 scheduled job 配置上述持久授权后，该轮自然触发至完成**没有人工点击授权，也没有使用 Run now 或手工领取**。
+下面是一次已经完成的真实账号联调记录，时间都是 **Asia/Shanghai**。事先给这个 scheduled job 配好上面说的持久授权之后，这一轮从自然触发到完成，**没有人工点击授权，也没有用 Run now 或手工领取**。
 
-| 检查项 | 已确认结果 |
+| 检查项 | 已确认的结果 |
 | --- | --- |
 | 触发 | 2026-11-18 **20:09:28**，每五分钟的 Muse 原生定时器自然触发 |
-| 完成 | 同日 **20:10:27**，该次原生任务完成 |
-| 执行链路 | Muse 原生任务 → worker CLI → 原版 WorkerBridge → 官方 Vault helper → 控制端 worker HTTP 接口 |
-| 领取与进度 | 控制端记录实际 attempt、首次心跳状态转换、进度及结果回执，并与原生定时运行记录核对 |
-| 输入 | 四笔合成订单；随机 nonce 由获批任务载荷提供，未预写进定时提示或执行脚本 |
-| 成果 | 实际下载 CSV 和 Markdown；校验两份文件的 nonce、大小与 SHA-256，逐地区核对订单数、数量、销售额及总计 |
-| 验收 | owner 完成成果验收；worker 没有批准计划或验收自身结果的权限 |
-| 连续运行观察 | 原生定时记录已完成超过三小时的核查；具体覆盖与证据边界见下节 |
+| 完成 | 同日 **20:10:27**，这次原生任务完成 |
+| 执行链路 | Muse 原生任务 → worker CLI → 原版 WorkerBridge → 官方 Vault helper → 服务端 worker HTTP 接口 |
+| 领取与进度 | 服务端记录了实际的 attempt、首次心跳的状态转换、进度和结果回执，并与原生定时运行记录对过 |
+| 输入 | 四笔合成订单；随机 nonce 由已批准的任务载荷提供，没有预先写进定时提示或执行脚本 |
+| 成果 | 实际下载了 CSV 和 Markdown；核对了两份文件的 nonce、大小和 SHA-256，并按地区核对了订单数、数量、销售额和总计 |
+| 验收 | owner 完成了成果验收；worker 没有批准计划的权限，也没有验收自己结果的权限 |
+| 连续运行观察 | 原生定时记录已经核查了三个多小时；覆盖范围和证据的边界见下一节 |
 
 ### 连续运行观察：20:09:28—23:34:05
 
-2026-11-18 的上述时间窗口内，Muse 记录了 **41 次自然触发：41 次 success、0 次 failed、0 次 cancelled**。这统计的是原生定时任务运行状态，不是 41 份业务任务均已完成或验收。
+2026-11-18 的这个时间窗口里，Muse 记录了 **41 次自然触发：41 次 success、0 次 failed、0 次 cancelled**。这里统计的是原生定时任务的运行状态，不是说有 41 份业务任务都做完或验收了。
 
 | 核对项 | 观察结果与边界 |
 | --- | --- |
-| 历史覆盖 | 查询 `limit=50` 返回 43 条记录，其中 2 条早于窗口；`history_may_be_truncated=false`。筛选后窗口内为 41 条 |
-| 首轮业务任务 | 已按上一节验证实际领取、执行、CSV／Markdown 回传及 owner 验收 |
-| 后续 40 轮 | 静默结束，单轮约 20—40 秒；原生摘要没有区分 `idle` 与 `busy` |
-| 历史结论 | 原生定时计划持续触发并正常退出；静默本身不能证明队列为空、没有待恢复请求或本地接单账本未阻塞 |
-| 控制端独立核查 | Railway 上通过现有 owner HTTPS API 核查：`health_status: 200`、`health_ok: true`；专用 Muse 的 `active_attempts: 0`、`outstanding_wakes: 0`，三个既有测试任务均为 `succeeded` |
-| 本地指针独立核查 | Muse 持有 `muse-dispatch` 锁，直接复用已安装的 `Dispatcher.local_status()`，离线脱敏输出为 `initialized: true`、`attempt_id: null`、`delivered: false`；没有网络／Vault 调用，也没有状态改写 |
-| 缺失字段的含义 | 因没有 attempt，`pending_action`、`result_confirmed` 未返回，不能将它们记录为 `false` |
-| 当前结论 | 本次专用 Muse 队列及本地接单指针当前空闲，没有被旧任务卡住；这不能追溯证明之前每一轮静默运行均为 `idle` |
-| 未计通过的检查 | 手动网络 `status` 因单次权限等待在 120 秒后超时；未计为网络检查成功，随后以上述独立离线诊断核对本地状态 |
+| 历史覆盖 | 查询 `limit=50` 返回 43 条记录，其中 2 条早于这个窗口；`history_may_be_truncated=false`。筛选后，窗口内是 41 条 |
+| 首轮业务任务 | 已按上一节验证了实际的领取、执行、CSV / Markdown 回传和 owner 验收 |
+| 后面 40 轮 | 都是静默结束，单轮大约 20—40 秒；原生摘要里区分不出 `idle` 和 `busy` |
+| 历史结论 | 原生定时计划一直在触发，也正常退出；但“静默”本身，不能证明队列是空的、没有待恢复的请求，或者本地接单账本没被卡住 |
+| 服务端独立核查 | 在 Railway 上，通过现有的 owner HTTPS API 核查：`health_status: 200`、`health_ok: true`；专用 Muse 的 `active_attempts: 0`、`outstanding_wakes: 0`，三个已有的测试任务都是 `succeeded` |
+| 本地指针独立核查 | Muse 持有 `muse-dispatch` 锁，直接复用已安装的 `Dispatcher.local_status()`，离线、脱敏的输出是 `initialized: true`、`attempt_id: null`、`delivered: false`；没有网络或 Vault 调用，也没有改写任何状态 |
+| 缺失字段的含义 | 因为没有 attempt，`pending_action` 和 `result_confirmed` 没有返回，不能把它们记成 `false` |
+| 当前结论 | 这个专用 Muse 的队列和本地接单指针，现在是空闲的，没有被旧任务卡住；但这不能反过来证明，之前每一轮静默运行的结果都是 `idle` |
+| 不算通过的检查 | 手动的联网 `status`，因为单次权限等待，在 120 秒后超时；没有算作网络检查成功，随后用上面独立的离线诊断核对了本地状态 |
 
-上述真实诊断复用的是当时已安装的 `Dispatcher.local_status()` 方法；正式 `local-status` 子命令为后续补充，未计入这次线上实测。
+上面那次真实诊断，用的是当时已安装的 `Dispatcher.local_status()` 方法；正式的 `local-status` 子命令是后来补充的，没有计入这次线上实测。
 
-检查 worker 时，优先通过 `local-status` 查看实际返回的脱敏字段，例如 `pending_action`、`result_confirmed`、`delivered` 和 `released`；缺失字段不补成 `false`。不要打印私密账本、请求头或租约令牌。离线结果只说明本地指针状态，不能替代网络连通或 Vault 权限检查。即使原生历史显示 success，发现 pending 或未释放的交付记录后，仍应按本文的恢复步骤核对，不能据静默历史跳过恢复。
+检查 worker 时，优先用 `local-status` 看实际返回的脱敏字段，比如 `pending_action`、`result_confirmed`、`delivered` 和 `released`；缺失的字段，不要补成 `false`。不要打印私密账本、请求头或租约令牌。离线的结果，只能说明本地指针的状态，不能代替网络连通或 Vault 权限的检查。就算原生历史里显示 success，只要发现 pending 或没有释放的交付记录，仍要按本文的恢复步骤核对，不能因为历史是静默的，就跳过恢复。
