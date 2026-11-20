@@ -56,7 +56,7 @@ flowchart TB
 - **自有执行节点**：在自己的电脑上运行获批的命令任务；设备离线时，任务等待上线。
 - **多 Agent 协作**：连接 Grok Bot、Muse，以及通过自有 Host 接入的 Codex、Cursor 或独立 Personal Agent；统一管理计划、进度和成果验收。
 
-**使用前提：**需要自行部署，并配置所用的模型服务、聊天渠道和 Agent 账号。Grok 的自动唤醒需要配置 Routine；Muse 的自动触发取决于原生账号能力。网页打开时实时更新，主动消息通知需配置 Telegram 或钉钉。
+**使用前提**：需要自行部署，并配置所用的模型服务、聊天渠道和 Agent 账号。Grok 的自动唤醒需要配置 Routine；Muse 的自动触发取决于原生账号能力。网页打开时实时更新，主动消息通知需配置 Telegram 或钉钉。
 
 [快速开始](#快速开始) · [手机与浏览器接入](docs/MOBILE.md) · [多 Agent 协作](docs/MULTI_AGENT.md) · [个人与团队空间](docs/COLLABORATION.md)
 
