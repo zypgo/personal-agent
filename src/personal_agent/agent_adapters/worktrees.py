@@ -121,7 +121,8 @@ def _git(
             code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
     except BaseException:
         if process.poll() is None:
-            with contextlib.suppress(ProcessLookupError):
+            # macOS answers EPERM rather than ESRCH once nothing but zombies is left in the group.
+            with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=5)
         raise

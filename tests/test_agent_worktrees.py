@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 from typing import Any
@@ -168,6 +170,26 @@ def test_source_reserved_input_path_and_profile_inside_source_are_rejected(
         stream.write("\nignored-profile\n")
     with pytest.raises(WorktreeError, match="outside"):
         prepare(source, nested_profile, "attempt-1")
+
+
+def test_a_process_group_that_is_already_gone_does_not_hide_the_real_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """macOS answers a kill aimed at a group holding only zombies with EPERM instead of ESRCH."""
+    real_popen, real_killpg = subprocess.Popen, os.killpg
+
+    def flood(command: Any, **options: Any) -> subprocess.Popen[bytes]:
+        endless = "import os\nwhile True:\n    os.write(1, b'x' * 65536)"
+        return real_popen([sys.executable, "-c", endless], **options)
+
+    def killpg_answering_eperm(group: int, signum: int) -> None:
+        real_killpg(group, signum)
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(worktrees.subprocess, "Popen", flood)
+    monkeypatch.setattr(worktrees.os, "killpg", killpg_answering_eperm)
+    with pytest.raises(WorktreeError, match="bounded"):
+        worktrees._git(tmp_path, ["status"], max_bytes=100_000)
 
 
 def test_new_symlink_outputs_are_not_followed_or_archived(
