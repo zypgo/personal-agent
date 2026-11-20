@@ -353,6 +353,116 @@ def test_a_commit_with_a_real_address_is_refused(world, role):
     assert real not in result.err + result.out
 
 
+@pytest.mark.parametrize("already_published", [False, True])
+def test_an_annotated_tag_with_a_private_address_is_refused(world, already_published):
+    world.plain()
+    if already_published:
+        assert world.export().code == 0
+    before, tags_before = world.remote_tip(), world.remote_tags()
+    address = "tagger@example.org"
+    sh(
+        "tag", "-a", "-m", "a release", "private-tagger",
+        cwd=world.local,
+        env={"GIT_COMMITTER_NAME": "Release author", "GIT_COMMITTER_EMAIL": address},
+    )  # fmt: skip
+
+    result = world.export()
+
+    assert result.code == 1 and "tagger address" in result.err
+    assert address not in result.err + result.out
+    assert world.remote_tip() == before
+    assert world.remote_tags() == tags_before
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_an_unchanged_published_tag_does_not_block_a_safe_new_commit(world, nested):
+    world.plain()
+    assert world.export().code == 0
+    sh(
+        "tag", "-a", "-m", "already published elsewhere", "published-tag",
+        cwd=world.local,
+        env={"GIT_COMMITTER_NAME": "Publisher", "GIT_COMMITTER_EMAIL": "publisher@example.org"},
+    )  # fmt: skip
+    if nested:
+        sh(
+            "tag", "-a", "-m", "a public outer tag", "published-outer", "published-tag",
+            cwd=world.local,
+            env={"GIT_COMMITTER_NAME": "Publisher", "GIT_COMMITTER_EMAIL": GOOD},
+        )  # fmt: skip
+        sh("tag", "-d", "published-tag", cwd=world.local)
+    # Simulate a tag GitHub already has, rather than using the checked export to create it.
+    sh("push", "--tags", "github", cwd=world.local)
+    before_tags = world.at_remote("show-ref", "--tags")
+    tip = world.commit("a safe new commit", {"safe.txt": "safe\n"})
+
+    result = world.export()
+
+    assert result.code == 0, result.err
+    assert world.remote_tip() == tip
+    assert world.at_remote("show-ref", "--tags") == before_tags
+
+
+def test_a_private_tagger_in_a_new_nested_tag_is_refused(world):
+    world.plain()
+    assert world.export().code == 0
+    before = world.remote_tip()
+    sh(
+        "tag", "-a", "-m", "inner", "private-inner",
+        cwd=world.local,
+        env={"GIT_COMMITTER_NAME": "Publisher", "GIT_COMMITTER_EMAIL": "publisher@example.org"},
+    )  # fmt: skip
+    sh(
+        "tag", "-a", "-m", "outer", "new-outer", "private-inner",
+        cwd=world.local,
+        env={"GIT_COMMITTER_NAME": "Publisher", "GIT_COMMITTER_EMAIL": GOOD},
+    )  # fmt: skip
+    sh("tag", "-d", "private-inner", cwd=world.local)
+
+    result = world.export()
+
+    assert result.code == 1 and "tagger address" in result.err
+    assert "publisher@example.org" not in result.err + result.out
+    assert world.remote_tip() == before
+    assert "new-outer" not in world.remote_tags()
+
+
+@pytest.mark.parametrize("leaked_index", [0, 1])
+def test_repeated_variable_in_one_env_file_protects_every_value(world, tmp_path, leaked_index):
+    values = ["synthetic-first-env-value", "synthetic-second-env-value"]
+    env_file = tmp_path / "repeated.env"
+    env_file.write_text("".join(f"PRIVATE_SETTING={value}\n" for value in values))
+    world.configure(env_files=[env_file])
+    world.plain()
+    assert world.export().code == 0
+    before = world.remote_tip()
+    world.commit("add notes", {"notes.txt": values[leaked_index]})
+
+    result = world.export()
+
+    assert result.code == 1 and "the value of PRIVATE_SETTING" in result.err
+    assert all(value not in result.err + result.out for value in values)
+    assert world.remote_tip() == before
+
+
+@pytest.mark.parametrize("leaked_index", [0, 1])
+def test_same_variable_in_different_env_files_protects_every_value(world, tmp_path, leaked_index):
+    values = ["synthetic-first-config-value", "synthetic-second-config-value"]
+    files = [tmp_path / "first.env", tmp_path / "second.env"]
+    for path, value in zip(files, values, strict=True):
+        path.write_text(f"PRIVATE_SETTING={value}\n")
+    world.configure(env_files=files)
+    world.plain()
+    assert world.export().code == 0
+    before = world.remote_tip()
+    world.commit("add notes", {"notes.txt": values[leaked_index]})
+
+    result = world.export()
+
+    assert result.code == 1 and "the value of PRIVATE_SETTING" in result.err
+    assert all(value not in result.err + result.out for value in values)
+    assert world.remote_tip() == before
+
+
 def test_a_value_from_an_env_file_is_found_but_a_short_one_is_not(world, tmp_path):
     env_file = tmp_path / "keys.env"
     env_file.write_text("export API_KEY='sk-live-0123456789abcdef'\nPIN=1234\n")
@@ -420,7 +530,9 @@ def test_gitleaks_is_asked_about_what_is_new_only(world):
 
     args = world.gitleaks_args()
     assert args[0] == "git" and "--redact" in args and "--no-banner" in args
-    assert "--log-opts=--branches --tags ^refs/export/remote" in args
+    assert (
+        "--log-opts=--branches --tags ^refs/export/remote --not --glob=refs/export/tags/*" in args
+    )
     assert "pa-export-" in args[-1]  # the scratch copy of the repository is the last argument
 
 

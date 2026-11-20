@@ -272,7 +272,7 @@ class WebApi:
             )
         try:
             body = await request.json()
-        except ValueError:
+        except (ValueError, RecursionError):
             self._pairing.fail(source, now)
             raise HTTPException(400, "That was not a pairing request.") from None
         code = body.get("code") if isinstance(body, dict) else None
@@ -452,7 +452,7 @@ class WebApi:
         try:
             approval_id = int(request.path_params["approval_id"])
             body = await request.json()
-        except ValueError:
+        except (ValueError, RecursionError):
             raise HTTPException(400, "That was not a decision.") from None
         decision = body.get("decision") if isinstance(body, dict) else None
         if decision not in ("approve", "deny"):

@@ -17,8 +17,9 @@ class Dialog {
   fire(type, event = {}) { return this.listeners.get(type)?.({ preventDefault() { event.prevented = true; }, ...event }); }
 }
 class Handle {
-  constructor() { this.listeners = new Map(); }
+  constructor() { this.listeners = new Map(); this.captures = []; }
   addEventListener(type, callback) { this.listeners.set(type, callback); }
+  setPointerCapture(id) { this.captures.push(id); }
   fire(type, event) { this.listeners.get(type)?.({ type, ...event }); }
 }
 
@@ -127,4 +128,26 @@ test("pulling up resists like a rubber band, and mice, wide screens and other fi
   const other = presentWithHandle();
   other.touch("pointerdown", 100, 0); other.touch("pointermove", 300, 100, { pointerId: 8 }); other.touch("pointerup", 300, 100, { pointerId: 8 });
   assert.equal(other.dialog.style.transform, undefined); assert.equal(other.dialog.dataset.closing, undefined);
+});
+
+test("touching a title-bar control preserves its click target instead of capturing it for a sheet drag", () => {
+  const s = presentWithHandle();
+  const control = { closest: () => control };
+  // Capturing at the header retargets the subsequent pointerup and click to that header,
+  // so the close button inside it would never receive its activation on a touch screen.
+  s.touch("pointerdown", 100, 0, { target: control });
+  s.touch("pointermove", 260, 100, { target: control });
+  s.touch("pointerup", 260, 100, { target: control });
+  assert.deepEqual(s.handle.captures, []);
+  assert.equal(s.dialog.style.transform, undefined);
+  assert.equal(s.dialog.dataset.closing, undefined);
+});
+
+test("a second finger cannot replace the active sheet gesture", () => {
+  const s = presentWithHandle();
+  s.touch("pointerdown", 100, 0, { isPrimary: true });
+  s.touch("pointerdown", 200, 10, { pointerId: 8, isPrimary: false });
+  s.touch("pointermove", 160, 400, { isPrimary: true });
+  assert.equal(s.dialog.style.transform, "translateY(60px)");
+  assert.deepEqual(s.handle.captures, [7]);
 });

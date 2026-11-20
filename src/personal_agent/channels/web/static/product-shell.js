@@ -135,6 +135,7 @@ export function createProductShell({ document: doc = globalThis.document, conten
   }
   function setOpen(value, restore = true, byTouch = false) {
     if (!alive) return;
+    resetSwipe();
     const wasOpen = open; open = Boolean(value);
     if (!narrow) {
       desktopOpen = open;
@@ -176,6 +177,7 @@ export function createProductShell({ document: doc = globalThis.document, conten
   };
   const onResize = () => {
     const focusedInside = drawer.contains(doc.activeElement);
+    resetSwipe();
     narrow = Boolean(media?.matches); open = !narrow && desktopOpen; paint();
     if (!open && focusedInside) toggle.focus();
   };
@@ -184,11 +186,11 @@ export function createProductShell({ document: doc = globalThis.document, conten
   // and a drag toward the edge pushes it shut. The release decides by position and speed.
   const swipe = { id: null, x: 0, y: 0, t: 0, lastX: 0, lastT: 0, speed: 0, mode: "idle", width: 320 };
   const style = (name, value) => { if (value === null) element.style?.removeProperty?.(name); else element.style?.setProperty?.(name, String(value)); };
-  const settle = value => {
+  function resetSwipe() {
     swipe.id = null; swipe.mode = "idle";
     delete element.dataset.dragging; style("--drawer-p", null);
-    setOpen(value, false, true);
-  };
+  }
+  const settle = value => setOpen(value, false, true);
   const onDown = event => {
     if (!narrow || event.pointerType !== "touch" || event.isPrimary === false || swipe.id !== null) return;
     const target = event.target;
@@ -223,7 +225,7 @@ export function createProductShell({ document: doc = globalThis.document, conten
   for (const [type, callback] of touch) doc.addEventListener(type, callback, { passive: true });
   setActive(current); paint();
   return { element, toggle, setActive, setContext, destroy() {
-    alive = false; content.inert = false; doc.body.classList.remove("product-menu-open");
+    alive = false; resetSwipe(); content.inert = false; doc.body.classList.remove("product-menu-open");
     doc.removeEventListener("keydown", onKey); media?.removeEventListener("change", onResize);
     for (const [type, callback] of touch) doc.removeEventListener(type, callback);
   } };

@@ -149,25 +149,31 @@ def _open_file(app: App, path: Path, *, missing: str) -> tuple[int, os.stat_resu
 
 # ---- list ------------------------------------------------------------------------------------------
 def _list(app: App, path: Path, depth: int) -> str:
-    if not path.exists():
-        raise FileProblem(f"{_show(app, path)} does not exist.")
-    if not path.is_dir():
-        raise FileProblem(f"{_show(app, path)} is a file, not a folder.")
+    root, names = _anchor(app, path)
+    shown = _show(app, path)
     lines: list[str] = []
     total = 0
 
-    def walk(folder: Path, level: int) -> None:
+    def walk(folder: int, parts: tuple[str, ...], level: int) -> None:
         nonlocal total
         try:
-            entries = sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+            with os.scandir(folder) as scan:
+                entries = sorted(
+                    scan,
+                    key=lambda entry: (
+                        not entry.is_dir(follow_symlinks=False),
+                        entry.name.lower(),
+                    ),
+                )
         except OSError as exc:
-            lines.append(f"{'  ' * (level - 1)}[cannot read {folder.name}: {exc.strerror}]")
+            name = parts[-1] if parts else "."
+            lines.append(f"{'  ' * (level - 1)}[cannot read {name}: {exc.strerror}]")
             return
         for entry in entries:
             total += 1
             indent = "  " * (level - 1)
             link = entry.is_symlink()
-            is_dir = entry.is_dir() and not link
+            is_dir = entry.is_dir(follow_symlinks=False)
             if total <= LIST_MAX_ENTRIES:
                 if is_dir:
                     lines.append(f"{indent}{entry.name}/")
@@ -175,20 +181,38 @@ def _list(app: App, path: Path, depth: int) -> str:
                     lines.append(f"{indent}{entry.name}  (symbolic link)")
                 else:
                     try:
-                        size = _human(entry.stat().st_size)
+                        size = _human(entry.stat(follow_symlinks=False).st_size)
                     except OSError:
                         size = "?"
                     lines.append(f"{indent}{entry.name}  ({size})")
             if is_dir and level < depth:
-                walk(entry, level + 1)
+                child = (*parts, entry.name)
+                try:
+                    # Directory entries are only a snapshot. Open every descendant from
+                    # the trusted root again: a concurrent shell may have replaced this
+                    # directory (or an ancestor) with a link after scandir returned it.
+                    with safefs.below(root, child) as deeper:
+                        walk(deeper, child, level + 1)
+                except OSError as exc:
+                    lines.append(f"{indent}  [cannot read {entry.name}: {exc.strerror}]")
 
-    walk(path, 1)
+    try:
+        with safefs.below(root, names) as folder:
+            walk(folder, names, 1)
+    except safefs.Changed as exc:
+        raise _changed(shown) from exc
+    except FileNotFoundError as exc:
+        raise FileProblem(f"{shown} does not exist.") from exc
+    except NotADirectoryError as exc:
+        raise FileProblem(f"{shown} is a file, not a folder.") from exc
+    except OSError as exc:
+        raise FileProblem(f"cannot list {shown}: {exc.strerror or exc}") from exc
     if not lines:
-        return f"{_show(app, path)}/ is empty."
+        return f"{shown}/ is empty."
     note = (
         f"\n[{total - LIST_MAX_ENTRIES} more entries not shown]" if total > LIST_MAX_ENTRIES else ""
     )
-    return f"{_show(app, path)}/\n" + "\n".join(lines) + note
+    return f"{shown}/\n" + "\n".join(lines) + note
 
 
 # ---- read ------------------------------------------------------------------------------------------

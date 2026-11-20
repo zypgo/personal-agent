@@ -219,9 +219,9 @@ class PolicyConfig(_Section):
 
 
 class BudgetConfig(_Section):
-    per_run_usd: float = Field(1.0, gt=0)
+    per_run_usd: float = Field(1.0, gt=0, allow_inf_nan=False)
     """A single run that spends more than this is stopped and reported (usually a loop)."""
-    daily_usd: float = Field(5.0, gt=0)
+    daily_usd: float = Field(5.0, gt=0, allow_inf_nan=False)
     """Across all runs since local midnight. Reaching it pauses work until tomorrow; nothing is lost."""
 
 

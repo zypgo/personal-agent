@@ -58,7 +58,7 @@ async def body(request: Request, model: type[BodyT]) -> BodyT:
     """Read only after authentication; fence authority before validating or doing work."""
     try:
         value = await request.json()
-    except ValueError:
+    except (ValueError, RecursionError):
         raise HTTPException(400, "Send a JSON object.") from None
     revalidate = request.scope.get("state", {}).get("v3_revalidate")
     if callable(revalidate):

@@ -147,6 +147,7 @@ function cancelRequests() {
   requests.clear();
 }
 function clearSpace() {
+  notice("");
   state.taskId = null;
   state.knowledgeRevision = null;
   for(const name of Object.keys(reads)) reads[name]++;
@@ -162,7 +163,7 @@ function clearSpace() {
     form(id).reset();delete form(id).dataset.requestId;delete form(id).dataset.dirty;
   }
   $("knowledge-editor-panel").hidden=true;$("knowledge-empty-editor").hidden=false;
-  for (const id of ["tasks-list","task-detail","members-list","knowledge-list","nodes-list","devices-list","channel-bindings-list","review-list"]) $(id).replaceChildren();
+  for (const id of ["tasks-list","task-detail","task-diagnostics","device-diagnostics","members-list","knowledge-list","nodes-list","devices-list","channel-bindings-list","review-list"]) $(id).replaceChildren();
   $("task-detail").hidden = true;
   closeSecret();
   closeHistory();
