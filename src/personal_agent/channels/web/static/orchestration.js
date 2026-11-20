@@ -164,7 +164,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     for(const id of ["agents-list","agent-create-content","collaboration-compose-content","collaboration-list","collaboration-detail"])get(id)?.replaceChildren();
     if(get("collaboration-detail"))get("collaboration-detail").hidden=true;
     if(get("agent-create"))get("agent-create").open=false;
-    if(get("agent-create-summary"))get("agent-create-summary").textContent="＋ 连接 Agent";
+    if(get("agent-create-summary"))get("agent-create-summary").textContent="连接 Agent";
     if(get("collaboration-compose"))get("collaboration-compose").open=false;
   }
 
@@ -301,7 +301,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
   }
   function renderAgentForm(editAgent=null) {
     state.agentFormBuilt=true;const root=get("agent-create-content");root.replaceChildren();
-    get("agent-create-summary").textContent=editAgent ? `编辑连接 · ${editAgent.name}` : "＋ 连接 Agent";
+    get("agent-create-summary").textContent=editAgent ? `编辑连接 · ${editAgent.name}` : "连接 Agent";
     if(!canWrite())return;
     const form=node("form");form.id="agent-create-form";
     const kind=select("kind",Object.entries(AGENT_KINDS));

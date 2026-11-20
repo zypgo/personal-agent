@@ -65,13 +65,13 @@ const taskFixture = () => ({
   questions: [],
 });
 
-function setup(task = taskFixture(), {principal = "alice", role = "member", respond, href="https://example.invalid/workspace?space=space-a", confirm=()=>true} = {}) {
+function setup(task = taskFixture(), {principal = "alice", role = "member", respond, href="https://example.invalid/workspace?space=space-a", confirm=()=>true, globals = {}, documentExtras = {}} = {}) {
   const ids = new Map();
   const get = id => {
     if (!ids.has(id)) { const item = new Element("div"); item.root = true; ids.set(id, item); }
     return ids.get(id);
   };
-  const document = {createElement: tag => new Element(tag), getElementById: get, activeElement: null};
+  const document = {createElement: tag => new Element(tag), getElementById: get, activeElement: null, ...documentExtras};
   const calls = [];
   const location = {};
   const setLocation = value => {const url=new URL(value,"https://example.invalid");Object.assign(location,{href:url.href,origin:url.origin,pathname:url.pathname,search:url.search,hash:url.hash});};
@@ -91,8 +91,9 @@ function setup(task = taskFixture(), {principal = "alice", role = "member", resp
         : path === "/api/v3/tasks" ? {tasks: [task]} : path.endsWith("/task-a") ? {task} : {};
       return {ok: true, status: 200, json: async () => data};
     },
+    ...globals,
   };
-  runInNewContext(definitions + "\nglobalThis.ui={state,renderTask,loadTasks,loadMembers,editingTask,showLogin,routeFromLocation,workspaceUrl,selectTab,selectTaskView,followLocation,showPanel,loadMe,openKnowledge,closeKnowledge,loadKnowledge,bindButton};", context);
+  runInNewContext(definitions + "\nglobalThis.ui={state,renderTask,loadTasks,loadMembers,editingTask,showLogin,routeFromLocation,workspaceUrl,selectTab,selectTaskView,followLocation,showPanel,loadMe,openKnowledge,closeKnowledge,loadKnowledge,bindButton,notice};", context);
   context.ui.state.me = {principal: {id: principal, is_admin: false}, role, spaces: []};
   context.ui.state.space = "space-a"; context.ui.state.taskId = task.id; context.ui.state.taskView="computer";
   context.ui.renderTask(task);
@@ -365,4 +366,52 @@ for(const succeeds of [true,false])test(`first knowledge save ${succeeds ? "enab
   assert.equal(editor.dataset.dirty,succeeds ? undefined : "1");
   assert.equal(editor.dataset.busy,undefined);
   assert.equal(editor.elements.namedItem("text").value,"New note");
+});
+
+test("changing page cross-fades only where the browser can, and only when motion is welcome", () => {
+  const updates = [];
+  const startViewTransition = update => {
+    updates.push(update);
+    // A transition that is skipped rejects `ready`; that must never surface as an unhandled rejection.
+    return {ready: Promise.reject(new Error("skipped")), finished: Promise.resolve(), updateCallbackDone: Promise.resolve()};
+  };
+  const welcome = setup(taskFixture(), {documentExtras: {startViewTransition}, globals: {matchMedia: () => ({matches: false})}});
+  welcome.ui.state.tab = "tasks"; welcome.ui.showPanel();
+  assert.equal(updates.length, 0, "the first page appears at once; there is nothing to fade from");
+  assert.equal(welcome.get("panel-tasks").hidden, false);
+  welcome.ui.state.tab = "tasks"; welcome.ui.showPanel();
+  assert.equal(updates.length, 0, "showing the same page again is not a change");
+  welcome.ui.state.tab = "knowledge"; welcome.ui.showPanel();
+  assert.equal(updates.length, 1);
+  assert.deepEqual([welcome.get("panel-tasks").hidden, welcome.get("panel-knowledge").hidden], [false, true], "the swap happens inside the transition, not before it");
+  updates[0]();
+  assert.equal(welcome.get("panel-knowledge").hidden, false); assert.equal(welcome.get("panel-tasks").hidden, true);
+  assert.equal(welcome.context.document.title, "资料 · Personal Agent"); assert.equal(welcome.get("masthead-title").textContent, "资料");
+
+  const still = setup(taskFixture(), {documentExtras: {startViewTransition}, globals: {matchMedia: query => ({matches: query.includes("reduce")})}});
+  still.ui.state.tab = "tasks"; still.ui.showPanel();
+  still.ui.state.tab = "agents"; still.ui.showPanel();
+  assert.equal(updates.length, 1, "reduced motion never starts a transition");
+  assert.equal(still.get("panel-agents").hidden, false, "and the swap is immediate");
+
+  const plain = setup();
+  plain.ui.state.tab = "tasks"; plain.ui.showPanel(); plain.ui.state.tab = "devices"; plain.ui.showPanel();
+  assert.equal(plain.get("panel-devices").hidden, false, "a browser without transitions switches at once");
+});
+
+test("a notice that reports good news leaves by itself and one that reports a problem stays", () => {
+  const timers = [], cleared = [];
+  const globals = {setTimeout: (callback, delay) => {timers.push({callback, delay});return timers.length;}, clearTimeout: id => cleared.push(id)};
+  const {ui, get} = setup(taskFixture(), {globals});
+  ui.notice("资料已保存到当前空间。");
+  assert.equal(get("notice").textContent, "资料已保存到当前空间。"); assert.equal(get("notice").hidden, false);
+  assert.equal(timers.length, 1); assert.equal(timers[0].delay, 6000);
+  timers[0].callback();
+  assert.equal(get("notice").hidden, true, "good news goes after a moment");
+  ui.notice("内容或权限已变化。", true);
+  assert.equal(get("notice").className, "notice error"); assert.equal(timers.length, 1, "an error sets no timer");
+  timers.length = 0; cleared.length = 0;
+  ui.notice("第一条"); ui.notice("第二条");
+  assert.deepEqual(cleared.length, 2, "a newer notice cancels the older one's timer so it cannot hide the new text early");
+  assert.equal(get("notice").textContent, "第二条");
 });

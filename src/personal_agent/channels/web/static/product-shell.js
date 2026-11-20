@@ -18,16 +18,30 @@ const PATHS = {
   agents: "M9 15l6-6M8 10l-2 2a4 4 0 0 0 6 6l2-2M10 8l2-2a4 4 0 0 1 6 6l-2 2",
   spaces: "M3 7V5h7l2 2h9v13H3z",
   devices: "M3 4h14v11H3zM8 15v5M5 20h6M18 9h4v12h-7v-4",
-  settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2",
+  settings: "M4 8h9M17 8h3M4 16h3M11 16h9M15 5v6M9 13v6",
+  remind: "M6 17h12l-1.5-2v-4a4.5 4.5 0 0 0-9 0v4zM10 20a2 2 0 0 0 4 0",
+  collect: "M4 14l2-8h12l2 8M4 14v5h16v-5M4 14h5l1 2h4l1-2h5",
+  begin: "M5 21V4M5 5h12l-2 4 2 4H5",
 };
 
-// A small, original mark made from four petals; decorative in every context.
-export function createAgentMark(doc, className = "") {
+// A small, original mark made from four petals; decorative in every context. A state
+// ("idle", "busy", "attention", "offline") lets the same mark show how the assistant is doing.
+export function createAgentMark(doc, className = "", state = "") {
   const mark = doc.createElement("span");
   mark.className = `product-mark ${className}`.trim();
   mark.setAttribute("aria-hidden", "true");
+  if (state) mark.setAttribute("data-state", state);
   for (let index = 0; index < 4; index++) mark.append(doc.createElement("span"));
   return mark;
+}
+
+export function createProductIcon(doc, name) {
+  const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("class", "product-icon");
+  const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", PATHS[name] || PATHS.chat); svg.append(path);
+  return svg;
 }
 
 export function createProductShell({ document: doc = globalThis.document, content, current = "chat", resolve = path => path, onNavigate, spaceControl, onSettings }) {
@@ -38,13 +52,7 @@ export function createProductShell({ document: doc = globalThis.document, conten
     if (className) element.className = className;
     return element;
   };
-  const icon = name => {
-    const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true");
-    svg.setAttribute("class", "product-icon");
-    const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", PATHS[name]); svg.append(path); return svg;
-  };
+  const icon = name => createProductIcon(doc, name);
   const control = (label, symbol, className) => {
     const button = node("button", "", className);
     button.type = "button"; button.setAttribute("aria-label", label); button.title = label;
@@ -125,7 +133,7 @@ export function createProductShell({ document: doc = globalThis.document, conten
     if (narrow && open) { drawer.setAttribute("role", "dialog"); drawer.setAttribute("aria-modal", "true"); }
     else { drawer.removeAttribute("role"); drawer.removeAttribute("aria-modal"); }
   }
-  function setOpen(value, restore = true) {
+  function setOpen(value, restore = true, byTouch = false) {
     if (!alive) return;
     const wasOpen = open; open = Boolean(value);
     if (!narrow) {
@@ -133,7 +141,9 @@ export function createProductShell({ document: doc = globalThis.document, conten
       try { view.localStorage?.setItem("pa-navigation", open ? "expanded" : "collapsed"); } catch { /* Optional preference. */ }
     }
     paint();
-    if (narrow && open && !wasOpen) close.focus();
+    // A finger that dragged the drawer open or shut needs no focus ring to find its way back.
+    if (byTouch) return;
+    if (open && !wasOpen) close.focus();
     else if (wasOpen && !open && restore) toggle.focus();
   }
   function setActive(key) {
@@ -169,13 +179,52 @@ export function createProductShell({ document: doc = globalThis.document, conten
     narrow = Boolean(media?.matches); open = !narrow && desktopOpen; paint();
     if (!open && focusedInside) toggle.focus();
   };
+  // On a phone the drawer follows the finger: a horizontal drag anywhere (clear of horizontal
+  // scrollers and fields, and of the screen edge the browser keeps for going back) pulls it open,
+  // and a drag toward the edge pushes it shut. The release decides by position and speed.
+  const swipe = { id: null, x: 0, y: 0, t: 0, lastX: 0, lastT: 0, speed: 0, mode: "idle", width: 320 };
+  const style = (name, value) => { if (value === null) element.style?.removeProperty?.(name); else element.style?.setProperty?.(name, String(value)); };
+  const settle = value => {
+    swipe.id = null; swipe.mode = "idle";
+    delete element.dataset.dragging; style("--drawer-p", null);
+    setOpen(value, false, true);
+  };
+  const onDown = event => {
+    if (!narrow || event.pointerType !== "touch" || event.isPrimary === false || swipe.id !== null) return;
+    const target = event.target;
+    if (!open && (event.clientX < 24 || target?.closest?.("textarea,input,select,dialog,.code,.table-wrap,[data-no-swipe]"))) return;
+    Object.assign(swipe, { id: event.pointerId, x: event.clientX, y: event.clientY, t: event.timeStamp, lastX: event.clientX, lastT: event.timeStamp, speed: 0, mode: "idle", width: drawer.offsetWidth || 320 });
+  };
+  const onMove = event => {
+    if (event.pointerId !== swipe.id || swipe.mode === "ignore") return;
+    const dx = event.clientX - swipe.x, dy = event.clientY - swipe.y;
+    if (swipe.mode === "idle") {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      if (Math.abs(dy) > Math.abs(dx) * 0.7 || (open ? dx > 0 : dx < 0)) { swipe.mode = "ignore"; return; }
+      swipe.mode = "drag"; element.dataset.dragging = "true"; overlay.hidden = false;
+    }
+    const dt = event.timeStamp - swipe.lastT;
+    if (dt > 0) swipe.speed = (event.clientX - swipe.lastX) / dt;
+    swipe.lastX = event.clientX; swipe.lastT = event.timeStamp;
+    style("--drawer-p", Math.min(1, Math.max(0, (open ? 1 : 0) + dx / swipe.width)).toFixed(3));
+  };
+  const onUp = event => {
+    if (event.pointerId !== swipe.id) return;
+    if (swipe.mode !== "drag") { swipe.id = null; swipe.mode = "idle"; return; }
+    const dx = event.clientX - swipe.x, progress = Math.min(1, Math.max(0, (open ? 1 : 0) + dx / swipe.width));
+    settle(Math.abs(swipe.speed) > 0.45 ? swipe.speed > 0 : progress > 0.5);
+  };
+  const onCancel = event => { if (event.pointerId === swipe.id && swipe.mode === "drag") settle(open); else if (event.pointerId === swipe.id) { swipe.id = null; swipe.mode = "idle"; } };
   toggle.addEventListener("click", () => setOpen(!open));
   close.addEventListener("click", () => setOpen(false));
   overlay.addEventListener("click", () => setOpen(false));
   doc.addEventListener("keydown", onKey); media?.addEventListener("change", onResize);
+  const touch = [["pointerdown", onDown], ["pointermove", onMove], ["pointerup", onUp], ["pointercancel", onCancel]];
+  for (const [type, callback] of touch) doc.addEventListener(type, callback, { passive: true });
   setActive(current); paint();
   return { element, toggle, setActive, setContext, destroy() {
     alive = false; content.inert = false; doc.body.classList.remove("product-menu-open");
     doc.removeEventListener("keydown", onKey); media?.removeEventListener("change", onResize);
+    for (const [type, callback] of touch) doc.removeEventListener(type, callback);
   } };
 }

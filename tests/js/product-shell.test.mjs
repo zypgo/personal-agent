@@ -100,3 +100,66 @@ test("unavailable storage leaves navigation usable and destroy removes global li
   s.shell.destroy(); assert.equal(s.content.inert, false); assert.equal(s.listeners.size, 0); assert.equal(s.mediaListeners.size, 0);
   assert.ok(!s.document.body.className.includes("product-menu-open"));
 });
+
+test("on a wide screen the drawer takes focus when it opens and the bar's button gets it back when it closes", () => {
+  const s = setup({ stored: "collapsed" }); assert.equal(s.shell.element.dataset.drawerOpen, "false");
+  click(s.shell.toggle);
+  assert.equal(s.shell.element.dataset.drawerOpen, "true");
+  const close = elements(s.drawer).find(item => item.className === "product-drawer-close");
+  assert.equal(s.document.activeElement, close, "the bar's own button is hidden while the drawer is open, so focus must move with it");
+  click(close);
+  assert.equal(s.shell.element.dataset.drawerOpen, "false"); assert.equal(s.document.activeElement, s.shell.toggle);
+});
+
+const touch = extra => ({ pointerType: "touch", isPrimary: true, pointerId: 1, clientX: 0, clientY: 0, timeStamp: 0, target: null, ...extra });
+// A finger: down at the first point, moving through the rest, up at the last. Points are [x, y, ms].
+function swipe(s, points, extra = {}) {
+  const at = ([clientX, clientY, timeStamp]) => touch({ clientX, clientY, timeStamp, ...extra });
+  s.listeners.get("pointerdown")(at(points[0]));
+  for (const point of points.slice(1)) s.listeners.get("pointermove")(at(point));
+  s.listeners.get("pointerup")(at(points.at(-1)));
+}
+const isOpen = s => s.shell.element.dataset.drawerOpen;
+
+test("a finger pulls the drawer open or pushes it shut by how far it went, or how fast", () => {
+  const s = setup({ narrow: true });
+  swipe(s, [[100, 300, 0], [150, 302, 300], [200, 303, 600]]);
+  assert.equal(isOpen(s), "false", "a short, slow drag springs back");
+  swipe(s, [[100, 300, 0], [200, 302, 300], [300, 303, 600]]);
+  assert.equal(isOpen(s), "true", "past halfway it stays open");
+  assert.equal(s.shell.element.dataset.dragging, undefined);
+  assert.equal(s.document.activeElement, null, "a finger needs no focus ring");
+  swipe(s, [[250, 300, 0], [240, 301, 300], [230, 302, 600]]);
+  assert.equal(isOpen(s), "true", "a short drag back leaves it open");
+  swipe(s, [[250, 300, 0], [220, 301, 20], [190, 302, 40]]);
+  assert.equal(isOpen(s), "false", "a quick flick toward the edge closes it however short");
+  swipe(s, [[100, 300, 0], [130, 301, 20], [160, 302, 40]]);
+  assert.equal(isOpen(s), "true", "and a quick flick the other way opens it");
+});
+
+test("a drag that belongs to something else never moves the drawer", () => {
+  const s = setup({ narrow: true });
+  swipe(s, [[10, 300, 0], [200, 302, 100], [300, 303, 200]]);
+  assert.equal(isOpen(s), "false", "the screen edge is kept for the browser's own back gesture");
+  const field = { closest: selector => (selector.includes("textarea") ? {} : null) };
+  swipe(s, [[100, 300, 0], [200, 302, 100], [300, 303, 200]], { target: field });
+  assert.equal(isOpen(s), "false", "fields, code blocks and tables scroll sideways themselves");
+  swipe(s, [[100, 300, 0], [110, 340, 50], [120, 380, 100]]);
+  assert.equal(isOpen(s), "false", "a mostly vertical drag is the page scrolling");
+  swipe(s, [[100, 300, 0], [200, 302, 100], [300, 303, 200]], { pointerType: "mouse" });
+  swipe(s, [[100, 300, 0], [200, 302, 100], [300, 303, 200]], { isPrimary: false });
+  assert.equal(isOpen(s), "false", "only the first finger counts");
+  const desktop = setup();
+  swipe(desktop, [[100, 300, 0], [200, 302, 100], [10, 303, 200]]);
+  assert.equal(isOpen(desktop), "true", "the sidebar on a wide screen is not a gesture");
+});
+
+test("an interrupted drag leaves the drawer as it was", () => {
+  const s = setup({ narrow: true });
+  s.listeners.get("pointerdown")(touch({ clientX: 100, clientY: 300, timeStamp: 0 }));
+  s.listeners.get("pointermove")(touch({ clientX: 220, clientY: 302, timeStamp: 100 }));
+  assert.equal(s.shell.element.dataset.dragging, "true"); assert.equal(s.overlay.hidden, false);
+  s.listeners.get("pointercancel")(touch({ clientX: 220, clientY: 302, timeStamp: 120 }));
+  assert.equal(isOpen(s), "false"); assert.equal(s.shell.element.dataset.dragging, undefined);
+  s.shell.destroy(); assert.equal(s.listeners.size, 0);
+});

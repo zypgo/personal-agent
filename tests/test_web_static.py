@@ -73,6 +73,172 @@ def page_of(assets):
     return Page(assets[0]["index.html"].body.decode())
 
 
+# ---- the look is something the page promises, so it is checked like anything else -----------------
+def stylesheet(assets, name: str) -> str:
+    return assets[0][name].body.decode()
+
+
+def rgb(value: str) -> tuple[int, int, int]:
+    value = value.lstrip("#")
+    if len(value) == 3:
+        value = "".join(character * 2 for character in value)
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+
+def luminance(colour: tuple[int, int, int]) -> float:
+    def channel(level: int) -> float:
+        level /= 255
+        return level / 12.92 if level <= 0.03928 else ((level + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = (channel(level) for level in colour)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def contrast(first: tuple[int, int, int], second: tuple[int, int, int]) -> float:
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def palette(tokens: str) -> dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]]:
+    """Every colour token as (light, dark), read from the stylesheet the pages actually load."""
+    colours: dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]] = {}
+    for name, light, dark in re.findall(
+        r"--([\w-]+): light-dark\((#[0-9a-fA-F]{3,6}), (#[0-9a-fA-F]{3,6})\);", tokens
+    ):
+        colours[name] = (rgb(light), rgb(dark))
+    return colours
+
+
+READABLE_TEXT = [  # text colour, what it is set on: ordinary text needs 4.5 to 1
+    ("ink", "canvas"),
+    ("ink", "surface"),
+    ("ink", "surface-2"),
+    ("ink-2", "canvas"),
+    ("ink-2", "surface"),
+    ("ink-2", "surface-2"),
+    ("pencil", "canvas"),
+    ("pencil", "surface"),
+    ("pencil", "surface-2"),
+    ("accent", "canvas"),
+    ("accent", "surface"),
+    ("accent-ink", "accent"),
+    ("danger", "surface"),
+    ("danger", "surface-2"),
+    ("ok", "surface"),
+    ("warn", "warn-bg"),
+]
+TINTS = ["pencil", "accent", "tint-knowledge", "tint-agents", "tint-spaces", "tint-devices"]
+
+
+@pytest.mark.parametrize("theme", [0, 1], ids=["light", "dark"])
+def test_the_palette_is_readable_in_both_themes(assets, theme):
+    colours = palette(stylesheet(assets, "tokens.css"))
+    for text, ground in READABLE_TEXT:
+        ratio = contrast(colours[text][theme], colours[ground][theme])
+        assert ratio >= 4.5, f"{text} on {ground} is {ratio:.2f} to 1"
+    for ground in ("canvas", "surface", "surface-2"):  # placeholders and timestamps
+        ratio = contrast(colours["ink-3"][theme], colours[ground][theme])
+        assert ratio >= 4.0, f"ink-3 on {ground} is {ratio:.2f} to 1"
+    for tint in TINTS:  # a white (or, at night, near-black) icon on a coloured tile
+        ratio = contrast(colours["tint-ink"][theme], colours[tint][theme])
+        assert ratio >= 3.0, f"the icon on {tint} is {ratio:.2f} to 1"
+
+
+def test_a_browser_without_light_dark_gets_exactly_the_light_theme(assets):
+    tokens = stylesheet(assets, "tokens.css")
+    colours = palette(tokens)
+    plain = dict(
+        re.findall(
+            r"^  --([\w-]+): (#[0-9a-fA-F]{3,6});", tokens[: tokens.index("@supports")], re.M
+        )
+    )
+    assert plain, "the fallback palette is missing"
+    for name, (light, _dark) in colours.items():
+        if name in plain:
+            assert rgb(plain[name]) == light, (
+                f"--{name} falls back to a colour the light theme does not use"
+            )
+
+
+@pytest.mark.parametrize("theme", [0, 1], ids=["light", "dark"])
+def test_text_set_in_a_places_tint_stays_readable(assets, theme):
+    colours = palette(stylesheet(assets, "tokens.css"))
+    mixes = {
+        int(percent)
+        for name in ("workbench.css", "orchestration.css")
+        for percent in re.findall(
+            r"color-mix\(in srgb, var\(--(?:agent-)?tint\) (\d+)%, var\(--ink\)\)",
+            stylesheet(assets, name),
+        )
+    }
+    assert mixes, (
+        "titles in a place's colour are expected to be pulled toward the ink for legibility"
+    )
+    for percent in mixes:
+        weight = percent / 100
+        for tint in TINTS:
+            text = tuple(
+                round(own * weight + ink * (1 - weight))
+                for own, ink in zip(colours[tint][theme], colours["ink"][theme], strict=True)
+            )
+            for ground in ("canvas", "surface"):
+                ratio = contrast(text, colours[ground][theme])  # type: ignore[arg-type]
+                assert ratio >= 4.5, f"{tint} text at {percent}% on {ground} is {ratio:.2f} to 1"
+
+
+@pytest.mark.parametrize("name", ["index.html", "workbench.html"])
+def test_every_page_starts_from_the_shared_tokens(assets, name):
+    links = [
+        attrs["href"] or ""
+        for attrs in Page(assets[0][name].body.decode()).named("link")
+        if attrs.get("rel") == "stylesheet"
+    ]
+    assert links and links[0].split("?")[0] == "/static/tokens.css", links
+
+
+def test_motion_is_never_forced_on_people_who_asked_for_less(assets):
+    tokens = stylesheet(assets, "tokens.css")
+    reduced = re.search(
+        r"@media \(prefers-reduced-motion: reduce\) \{\s*\*,\s*\*::before,\s*\*::after \{(.*?)\}",
+        tokens,
+        re.S,
+    )
+    assert reduced, "one rule has to slow every animation and transition down for those who ask"
+    for declaration in (
+        "animation-duration: 0.001ms !important",
+        "transition-duration: 0.001ms !important",
+    ):
+        assert declaration in reduced.group(1)
+    for name, asset in assets[0].items():
+        if not name.endswith(".css"):
+            continue
+        text = asset.body.decode()
+        for match in re.finditer(r"@view-transition", text):
+            before = text[: match.start()]
+            assert "(prefers-reduced-motion: no-preference)" in before[before.rindex("@media") :], (
+                f"{name}: cross-page transitions are only for people who welcome motion"
+            )
+
+
+def test_the_narrow_drawer_keeps_horizontal_drags_for_itself(assets):
+    shell = stylesheet(assets, "product-shell.css")
+    narrow = re.sub(r"/\*.*?\*/", "", shell[shell.index("@media (max-width: 820px)") :], flags=re.S)
+    rule = re.search(r"([^{}]+)\{\s*touch-action: pan-y pinch-zoom;\s*\}", narrow)
+    assert rule, (
+        "without this the browser claims the horizontal drag and the swipe never reaches the drawer"
+    )
+    selectors = {selector.strip() for selector in rule.group(1).split(",")}
+    # Opening needs the page's own surfaces to stay with the drawer; closing needs the drawer and the
+    # veil over the page too (a swipe closed was once claimed by the browser because they were missing).
+    assert {
+        ".product-main",
+        ".log",
+        ".shell",
+        ".product-drawer",
+        ".product-drawer-overlay",
+    } <= selectors
+
+
 # ---- everything it needs is there ---------------------------------------------------------------
 def test_the_page_is_made_of_exactly_the_expected_files(assets):
     assert sorted(assets[0]) == [
@@ -98,9 +264,11 @@ def test_the_page_is_made_of_exactly_the_expected_files(assets):
         "product-shell.css",
         "product-shell.js",
         "query.js",
+        "sheet.js",
         "store.js",
         "style.css",
         "sw.js",
+        "tokens.css",
         "workbench.css",
         "workbench.html",
         "workbench.js",
@@ -259,6 +427,7 @@ FORBIDDEN_CODE = [
         "media.js",
         "product-shell.js",
         "query.js",
+        "sheet.js",
         "store.js",
         "sw.js",
         "workbench.js",
@@ -407,6 +576,7 @@ needs_node = pytest.mark.skipif(
         "md.js",
         "media.js",
         "product-shell.js",
+        "sheet.js",
         "store.js",
         "sw.js",
     ],

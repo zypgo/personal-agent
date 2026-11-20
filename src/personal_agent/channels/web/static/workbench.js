@@ -41,10 +41,14 @@ function node(tag, text = "", className = "") {
   if (className) result.className = className;
   return result;
 }
+let noticeTimer = 0;
 function notice(text, error = false) {
+  if(typeof clearTimeout === "function") clearTimeout(noticeTimer);
   $("notice").textContent = text;
   $("notice").className = error ? "notice error" : "notice";
   $("notice").hidden = !text;
+  // Good news says its piece and leaves; anything that went wrong stays until it is dealt with.
+  if(text && !error && typeof setTimeout === "function") noticeTimer = setTimeout(() => notice(""), 6000);
 }
 function readable(error) {
   if(error?.status === 0 || error instanceof TypeError) return "暂未收到服务器确认。请先刷新查看结果，再决定是否重试。";
@@ -102,18 +106,30 @@ function updateRoute(mode="replace") {
   else history.replaceState(null,"",path);
 }
 function hasDrafts(except=null) { return [...$("workspace").querySelectorAll('form[data-dirty="1"],form[data-busy="1"]')].some(item=>item!==except); }
+let shownPanel="";
 function showPanel({focus=false}={}) {
-  for(const name of Object.keys(WORKSPACE_TABS)) $("panel-" + name).hidden=name!==state.tab;
-  for(const name of ["collaboration","computer"]) {
-    const active=state.taskView===name;
-    $(name + "-tasks").hidden=!active;
-    $("task-view-" + name).classList.toggle("selected",active);
-    $("task-view-" + name).setAttribute("aria-pressed",String(active));
-  }
-  $("tasks-intro").textContent=state.taskView==="collaboration" ? "把目标交给助手，进度与成果都在这里。" : "安排电脑处理具体操作，核对计划后再开始。";
-  document.title=`${WORKSPACE_TABS[state.tab]} · Personal Agent`;
-  productShell?.setActive(state.tab);
-  if(focus) $("panel-" + state.tab).querySelector("h1")?.focus({preventScroll:true});
+  const apply=()=>{
+    for(const name of Object.keys(WORKSPACE_TABS)) $("panel-" + name).hidden=name!==state.tab;
+    for(const name of ["collaboration","computer"]) {
+      const active=state.taskView===name;
+      $(name + "-tasks").hidden=!active;
+      $("task-view-" + name).classList.toggle("selected",active);
+      $("task-view-" + name).setAttribute("aria-pressed",String(active));
+    }
+    $("tasks-intro").textContent=state.taskView==="collaboration" ? "把目标交给助手，进度与成果都在这里。" : "安排电脑处理具体操作，核对计划后再开始。";
+    document.title=`${WORKSPACE_TABS[state.tab]} · Personal Agent`;
+    $("masthead-title").textContent=WORKSPACE_TABS[state.tab];
+    productShell?.setActive(state.tab);
+    if(focus) $("panel-" + state.tab).querySelector("h1")?.focus({preventScroll:true});
+  };
+  // Changing page cross-fades where the browser can do it; everywhere else, and for people who
+  // asked for less motion, the switch is immediate exactly as before.
+  const key=state.tab + ":" + (state.tab==="tasks" ? state.taskView : "");
+  const animate=shownPanel && shownPanel!==key && typeof document.startViewTransition==="function" && !(typeof matchMedia==="function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
+  shownPanel=key;
+  if(!animate) {apply();return;}
+  const transition=document.startViewTransition(apply);
+  for(const name of ["ready","finished","updateCallbackDone"]) transition?.[name]?.catch?.(()=>{});
 }
 const requests = new RequestScope({
   resolve: scopedUrl,
@@ -811,8 +827,12 @@ setInterval(()=>{if(!state.me || document.hidden || refreshing || !["tasks","age
 productShell=createProductShell({document,content:document.querySelector(".shell"),current:state.tab,resolve:scopedUrl,onNavigate:tab=>run(()=>selectTab(tab)),spaceControl:$("space-select")});
 document.querySelector(".masthead").prepend(productShell.toggle);
 $("space-control-source").remove();
+$("notice").addEventListener("click",()=>notice(""));
 window.addEventListener("popstate",()=>run(followLocation));
 window.addEventListener("beforeunload",event=>{if(hasDrafts()){event.preventDefault();event.returnValue="";}});
 for(const id of ["task-form","space-form","invite-form","device-pair-form","node-invite-form"]) form(id).addEventListener("input",()=>{form(id).dataset.dirty="1";});
 showPanel();
+const syncScrolled=()=>{const scrolled=String(window.scrollY>64);if(document.documentElement.dataset.scrolled!==scrolled) document.documentElement.dataset.scrolled=scrolled;};
+window.addEventListener("scroll",syncScrolled,{passive:true});
+syncScrolled();
 run(openWorkspace);

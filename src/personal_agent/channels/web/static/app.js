@@ -9,7 +9,7 @@
 import { Live, api, artifactBlob, scopedArtifactBlob, agentSetupBlob, scopedURL, invalidateRequests, setRequestContext, onAccessLost } from "./api.js";
 import { createAssistantCards, createAssistantWelcome } from "./assistant.js";
 import { createAgentMark, createProductShell } from "./product-shell.js";
-import { activityLabel, connectionLabel } from "./activity.js";
+import { activityLabel, connectionLabel, toolLabel, toolProgress } from "./activity.js";
 import { audioDuration } from "./audio-metadata.js";
 import {
   clockTime,
@@ -23,6 +23,7 @@ import {
 } from "./format.js";
 import { canRecord, record, shrinkImage } from "./media.js";
 import { renderMarkdown } from "./md.js";
+import { presentSheet, dismissSheet } from "./sheet.js";
 import { Store } from "./store.js";
 
 const PAGE_VERSION = new URL(import.meta.url).searchParams.get("v") ?? "";
@@ -38,6 +39,8 @@ let live = null;
 let ui = null; // the chat's elements, once it is built
 let unread = 0;
 let pinned = true; // the log was at its end the last time it moved
+let settled = false; // the first screenful of history is on the page: from here on, new things arrive with a flourish
+const entered = new Set(); // keys of nodes that have already made their entrance
 const rendered = new Map(); // key -> { node, signature }
 const nowSeconds = () => Date.now() / 1000;
 onAccessLost(() => { if (ui) signedOut(); });
@@ -70,6 +73,7 @@ const ICONS = {
   more: "M5 12h.01M12 12h.01M19 12h.01",
   down: "M12 5v14M5 12l7 7 7-7",
   check: "M5 12.5l4.5 4.5L19 7",
+  lock: "M7.5 11V8a4.5 4.5 0 0 1 9 0v3M6 11h12v9H6z",
 };
 
 function icon(name) {
@@ -89,9 +93,26 @@ function iconButton(name, label, onclick, extra = "") {
 
 function toast(message, { error = false } = {}) {
   if (!ui) return;
+  const view = ui;
   const node = h("div", { class: `toast${error ? " error" : ""}`, role: error ? "alert" : "status", text: message });
-  ui.toasts.append(node);
-  setTimeout(() => node.remove(), error ? 7000 : 3500);
+  const leave = () => {
+    if (node.dataset.leaving) return;
+    node.dataset.leaving = "true";
+    node.className = `${node.className} leaving`;
+    setTimeout(() => node.remove(), 280);
+  };
+  node.addEventListener("click", leave);
+  // Three at once is already too many to read: the oldest makes way.
+  while (view.toasts.children.length >= 3) view.toasts.children[0].remove();
+  view.toasts.append(node);
+  setTimeout(leave, error ? 7000 : 3500);
+}
+
+/** True the first time a node is asked, once the opening screenful is on the page. */
+function entrance(key) {
+  if (!settled || entered.has(key)) return false;
+  entered.add(key);
+  return true;
 }
 
 function reducedMotion() {
@@ -111,7 +132,7 @@ function applyTheme(value) {
   const dark = value === "dark" || (value === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
   for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
     if (!meta.dataset.original) meta.dataset.original = meta.content;
-    meta.content = value === "auto" ? meta.dataset.original : dark ? "#18221f" : "#f6f5f1";
+    meta.content = value === "auto" ? meta.dataset.original : dark ? "#111614" : "#f5f4ef";
   }
 }
 
@@ -189,7 +210,7 @@ function showPairing(problem = "") {
     h(
       "main",
       { class: "pair" },
-      createAgentMark(document, "pair-brand-mark"),
+      createAgentMark(document, "pair-brand-mark", "idle"),
       h("p", { class: "assistant-eyebrow", text: "Personal Agent" }),
       h("h1", { text: "把日常，交给你的助理。" }),
       h("p", { class: "lede", text: "聊天、整理资料、安排提醒，也把需要执行的事交办好。连接账号，从这里继续。" }),
@@ -219,7 +240,7 @@ function showOffline(message) {
     h(
       "main",
       { class: "pair" },
-      createAgentMark(document, "pair-brand-mark offline"),
+      createAgentMark(document, "pair-brand-mark", "offline"),
       h("h1", { text: document.title || "Agent" }),
       h("p", { class: "lede", text: message }),
       h("button", { type: "button", class: "primary", text: "重新连接", onclick: () => start() }),
@@ -239,6 +260,7 @@ function teardownChat() {
   ui?.cards?.destroy();
   ui?.composer?.destroy();
   ui?.resizeObserver?.disconnect();
+  ui?.frameObserver?.disconnect();
   ui?.viewportCleanup?.();
   // These overlays live outside #app. A revoked session must not leave old task or image
   // content visible above the sign-in screen, even if a request is still settling.
@@ -253,6 +275,8 @@ function teardownChat() {
   live = null;
   ui = null;
   rendered.clear();
+  entered.clear();
+  settled = false;
   store.turns.clear();
   store.order = [];
   store.pending = [];
@@ -282,6 +306,7 @@ async function showChat(notice) {
   renderLog();
   if (store.timeline.length) scrollToBottom(false);
   else ui.log.scrollTo({ top: 0, behavior: "auto" });
+  settled = true;
   const view = ui;
   void ui.cards.refresh().then(() => { if (ui === view && location.hash === "#assistant-inbox") ui.cards.focus(); });
   void loadAssistantSpaces();
@@ -302,6 +327,7 @@ async function showChat(notice) {
       const stick = nearBottom();
       store.replaceDrafts(data.drafts);
       renderLog();
+      renderStatus();
       if (stick) scrollToBottom(false);
     },
     onAssistantChanged: () => ui?.cards?.refresh(),
@@ -321,11 +347,12 @@ function buildChat() {
   const banner = h("div", { class: "banner", role: "status", hidden: true });
   const update = h("button", { type: "button", class: "update", hidden: true, text: "有新版本可用，点击更新。", onclick: () => location.reload() });
   const loadMore = h("button", { type: "button", class: "earlier", hidden: true, text: "查看更早的对话", onclick: loadEarlier });
-  const working = h("div", { class: "working", hidden: true, "aria-hidden": "true" }, h("span", { class: "pen" }), h("span", { class: "working-text" }));
+  const working = h("div", { class: "working", hidden: true, "aria-hidden": "true" }, createAgentMark(document, "", "busy"), h("span", { class: "working-text" }));
   const log = h("main", { class: "log", id: "log", role: "log", "aria-live": "polite", "aria-label": "个人助理对话", tabindex: "-1" }, loadMore, working);
   const jump = h("button", { type: "button", class: "jump", hidden: true, onclick: () => scrollToBottom(true) }, icon("down"), h("span", { class: "jump-count" }));
   const toasts = h("div", { class: "toasts" });
-  ui = { name, lamp, state, waiting, banner, update, log, loadMore, working, jump, toasts, composer: buildComposer() };
+  const mark = createAgentMark(document, "chat-brand-mark", "idle");
+  ui = { name, lamp, state, mark, waiting, banner, update, log, loadMore, working, jump, toasts, composer: buildComposer() };
   ui.welcome = createAssistantWelcome({ document, onPrompt: setAssistantPrompt });
   ui.cardCount = 0;
   ui.cards = createAssistantCards({
@@ -365,8 +392,22 @@ function buildChat() {
     ui.resizeObserver = new ResizeObserver(() => ui === view && pinned && scrollToBottom(false));
     ui.resizeObserver.observe(ui.log);
   }
-  const header = h("header", { class: "bar" }, createAgentMark(document, "chat-brand-mark"), h("div", { class: "who" }, name, h("span", { class: "chat-presence" }, lamp, state)), waiting, menu);
+  const header = h("header", { class: "bar" }, h("div", { class: "who" }, mark, h("div", { class: "who-copy" }, name, h("span", { class: "chat-presence" }, lamp, state))), h("div", { class: "bar-actions" }, waiting, menu));
   ui.page = h("div", { class: "chat" }, header, banner, update, h("div", { class: "stage" }, log, jump), toasts, ui.composer.element);
+  // The header and the composer float over the log, which leaves room for exactly their height:
+  // as a note appears, a second line is typed or the phone's safe area changes, the room follows.
+  if (typeof ResizeObserver === "function") {
+    const view = ui, page = ui.page, composer = ui.composer.element;
+    const measure = () => {
+      if (ui !== view) return;
+      page.style.setProperty("--bar-h", `${header.offsetHeight}px`);
+      page.style.setProperty("--composer-h", `${composer.offsetHeight}px`);
+      if (pinned) scrollToBottom(false);
+    };
+    ui.frameObserver = new ResizeObserver(measure);
+    ui.frameObserver.observe(header);
+    ui.frameObserver.observe(composer);
+  }
   ui.shell = createProductShell({ document, content: ui.page, current: "chat", resolve: scopedURL, spaceControl: ui.spaceSelect, onSettings: openSettings });
   header.prepend(ui.shell.toggle);
   root.replaceChildren(ui.shell.element);
@@ -441,14 +482,18 @@ function onStreamState(state) {
 function renderStatus() {
   if (!ui) return;
   const offline = Boolean(live) && live.state === "down";
-  ui.lamp.className = `lamp ${offline ? "down" : store.working ? "on" : "idle"}`;
-  ui.state.textContent = offline ? "连接中…" : store.working ? "正在处理" : "随时可以开始";
-  const appearing = ui.working.hidden && store.working;
-  const stick = appearing && nearBottom(); // the indicator is the newest line: keep it in view
-  ui.working.hidden = !store.working;
-  ui.working.querySelector(".working-text").textContent = "正在为你处理…";
-  if (stick) scrollToBottom(!document.hidden);
   const waiting = store.waiting.length + (ui.cardCount || 0);
+  // Once words are arriving they are the sign of life; the capsule would only say it twice.
+  const streaming = store.working && [...store.drafts.values()].some((draft) => draft.text);
+  ui.lamp.className = `lamp ${offline ? "down" : store.working ? "on" : "idle"}`;
+  ui.state.textContent = offline ? "连接中…" : streaming ? "正在回复…" : store.working ? toolProgress(store.tool) : store.waiting.length ? "等你确认" : "随时可以开始";
+  ui.mark.setAttribute("data-state", offline ? "offline" : store.working ? "busy" : waiting ? "attention" : "idle");
+  const showCapsule = store.working && !streaming;
+  const appearing = ui.working.hidden && showCapsule;
+  const stick = appearing && nearBottom(); // the indicator is the newest line: keep it in view
+  ui.working.hidden = !showCapsule;
+  ui.working.querySelector(".working-text").textContent = toolProgress(store.tool);
+  if (stick) scrollToBottom(!document.hidden);
   ui.waiting.hidden = waiting === 0;
   ui.waiting.textContent = `${waiting} 项待处理`;
   renderChatLayout();
@@ -480,12 +525,14 @@ function scrollToBottom(smooth) {
 function bumpJump() {
   const count = Number(ui.jump.dataset.count ?? 0) + 1;
   ui.jump.dataset.count = String(count);
-  ui.jump.querySelector(".jump-count").textContent = count > 1 ? `${count} new` : "New";
+  ui.jump.querySelector(".jump-count").textContent = count > 1 ? `${count} 条新消息` : "新消息";
   ui.jump.hidden = false;
 }
 
 function onScroll() {
   pinned = nearBottom();
+  const moved = ui.log.scrollTop > 6;
+  if ((ui.page.dataset.scrolled === "true") !== moved) ui.page.dataset.scrolled = String(moved);
   if (pinned) {
     ui.jump.hidden = true;
     ui.jump.dataset.count = "0";
@@ -502,7 +549,10 @@ async function loadEarlier() {
     const before = ui.log.scrollHeight;
     const top = ui.log.scrollTop;
     store.addTurns(page.turns);
+    const wasSettled = settled;
+    settled = false;
     renderLog();
+    settled = wasSettled;
     ui.log.scrollTop = top + (ui.log.scrollHeight - before); // keep what the owner was reading in place
   } catch (error) {
     if (error?.name === "AbortError") return;
@@ -538,7 +588,7 @@ function renderLog() {
   for (const draft of store.drafts.values()) {
     if (!draft.text) continue;
     const key = `draft:${draft.run_id}`;
-    wanted.push(cached(key, `${draft.sequence}|${draft.text}`, () => draftNode(draft)));
+    wanted.push(draftView(key, draft));
     seen.add(key);
   }
   if (!wanted.length && ui.welcome) wanted.push(ui.welcome);
@@ -570,11 +620,29 @@ function daySeparator(at) {
   return h("div", { class: "day", role: "separator" }, h("span", { text: dayLabel(at, nowSeconds()) }));
 }
 
-function draftNode(draft) {
-  return h("article", { class: "turn agent streaming", "aria-busy": "true" },
-    h("div", { class: "speaker", text: session.agent }),
-    h("div", { class: "body" }, h("p", { class: "words", text: draft.text })),
-    h("div", { class: "meta" }, h("span", { class: "tag", text: draft.truncated ? "正在整理完整回复…" : "正在回复…" })),
+// A reply being written keeps one node for its whole life and is typeset again as words arrive:
+// it is never plain text that suddenly turns into a document, never replays its entrance, and
+// never loses a selection or a scroll position because a new word came in.
+function draftView(key, draft) {
+  let known = rendered.get(key);
+  if (!known) {
+    known = { node: draftNode(entrance(key)), signature: "" };
+    rendered.set(key, known);
+  }
+  const signature = `${draft.sequence}|${draft.text.length}|${draft.truncated ? 1 : 0}`;
+  if (known.signature !== signature) {
+    known.signature = signature;
+    known.node.querySelector(".body").replaceChildren(renderMarkdown(document, draft.text));
+    known.node.querySelector(".tag").textContent = draft.truncated ? "正在整理完整回复…" : "正在回复…";
+  }
+  return known.node;
+}
+
+function draftNode(fresh) {
+  return h("article", { class: `turn agent streaming${fresh ? " fresh" : ""}`, "aria-busy": "true" },
+    h("div", { class: "speaker" }, createAgentMark(document, "", "busy"), session.agent),
+    h("div", { class: "body" }),
+    h("div", { class: "meta" }, h("span", { class: "tag" })),
   );
 }
 
@@ -584,14 +652,18 @@ const pendingSignature = (p) => `${p.state}|${p.error ?? ""}`;
 
 function turnNode(turn, previous) {
   const mine = turn.direction === "in";
-  const node = h("article", { class: `turn ${mine ? "mine" : "agent"}`, dataset: { id: String(turn.id), kind: turn.kind } });
-  if (!mine && (!previous || previous.direction === "in")) node.append(h("div", { class: "speaker", text: session.agent }));
+  // What I send already made its entrance as a pending bubble; only the answer arrives anew.
+  const fresh = !mine && entrance(`t${turn.id}`);
+  const node = h("article", { class: `turn ${mine ? "mine" : "agent"}${fresh ? " fresh" : ""}`, dataset: { id: String(turn.id), kind: turn.kind } });
+  if (!mine && (!previous || previous.direction === "in")) node.append(h("div", { class: "speaker" }, createAgentMark(document), session.agent));
   const body = h("div", { class: "body" });
   const pictures = (turn.meta?.attachments ?? []).filter((a) => a.kind === "image" && /^[0-9a-f]{64}$/.test(a.id));
   if (pictures.length) body.append(h("div", { class: `pictures n${Math.min(pictures.length, 4)}` }, pictures.map((a) => pictureNode(a.id))));
   if (mine) {
     if (turn.text) body.append(h("p", { class: turn.text.startsWith("/") ? "words command" : "words", text: turn.text }));
-  } else {
+  } else if (!(turn.kind === "approval_request" && (turn.approvals ?? []).length)) {
+    // An approval's text is the fallback for chat apps that cannot show buttons ("Reply /approve 1").
+    // Here the card below carries the same request with the buttons themselves.
     body.append(renderMarkdown(document, turn.text));
   }
   if (!mine && Array.isArray(turn.meta?.artifacts)) {
@@ -657,7 +729,7 @@ function metaLine(turn) {
 
 function pendingNode(p) {
   const words = p.voice ? "Voice message · transcribing…" : p.text;
-  const node = h("article", { class: `turn mine pending ${p.state}`, dataset: { client: p.clientId } });
+  const node = h("article", { class: `turn mine pending ${p.state}${entrance(`p${p.clientId}`) ? " fresh" : ""}`, dataset: { client: p.clientId } });
   const body = h("div", { class: "body" });
   if (p.files.length) {
     body.append(
@@ -699,15 +771,18 @@ function releasePreviews(files) {
 function approvalNode(snapshot) {
   const approval = store.approval(snapshot);
   const card = h("section", { class: `approval ${approval.status}`, dataset: { approval: String(approval.id) } });
-  card.append(
-    h("div", { class: "approval-head" }, h("span", { class: "tool", text: approval.tool }), h("span", { class: "ticket", text: `#${approval.id}` })),
-    h("pre", { class: "approval-summary", text: approval.summary }),
-  );
+  const action = h("div", { class: "tool", title: approval.tool, text: toolLabel(approval.tool) });
+  const summary = h("pre", { class: "approval-summary", text: approval.summary });
   if (approval.status !== "pending") {
-    const label = { approved: "已允许", denied: "未允许", expired: "已过期" }[approval.status] ?? approval.status;
-    card.append(h("div", { class: "stamp", text: label }));
+    const label = { approved: "已允许", denied: "未允许", expired: "已过期", superseded: "已被新消息取代" }[approval.status] ?? approval.status;
+    card.append(h("div", { class: "approval-head" }, action, h("span", { class: "stamp", text: label })), summary);
     return card;
   }
+  card.append(
+    h("div", { class: "approval-head" }, h("span", { class: "approval-kind" }, icon("lock"), "需要你确认"), h("span", { class: "ticket", text: `#${approval.id}` })),
+    action,
+    summary,
+  );
   const note = h("input", { type: "text", class: "note", placeholder: "告诉助理原因（可选）", "aria-label": "不允许的原因", maxlength: "300", hidden: true });
   const allow = h("button", { type: "button", class: "primary allow", text: "允许执行", onclick: () => decide(approval, "approve", card) });
   const decline = h("button", { type: "button", class: "decline", text: "不允许", onclick: () => {
@@ -791,13 +866,9 @@ async function copyText(text, button) {
 }
 
 function openPicture(id) {
-  const dialog = h("dialog", { class: "lightbox", "aria-label": "查看图片" }, h("img", { src: scopedURL(`/api/media/${id}`), alt: "对话中的图片" }), iconButton("close", "关闭", () => dialog.close(), "close"));
-  dialog.addEventListener("click", (event) => {
-    if (event.target === dialog) dialog.close();
-  });
+  const dialog = h("dialog", { class: "lightbox", "aria-label": "查看图片" }, h("img", { src: scopedURL(`/api/media/${id}`), alt: "对话中的图片" }), iconButton("close", "关闭", () => dismissSheet(dialog), "close"));
   dialog.addEventListener("close", () => dialog.remove());
-  document.body.append(dialog);
-  dialog.showModal();
+  presentSheet(dialog, { document });
 }
 
 // ---- the composer ---------------------------------------------------------------------------
@@ -822,10 +893,12 @@ function buildComposer() {
   const mic = features.voice && canRecord() ? iconButton("mic", "录制语音", () => startVoice(), "mic") : null;
   const voicePicker = h("input", { type: "file", accept: "audio/*", hidden: true });
   const audio = features.voice && !canRecord() ? iconButton("mic", "发送语音文件", () => voicePicker.click(), "mic") : null;
-  const tools = h("div", { class: "composer-tools" }, attach, h("span", { class: "composer-prompt", text: "Enter 发送 · Shift + Enter 换行" }), mic, audio, send);
-  const row = h("div", { class: "row" }, input, tools);
+  // Writing and sending sit on one line, like a message: the microphone becomes the send
+  // button the moment there is something to send, and back again when the field is empty.
+  const actions = h("div", { class: "row-actions" }, mic, audio, send);
+  const row = h("div", { class: "row" }, attach, input, actions);
   const recording = h("div", { class: "recording", hidden: true });
-  const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker, voicePicker, h("p", { class: "composer-note", text: "先聊想法，再做决定。需要确认时，我会等你。" }));
+  const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker, voicePicker, h("p", { class: "composer-note" }, "先聊想法，再做决定。需要确认时，我会等你。", h("span", { class: "keys", text: "按 Enter 发送，Shift + Enter 换行。" })));
   const composer = { element, input, files, chips, hints, send, mic, row, recording, picker, voice: null, voiceStarting: false, pendingImages: 0, pendingAudio: 0, disposed: false };
   const current = () => !composer.disposed && ui?.composer === composer;
 
@@ -1155,6 +1228,9 @@ async function openSettings() {
       button.className = selectedTheme === value ? "on" : "";
       button.setAttribute("aria-pressed", String(selectedTheme === value));
     }
+    // The thumb under the selected word glides to it (see .segments in style.css).
+    choice.style.setProperty?.("--i", String(THEMES.indexOf(selectedTheme)));
+    choice.style.setProperty?.("--n", String(THEMES.length));
   };
   for (const value of THEMES) {
     const button = h("button", { type: "button", text: { auto: "跟随系统", light: "浅色", dark: "深色" }[value], onclick: () => {
@@ -1170,37 +1246,40 @@ async function openSettings() {
   const ios = /iPhone|iPad/.test(navigator.userAgent);
   const installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   if (ios && !installed) hints.push("在分享菜单中选择「添加到主屏幕」，可像 App 一样打开。首次从主屏幕进入时，需要重新配对。");
+  const grabber = h("div", { class: "sheet-grabber", "aria-hidden": "true" });
+  const head = h("header", {}, h("h2", { text: "偏好与设置" }), iconButton("close", "关闭", () => dismissSheet(dialog), "close"));
+  // Each topic is a titled group: one rounded surface, a hairline between its rows.
+  const section = (title, ...rows) => h("section", {}, h("h3", { text: title }), h("div", { class: "group" }, ...rows));
   const dialog = h(
     "dialog",
     { class: "sheet", "aria-label": "偏好与设置" },
-    h("header", {}, h("h2", { text: "偏好与设置" }), iconButton("close", "关闭", () => dialog.close(), "close")),
-    h("section", {}, h("h3", { text: "外观" }), choice),
-    h("section", {}, h("h3", { text: "最近的任务" }), activity, h("button", { type: "button", text: "刷新进展", onclick: refreshStatus })),
-    h("section", {}, h("h3", { text: "当前状态" }), status, connection, h("button", { type: "button", text: "查询完整状态", onclick: () => { dialog.close(); if (ui?.composer.input.value.trim()) toast("请先发送当前消息，再输入 /status 查看完整状态。"); else setAssistantPrompt("/status"); } })),
+    grabber,
+    head,
     h(
-      "section",
-      {},
-      h("h3", { text: "当前设备" }),
-      h("p", { class: "about", text: session.label || "此浏览器" }),
-      h("a", { href: scopedURL("/workspace?tab=devices"), class: "settings-link", text: "管理我的设备与账号" }),
-      h("button", { type: "button", class: "danger", text: "退出当前设备", onclick: async () => {
-        dialog.close();
-        signedOut();
-        try {
-          await api("/api/logout", { method: "POST" });
-        } catch (error) {
-          if (error.status !== 401) showPairing("本页内容已清空，但退出尚未确认。请恢复网络后再次退出。");
-        }
-      } }),
+      "div",
+      { class: "sheet-body" },
+      section("外观", choice),
+      section("最近的任务", activity, h("button", { type: "button", text: "刷新进展", onclick: refreshStatus })),
+      section("当前状态", status, connection, h("button", { type: "button", text: "查询完整状态", onclick: () => { dialog.close(); if (ui?.composer.input.value.trim()) toast("请先发送当前消息，再输入 /status 查看完整状态。"); else setAssistantPrompt("/status"); } })),
+      section(
+        "当前设备",
+        h("p", { class: "about", text: session.label || "此浏览器" }),
+        h("a", { href: scopedURL("/workspace?tab=devices"), class: "settings-link", text: "管理我的设备与账号" }),
+        h("button", { type: "button", class: "danger", text: "退出当前设备", onclick: async () => {
+          dialog.close();
+          signedOut();
+          try {
+            await api("/api/logout", { method: "POST" });
+          } catch (error) {
+            if (error.status !== 401) showPairing("本页内容已清空，但退出尚未确认。请恢复网络后再次退出。");
+          }
+        } }),
+      ),
+      hints.length ? section("使用提示", hints.map((hint) => h("p", { class: "about", text: hint }))) : null,
     ),
-    hints.length ? h("section", {}, h("h3", { text: "使用提示" }), hints.map((hint) => h("p", { class: "about", text: hint }))) : null,
   );
-  dialog.addEventListener("click", (event) => {
-    if (event.target === dialog) dialog.close();
-  });
   dialog.addEventListener("close", () => dialog.remove());
-  document.body.append(dialog);
-  dialog.showModal();
+  presentSheet(dialog, { document, handles: [grabber, head] });
   await refreshStatus();
 }
 

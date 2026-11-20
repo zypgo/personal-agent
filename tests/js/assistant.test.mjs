@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FakeElement, elements, find, toHtml } from "./fake_dom.mjs";
-import { createAssistantCards, createAssistantWelcome, nativeCardRequest, workspaceRequest } from "../../src/personal_agent/channels/web/static/assistant.js";
+import { createAssistantCards, createAssistantWelcome, greeting, nativeCardRequest, workspaceRequest } from "../../src/personal_agent/channels/web/static/assistant.js";
 
 class Element extends FakeElement {
   constructor(tag) { super(tag); this.value = ""; this.disabled = false; this.checked = false; this.hidden = false; this.dataset = {}; }
@@ -24,6 +24,7 @@ class Element extends FakeElement {
 const documentFixture = () => {
   const doc = { hidden: false, activeElement: null };
   doc.createElement = tag => { const element = new Element(tag); element.ownerDocument = doc; return element; };
+  doc.createElementNS = (_namespace, tag) => doc.createElement(tag);
   doc.body = doc.createElement("body"); return doc;
 };
 const button = (root, label) => find(root, "button").find(item => item.textContent === label);
@@ -71,6 +72,14 @@ test("welcome shortcuts prepare messages without sending or creating work", asyn
   await click(find(welcome, "button")[0]);
   assert.deepEqual(prompts, ["帮我看看现在有哪些需要我处理的事情。"]);
   assert.equal(find(welcome, "button").length, 4);
+});
+
+test("the welcome greets by the hour it is opened and never invents one", () => {
+  const at = hour => createAssistantWelcome({ document: documentFixture(), onPrompt() {}, now: () => ({ getHours: () => hour }) });
+  const eyebrow = welcome => find(welcome, "p").find(item => item.className === "assistant-eyebrow").textContent;
+  assert.deepEqual([0, 4, 5, 10, 11, 12, 13, 17, 18, 23].map(hour => eyebrow(at(hour))),
+    ["夜深了", "夜深了", "早上好", "早上好", "中午好", "中午好", "下午好", "下午好", "晚上好", "晚上好"]);
+  for (const odd of [-1, 24, 7.5, NaN, undefined, "9"]) assert.equal(greeting(odd), "你好");
 });
 
 test("native decisions keep the reviewed revision, hash, attempt and cross-space review route", () => {
