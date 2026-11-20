@@ -1,5 +1,67 @@
 # personal-agent
 
+**把对话、后台任务和多个 AI 执行端，放进一个个人工作台。**
+
+Personal Agent 是面向个人与少量可信协作者的**自托管 AI 工作台**。你可以从手机或电脑提出需求、查看进度、补充信息、审批关键动作并收取成果；它保留你的偏好、资料和任务进度，把日常助理、持续跟进和多 Agent 协作连接起来。
+
+## 能帮你做什么
+
+| 使用场景 | 你可以怎样使用 |
+| --- | --- |
+| **日常助理与持续跟进** | 通过对话整理信息、查找已有记忆与资料，设置简报和提醒，接收 GitHub 等外部事件的处理结果。 |
+| **手机远程派活** | 发起任务，在工作台查看状态、回答补充问题和审批操作；需要电脑执行的任务，交给已授权的自有节点。 |
+| **多个 Agent 接力** | 让已接入的 Agent 分别研究、整理或处理代码，安排并行或先后关系；确认计划后派发，验收前一步成果后再推进下一步。 |
+| **可信小团队协作** | 将私人空间与共同项目分开，按成员角色共享资料、对话、任务和成果。 |
+
+一次工作的基本流程是：**提出目标 → 确认所需授权 → 跟进执行、补充信息 → 收取成果**。多 Agent 协作还会在步骤之间加入人工验收。
+
+## 产品架构
+
+```mermaid
+flowchart TB
+    subgraph ENTRY["需求与触发"]
+        WEB["手机 / 电脑工作台"]
+        CHAT["Telegram / 钉钉 / CLI"]
+        TRIGGER["定时任务 / 外部事件"]
+    end
+
+    subgraph WORKBENCH["Personal Agent 工作台"]
+        TASKS["对话与任务中心"]
+        CONTEXT["偏好、记忆与项目资料"]
+        CONTROL["权限、审批与进度管理"]
+        TASKS <--> CONTEXT
+        TASKS --> CONTROL
+    end
+
+    subgraph EXECUTION["按任务选择执行方式"]
+        ASSISTANT["内置助理与工具"]
+        NODE["自有电脑执行节点"]
+        AGENTS["已接入的多个 Agent"]
+    end
+
+    DELIVERY["答复、文件与待验收成果"]
+
+    WEB --> TASKS
+    CHAT --> TASKS
+    TRIGGER --> TASKS
+    CONTROL --> ASSISTANT
+    CONTROL --> NODE
+    CONTROL --> AGENTS
+    ASSISTANT --> DELIVERY
+    NODE --> DELIVERY
+    AGENTS --> DELIVERY
+```
+
+- **内置助理**：使用你配置的模型，调用搜索、文件、Skills 和 MCP 等已启用能力，处理对话与后台任务。
+- **自有执行节点**：在自己的电脑上运行获批的命令任务；设备离线时，任务等待上线。
+- **多 Agent 协作**：连接 Grok Bot、Muse，以及通过自有 Host 接入的 Codex、Cursor 或独立 Personal Agent；统一管理计划、进度和成果验收。
+
+**使用前提：**需要自行部署，并配置所用的模型服务、聊天渠道和 Agent 账号。Grok 的自动唤醒需要配置 Routine；Muse 的自动触发取决于原生账号能力。网页打开时实时更新，主动消息通知需配置 Telegram 或钉钉。
+
+[快速开始](#快速开始) · [手机与浏览器接入](docs/MOBILE.md) · [多 Agent 协作](docs/MULTI_AGENT.md) · [个人与团队空间](docs/COLLABORATION.md)
+
+## 技术基础
+
 一个**面向个人与可信小团队的常驻 Agent**：控制端可运行在自有主机或现有 Railway，代码任务由自有电脑执行。
 
 - **模型**：默认 OpenAI；支持兼容端点、自定义密钥变量，以及独立的语音转写服务。托管搜索按 Provider 能力启用。
