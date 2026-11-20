@@ -9,9 +9,9 @@ retry away: the report says which check failed and what the agent said.
 from __future__ import annotations
 
 import pytest
-from dotenv import dotenv_values
 from livehelp import LIVE_HOME, live_config, record_spend
 
+from live_credentials import live_key
 from personal_agent.evals.runner import run_live
 from personal_agent.evals.spec import load_catalog
 
@@ -20,9 +20,10 @@ SCENARIOS = list(load_catalog())
 
 @pytest.fixture
 def key(monkeypatch):
-    value = (dotenv_values(LIVE_HOME / ".env").get("OPENAI_API_KEY") or "").strip()
-    if not value:
-        pytest.skip(f"no OPENAI_API_KEY in {LIVE_HOME}/.env")
+    try:
+        value = live_key(LIVE_HOME)
+    except RuntimeError as exc:
+        pytest.fail(str(exc), pytrace=False)
     monkeypatch.setenv("OPENAI_API_KEY", value)
 
 

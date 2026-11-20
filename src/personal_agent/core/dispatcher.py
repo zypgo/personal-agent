@@ -49,7 +49,13 @@ class Dispatcher:
     async def deliver_once(self, *, limit: int = 20) -> DeliveryReport:
         report = DeliveryReport()
         outbox = self.app.outbox
-        for message in outbox.claim_due(channels=set(self.channels), limit=limit):
+        for _ in range(limit):
+            # Claim only the message about to be delivered. A crash during an earlier send
+            # must not turn the untouched rest of a batch into ambiguous `maybe_sent` messages.
+            claimed = outbox.claim_due(channels=set(self.channels), limit=1)
+            if not claimed:
+                break
+            message = claimed[0]
             actor = message.payload.get("principal_id") or message.payload.get("actor_id")
             if actor is not None:
                 from personal_agent.collaboration.models import AccessDenied
@@ -99,12 +105,12 @@ class Dispatcher:
                     "channel %s raised while sending message %s", message.channel, message.id
                 )
                 if message.must_arrive:
-                    outbox.mark_failed(
+                    status = outbox.mark_failed(
                         message.id,
                         f"unknown outcome: {exc}",
                         retry_in=self._backoff(message.attempts),
                     )
-                    report.retrying.append(message.id)
+                    (report.retrying if status == "pending" else report.failed).append(message.id)
                 else:
                     outbox.mark_maybe_sent(message.id, f"unknown outcome: {exc}")
                     report.unknown.append(message.id)

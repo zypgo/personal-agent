@@ -11,6 +11,7 @@ import typer
 
 from personal_agent import __version__
 from personal_agent.commands import (
+    agents,
     budget,
     channels,
     chat,
@@ -76,6 +77,7 @@ GROUPS = {
     "channels": channels.app,
     "web": web.app,
     "node": node.app,
+    "agents": agents.app,
     "dream": dream.app,
     "service": service.app,
     "webhooks": webhooks.app,

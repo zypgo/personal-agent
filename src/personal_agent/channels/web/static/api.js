@@ -1,15 +1,12 @@
-// Talking to the server: requests, and the stream of what happens while the page is open.
+// Browser requests share one typed, in-memory Query Core adapter. No private state is persisted.
+import { ApiError, RequestScope } from "./query.js";
+export { ApiError };
 
-let requestEpoch = 0;
-const activeRequests = new Set();
-export function invalidateRequests() {
-  requestEpoch += 1;
-  for (const controller of activeRequests) controller.abort();
-  activeRequests.clear();
-}
-function epochCheck(epoch) {
-  if (epoch !== requestEpoch) throw new DOMException("Session changed", "AbortError");
-}
+let accessLost = () => {};
+const requests = new RequestScope({ resolve: scopedURL, onAccessLost: status => accessLost(status) });
+export function invalidateRequests() { requests.clear(); }
+export function setRequestContext(principal) { requests.setContext(String(principal ?? "owner")); }
+export function onAccessLost(callback) { accessLost = callback; }
 
 export function scopedURL(path) {
   if (typeof location === "undefined") return path;
@@ -20,87 +17,51 @@ export function scopedURL(path) {
   return url.pathname + url.search;
 }
 
-export class ApiError extends Error {
-  constructor(status, message, data = null) {
-    super(message);
-    this.status = status;
-    this.data = data;
-  }
-}
+/** GET requests share in-flight work. Writes are sent once and never enter a cache. */
+export function api(path, options = {}) { return requests.request(path, options); }
 
-/**
- * One request. Sends the header that only this page can add (a form on another site cannot), and
- * turns every failure into an `ApiError` whose message is fit to show: a status of 0 means the
- * server could not be reached at all.
- */
-export async function api(path, { method = "GET", json, form, signal } = {}) {
-  const epoch = requestEpoch;
-  const controller = new AbortController();
-  activeRequests.add(controller);
-  const abort = () => controller.abort();
-  if (signal?.aborted) controller.abort();
-  signal?.addEventListener("abort", abort, {once:true});
-  try {
-  const headers = { Accept: "application/json", "X-PA": "1" };
-  let body;
-  if (json !== undefined) {
-    headers["Content-Type"] = "application/json";
-    body = JSON.stringify(json);
-  } else if (form) {
-    body = form; // the browser sets the multipart boundary itself
-  }
-  let response;
-  try {
-    response = await fetch(scopedURL(path), { method, headers, body, signal: controller.signal, credentials: "same-origin", cache: "no-store" });
-  } catch (error) {
-    if (error?.name === "AbortError") throw error;
-    throw new ApiError(0, "Cannot reach the agent. Is the computer awake and the agent running?");
-  }
-  let data = null;
-  if ((response.headers.get("content-type") ?? "").includes("json")) {
-    try {
-      data = await response.json();
-    } catch {
-      data = null;
-    }
-  }
-  epochCheck(epoch);
-  if (!response.ok) {
-    throw new ApiError(response.status, data?.error ?? `The agent answered ${response.status}.`, data);
-  }
-  return data;
-  } finally {
-    activeRequests.delete(controller);
-    signal?.removeEventListener("abort", abort);
-  }
-}
-
-/** Fetch an immutable result through the paired browser session, never a public bearer link. */
+/** Immutable downloads are authenticated, cancellable and kept outside the query cache. */
 export async function artifactBlob(id) {
-  const epoch = requestEpoch;
-  if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) throw new ApiError(400, "Invalid file reference.");
-  let response;
-  try {
-    response = await fetch(scopedURL(`/api/artifacts/${id}`), {
-      headers: { "X-PA": "1" }, credentials: "same-origin", cache: "no-store",
-    });
-  } catch {
-    throw new ApiError(0, "Cannot reach the agent. Please try again when connected.");
-  }
-  if (!response.ok) {
+  if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) throw new ApiError(400, "文件引用无效，请刷新后重试。");
+  try { return await requests.blob(`/api/artifacts/${id}`); }
+  catch (error) {
+    if (error?.name === "AbortError" || error.status === 0) throw error;
     const messages = {
-      401: "Pair this browser again to download files.",
-      404: "This file is unavailable.",
-      410: "This file has expired. Ask the agent to create it again.",
+      401: "请重新连接此浏览器后下载文件。",
+      404: "此文件已不可用。",
+      410: "此文件已过期，请让助理重新生成。",
     };
-    throw new ApiError(response.status, messages[response.status] ?? "The file could not be downloaded.");
+    throw new ApiError(error.status || 0, messages[error.status] ?? "文件下载失败，请稍后重试。");
   }
-  try {
-    const blob = await response.blob();
-    epochCheck(epoch);
-    return blob;
-  } catch {
-    throw new ApiError(0, "The download was interrupted. Please try again.");
+}
+
+/** Agent result files use the same session and selected-space checks as chat files. */
+export async function scopedArtifactBlob(path) {
+  if (typeof path !== "string" || !/^\/api\/v4\/artifacts\/[0-9a-f]{32}$/.test(path)) {
+    throw new ApiError(400, "文件引用无效，请刷新后重试。");
+  }
+  try { return await requests.blob(path); }
+  catch (error) {
+    if (error?.name === "AbortError" || error.status === 0) throw error;
+    const messages = {
+      401: "请重新连接此浏览器后下载文件。",
+      403: "你目前没有权限下载此文件。",
+      404: "此文件已不可用。",
+    };
+    throw new ApiError(error.status || 0, messages[error.status] ?? "文件下载失败，请稍后重试。");
+  }
+}
+
+/** Download only the two first-party connection files, under the current space. */
+export async function agentSetupBlob(agentId, kind) {
+  if (typeof agentId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_:-]{0,127}$/.test(agentId) || !["openapi", "bridge"].includes(kind)) {
+    throw new ApiError(400, "连接文件引用无效。");
+  }
+  const path = kind === "openapi" ? `/api/v4/agents/${encodeURIComponent(agentId)}/openapi.json` : "/api/v4/bridge.py";
+  try { return await requests.blob(path); }
+  catch (error) {
+    if (error?.name === "AbortError" || error.status === 0) throw error;
+    throw new ApiError(error.status || 0, error.status === 401 ? "请重新连接此浏览器后下载文件。" : "连接文件暂不可用，请核对权限后重试。");
   }
 }
 
@@ -112,9 +73,9 @@ export async function artifactBlob(id) {
  * Whatever is missed is replayed from the database, so a late or lost nudge costs nothing.
  */
 export class Live {
-  constructor({ after, onHello, onTurn, onActivity, onApprovals, onDrafts = () => {}, onSignout, onState }) {
+  constructor({ after, onHello, onTurn, onActivity, onApprovals, onDrafts = () => {}, onAssistantChanged = () => {}, onSignout, onState }) {
     this.after = after;
-    this.on = { onHello, onTurn, onActivity, onApprovals, onDrafts, onSignout, onState };
+    this.on = { onHello, onTurn, onActivity, onApprovals, onDrafts, onAssistantChanged, onSignout, onState };
     this.source = null;
     this.state = "closed";
     this.retryTimer = null;
@@ -133,7 +94,7 @@ export class Live {
       this._set("open");
       this.on.onHello(JSON.parse(e.data));
     });
-    for (const [event, callback] of [["turn", "onTurn"], ["activity", "onActivity"], ["approvals", "onApprovals"], ["drafts", "onDrafts"]]) {
+    for (const [event, callback] of [["turn", "onTurn"], ["activity", "onActivity"], ["approvals", "onApprovals"], ["drafts", "onDrafts"], ["assistant_changed", "onAssistantChanged"]]) {
       source.addEventListener(event, (e) => {
         if (this.source === source) this.on[callback](JSON.parse(e.data));
       });

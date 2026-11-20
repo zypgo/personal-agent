@@ -1,0 +1,24 @@
+{
+  "name": "personal-agent-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate:api": "node scripts/frontend/contracts.mjs",
+    "build": "node scripts/frontend/contracts.mjs --check --types-only && tsc --noEmit && node scripts/frontend/build.mjs",
+    "check": "node scripts/frontend/contracts.mjs --check && tsc --noEmit && node scripts/frontend/build.mjs --check && node --test --test-reporter=tap tests/js/*.test.mjs",
+    "test": "node --test --test-reporter=tap tests/js/*.test.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "@tanstack/query-core": "5.108.0",
+    "markdown-it": "15.0.3"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.8"
+  }
+}

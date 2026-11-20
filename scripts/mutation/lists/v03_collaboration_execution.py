@@ -1226,7 +1226,7 @@ M = [
     (
         "http: viewers can write through the legacy routes",
         WC,
-        '                write=scope["method"] not in ("GET", "HEAD", "OPTIONS") and path != "/api/logout",',
+        '                write=scope["method"] not in ("GET", "HEAD", "OPTIONS"),',
         "                write=False,",
         HTTP,
     ),
@@ -1252,10 +1252,13 @@ M = [
         WC,
         L(
             "        self.identities.require_admin(session.principal_id)",
-            "        data = await body(request)",
-            '        space_ids = strings(data, "space_ids")',
+            "        data = await body(request, dto.InviteNode)",
+            "        space_ids = data.space_ids",
         ),
-        L("        data = await body(request)", '        space_ids = strings(data, "space_ids")'),
+        L(
+            "        data = await body(request, dto.InviteNode)",
+            "        space_ids = data.space_ids",
+        ),
         HTTP,
     ),
     (
@@ -1303,7 +1306,7 @@ M = [
     (
         "http: a node reports for a plan that was not approved",
         WC,
-        '        if text(data, "plan_hash", maximum=64) != attempt["plan_hash"]:',
+        '        if data.plan_hash != attempt["plan_hash"]:',
         "        if False:",
         HTTP,
     ),

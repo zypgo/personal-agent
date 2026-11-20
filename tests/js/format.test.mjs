@@ -30,8 +30,8 @@ test("days are calendar days in the owner's own time", () => {
 
 test("today, yesterday, then a date; the year only when it is not this one", () => {
   const now = at("2026-11-15T10:00:00Z");
-  assert.equal(dayLabel(at("2026-11-15T00:01:00Z"), now, "en-GB"), "Today");
-  assert.equal(dayLabel(at("2026-11-14T23:59:00Z"), now, "en-GB"), "Yesterday");
+  assert.equal(dayLabel(at("2026-11-15T00:01:00Z"), now, "en-GB"), "今天");
+  assert.equal(dayLabel(at("2026-11-14T23:59:00Z"), now, "en-GB"), "昨天");
   assert.equal(dayLabel(at("2026-11-10T12:00:00Z"), now, "en-GB"), "Tue 10 Nov");
   assert.match(dayLabel(at("2025-12-24T12:00:00Z"), now, "en-GB"), /^Wed,? 24 Dec 2025$/); // ICU decides the comma
 });
@@ -39,7 +39,7 @@ test("today, yesterday, then a date; the year only when it is not this one", () 
 test("yesterday is the day before even when the clocks changed", () => {
   // (the machine running the test is in UTC, so this checks the arithmetic, not a zone)
   const now = at("2026-03-29T00:30:00Z");
-  assert.equal(dayLabel(at("2026-03-28T23:00:00Z"), now, "en-GB"), "Yesterday");
+  assert.equal(dayLabel(at("2026-03-28T23:00:00Z"), now, "en-GB"), "昨天");
 });
 
 test("lengths of time", () => {
@@ -56,12 +56,12 @@ test("sizes", () => {
 });
 
 test("how long until something expires", () => {
-  assert.equal(expiresIn(100, 100), "expired");
-  assert.equal(expiresIn(90, 100), "expired");
-  assert.equal(expiresIn(145, 100), "45 s");
-  assert.equal(expiresIn(100 + 600, 100), "10 min");
-  assert.equal(expiresIn(100 + 3 * 3600, 100), "3 h");
-  assert.equal(expiresIn(100 + 3 * 86400, 100), "3 d");
+  assert.equal(expiresIn(100, 100), "已过期");
+  assert.equal(expiresIn(90, 100), "已过期");
+  assert.equal(expiresIn(145, 100), "45 秒");
+  assert.equal(expiresIn(100 + 600, 100), "10 分钟");
+  assert.equal(expiresIn(100 + 3 * 3600, 100), "3 小时");
+  assert.equal(expiresIn(100 + 3 * 86400, 100), "3 天");
 });
 
 test("a pairing code is found in a link, in a fragment, or on its own", () => {

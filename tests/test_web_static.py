@@ -80,6 +80,8 @@ def test_the_page_is_made_of_exactly_the_expected_files(assets):
         "api.js",
         "app.js",
         "apple-touch-icon.png",
+        "assistant.css",
+        "assistant.js",
         "audio-metadata.js",
         "format.js",
         "icon-192.png",
@@ -88,8 +90,14 @@ def test_the_page_is_made_of_exactly_the_expected_files(assets):
         "icon.svg",
         "index.html",
         "manifest.webmanifest",
+        "markdown-parser.js",
         "md.js",
         "media.js",
+        "orchestration.css",
+        "orchestration.js",
+        "product-shell.css",
+        "product-shell.js",
+        "query.js",
         "store.js",
         "style.css",
         "sw.js",
@@ -241,12 +249,39 @@ FORBIDDEN_CODE = [
 
 @pytest.mark.parametrize(
     "name",
-    ["api.js", "app.js", "format.js", "md.js", "media.js", "store.js", "sw.js", "workbench.js"],
+    [
+        "api.js",
+        "app.js",
+        "assistant.js",
+        "format.js",
+        "md.js",
+        "markdown-parser.js",
+        "media.js",
+        "product-shell.js",
+        "query.js",
+        "store.js",
+        "sw.js",
+        "workbench.js",
+    ],
 )
 def test_the_scripts_never_turn_text_into_markup_or_code(assets, name):
     code = COMMENTS.sub(" ", assets[0][name].body.decode())
+    if name == "markdown-parser.js":
+        # Upstream mdurl explicitly lists JavaScript among hostless protocols. Match only that
+        # exact two-entry data table; keep all executable sinks and other scheme literals banned.
+        # DOM-level malicious/encoded link tests still require the app's safeUrl whitelist.
+        code, tables = re.subn(r'\bjavascript: !0,\s*"javascript:": !0', "", code)
+        assert tables == 1
     for bad in FORBIDDEN_CODE:
         assert bad not in code, f"{name} uses {bad}"
+
+
+def test_bundled_adapters_are_complete_browser_modules(assets):
+    for name in ("query.js", "markdown-parser.js"):
+        code = assets[0][name].body.decode()
+        assert "process.env" not in code  # Node tests alone would hide this browser crash
+        assert not re.search(r"\b(?:from|import)\s*\(?\s*['\"](?:@|node:|https?:)", code)
+        assert len(code) < 200_000
 
 
 def test_the_page_keeps_nothing_secret_where_a_script_could_read_it(assets):
@@ -268,7 +303,7 @@ def test_the_page_keeps_nothing_secret_where_a_script_could_read_it(assets):
 def test_a_hostile_agent_name_is_text_in_the_page_and_never_markup():
     found, _ = load_assets(agent=HOSTILE)
     page = Page(found["index.html"].body.decode())
-    assert page.title == HOSTILE
+    assert page.title == "个人助理 · " + HOSTILE
     titles = [
         a["content"] for a in page.named("meta") if a.get("name") == "apple-mobile-web-app-title"
     ]
@@ -289,7 +324,7 @@ def test_a_hostile_agent_name_stays_one_string_in_the_manifest():
 
 def test_the_name_is_never_read_as_a_placeholder_itself():
     found, version = load_assets(agent="{{version}}")
-    assert Page(found["index.html"].body.decode()).title == "{{version}}"
+    assert Page(found["index.html"].body.decode()).title == "个人助理 · {{version}}"
     assert json.loads(found["manifest.webmanifest"].body)["name"] == "{{version}}"
     assert version != "{{version}}"
 
@@ -363,7 +398,18 @@ needs_node = pytest.mark.skipif(
 
 @needs_node
 @pytest.mark.parametrize(
-    "name", ["api.js", "app.js", "format.js", "md.js", "media.js", "store.js", "sw.js"]
+    "name",
+    [
+        "api.js",
+        "app.js",
+        "assistant.js",
+        "format.js",
+        "md.js",
+        "media.js",
+        "product-shell.js",
+        "store.js",
+        "sw.js",
+    ],
 )
 def test_every_script_parses(name):
     result = subprocess.run(

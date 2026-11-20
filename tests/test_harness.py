@@ -206,13 +206,19 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
     await Worker(app).run_once()
 
     assert tool_names(model) == [
+        "agent_task_status",
         "ask_task_input",
+        "cancel_agent_task",
         "cancel_job",
+        "delegate_agents",
         "edit_file",
         "http_request",
+        "inspect_workspace",
         "job_status",
+        "list_agents",
         "list_files",
         "memory",
+        "prepare_workspace_action",
         "publish_artifact",
         "read_file",
         "schedule",
@@ -222,6 +228,7 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
         "submit_job",
         "web_fetch",
         "web_search",
+        "workspace_capabilities",
         "write_file",
     ]  # no `shell`: the test app has no sandbox, so none is offered
 

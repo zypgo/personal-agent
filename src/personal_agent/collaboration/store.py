@@ -428,6 +428,11 @@ class IdentityStore:
                 (now, principal.id),
             )
             self.db.execute(
+                "UPDATE web_invites SET used_at = ? WHERE used_at IS NULL "
+                "AND (principal_id = ? OR issued_by = ?)",
+                (now, principal.id, principal.id),
+            )
+            self.db.execute(
                 "UPDATE collaboration_invites SET revoked_at = ? WHERE issued_by = ? AND kind != 'recovery' AND used_at IS NULL AND revoked_at IS NULL",
                 (now, principal.id),
             )

@@ -11,7 +11,7 @@ from typing import Any, Literal
 from agents import RunContextWrapper, function_tool
 from pydantic import BaseModel
 
-from personal_agent.clock import format_local
+from personal_agent.clock import format_local, load_zone
 from personal_agent.config import Config
 from personal_agent.core.events import Trust
 from personal_agent.core.timers import Timer, TimerError
@@ -173,13 +173,17 @@ async def send_message_tool(
     )
 
 
-def _when(rc: RunContext, at: str) -> float:
+def _when(rc: RunContext, at: str, timezone: str | None = None) -> float:
     try:
         moment = datetime.fromisoformat(at.strip())
     except ValueError as exc:
         raise TimerError("`at` must be an ISO local time like 2026-11-16T09:00") from exc
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=rc.app.tz)
+        try:
+            tz = load_zone(timezone) if timezone else rc.app.tz
+        except ValueError as exc:
+            raise TimerError(str(exc)) from exc
+        moment = moment.replace(tzinfo=tz)
     return moment.timestamp()
 
 
@@ -217,7 +221,11 @@ def _plan_create(rc: RunContext, args: dict[str, Any]) -> _CreatePlan:
         raise TimerError("give exactly one of delay_minutes, at, or cron")
     due_at = None
     if cron is None:
-        due_at = rc.app.clock.now() + delay * 60 if delay is not None else _when(rc, at or "")
+        due_at = (
+            rc.app.clock.now() + delay * 60
+            if delay is not None
+            else _when(rc, at or "", args.get("timezone"))
+        )
     # A run that has read outside content must not schedule work that carries the owner's authority.
     trust = Trust.UNTRUSTED if rc.tainted or rc.trust is Trust.UNTRUSTED else Trust.OWNER
     key = rc.session_key if args.get("session") == "here" else None
@@ -334,9 +342,13 @@ def _schedule_category(_rc: RunContext, args: dict[str, Any]) -> Category:
 
 
 def register_builtin(registry: ToolRegistry, config: Config | None = None) -> None:
+    from personal_agent.tools.agents import register_agents
     from personal_agent.tools.jobs import register_jobs
+    from personal_agent.tools.workspace import register_workspace
 
+    register_agents(registry)
     register_jobs(registry, config)
+    register_workspace(registry)
     """The tools every agent has. `config.tools` switches the optional families on and off."""
     from personal_agent.tools.artifacts import register_artifacts
     from personal_agent.tools.files import register_files

@@ -62,16 +62,25 @@ export function canRecord() {
  */
 export async function record({ maxSeconds, onTick }) {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const type = pickRecordingType();
-  const recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+  let timer = null;
+  let released = false;
+  const release = () => {
+    clearInterval(timer);
+    if (released) return;
+    released = true;
+    for (const track of stream.getTracks()) track.stop();
+  };
+  let type, recorder;
+  try {
+    type = pickRecordingType();
+    recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+  } catch (error) {
+    release();
+    throw error;
+  }
   const chunks = [];
   const started = performance.now();
   let cancelled = false;
-  let timer = null;
-  const release = () => {
-    clearInterval(timer);
-    for (const track of stream.getTracks()) track.stop();
-  };
   const done = new Promise((resolve, reject) => {
     recorder.ondataavailable = (event) => {
       if (event.data?.size) chunks.push(event.data);
@@ -91,7 +100,12 @@ export async function record({ maxSeconds, onTick }) {
       resolve({ blob, seconds: (performance.now() - started) / 1000, name: `voice.${extensionFor(mime)}` });
     };
   });
-  recorder.start(1000);
+  try { recorder.start(1000); }
+  catch (error) {
+    release();
+    void done.catch(() => {});
+    throw error;
+  }
   timer = setInterval(() => {
     const seconds = (performance.now() - started) / 1000;
     onTick?.(seconds);

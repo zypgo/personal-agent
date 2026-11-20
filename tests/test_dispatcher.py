@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from personal_agent.channels.base import ChannelError
@@ -163,6 +165,50 @@ async def test_only_messages_for_registered_channels_are_claimed(make_app):
     await Dispatcher(app, {"cli": FakeChannel()}).deliver_once()
 
     assert app.outbox.get(other).status == "pending"
+
+
+async def test_cancellation_does_not_claim_messages_that_were_never_sent(make_app):
+    app = make_app()
+    first = queue(app, "in flight")
+    second = queue(app, "still queued")
+    sending = asyncio.Event()
+
+    class WaitingChannel(FakeChannel):
+        async def send(self, message) -> None:
+            sending.set()
+            await asyncio.Future()
+
+    delivery = asyncio.create_task(Dispatcher(app, {"cli": WaitingChannel()}).deliver_once())
+    try:
+        await asyncio.wait_for(sending.wait(), 2)
+    finally:
+        delivery.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await delivery
+
+    # Recovery may park the in-flight message, but it must still deliver the untouched one.
+    assert app.outbox.recover_stuck(older_than_s=0) == {"retried": 0, "maybe_sent": 1}
+    assert app.outbox.get(first).status == "maybe_sent"
+    assert app.outbox.get(second).status == "pending"
+    assert app.outbox.get(second).attempts == 0
+    channel = FakeChannel()
+    report = await Dispatcher(app, {"cli": channel}).deliver_once()
+    assert report.sent == [second]
+    assert channel.sent == ["still queued"]
+
+
+async def test_unknown_delivery_stops_retrying_at_the_attempt_limit(make_app, clock):
+    app = make_app()
+    message_id = queue(app, urgency="urgent")
+    dispatcher = Dispatcher(app, {"cli": FakeChannel(raises=ConnectionResetError("reset"))})
+
+    for _ in range(MAX_ATTEMPTS):
+        report = await dispatcher.deliver_once()
+        clock.advance(max(RETRY_BACKOFF_S) + 1)
+
+    assert app.outbox.get(message_id).status == "failed"
+    assert report.failed == [message_id]
+    assert report.retrying == []
 
 
 async def test_urgent_messages_go_first(make_app):

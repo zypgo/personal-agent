@@ -367,6 +367,8 @@ class ToolsConfig(_Section):
     shell: bool = True
     """Offered only when a sandbox works (see [sandbox])."""
     web_fetch: bool = True
+    html_extractor: Literal["auto", "basic", "trafilatura"] = "auto"
+    """Local HTML extraction: auto selects article content and safely falls back to basic."""
     http_request: bool = True
     web_search: Literal["auto", "cached", "off"] = "auto"
     """OpenAI's hosted search, offered only on the OpenAI Responses API. `cached` searches OpenAI's
@@ -936,6 +938,7 @@ backend = "auto"                 # auto | seatbelt | docker | none  (none also n
 files = true                     # list/read/write/edit files in the workspace
 shell = true                     # needs a working sandbox
 web_fetch = true                 # read web pages; never reaches your own network (see [net])
+html_extractor = "auto"           # auto | basic | trafilatura; parsing stays on this machine
 http_request = true              # call APIs; anything but GET/HEAD asks first
 web_search = "auto"              # OpenAI hosted search; auto | cached | off
 

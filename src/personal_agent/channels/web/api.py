@@ -35,6 +35,7 @@ from starlette.routing import Route
 from personal_agent.channels.commands import ChatCommands
 from personal_agent.channels.ingress import MAX_IMAGES, Ingress, Upload
 from personal_agent.channels.web.artifacts import artifact_routes
+from personal_agent.channels.web.assistant import assistant_routes
 from personal_agent.channels.web.connect import connection_info
 from personal_agent.channels.web.probe import probe_signature
 from personal_agent.channels.web.security import Guard
@@ -299,8 +300,10 @@ class WebApi:
         return response
 
     async def logout(self, request: Request) -> Response:
-        self._need(request)
-        self.auth.revoke_token(self._token(request))
+        token = self._token(request)
+        if self.auth.lookup(token) is None:
+            raise HTTPException(401, "Not signed in.")
+        self.auth.revoke_token(token)
         response = self._json({"ok": True})
         response.delete_cookie(
             COOKIE, path="/", httponly=True, samesite="strict", secure=self.secure
@@ -443,6 +446,7 @@ class WebApi:
         session = self._need(request)
         try:
             self.app.require_approval_actor(session.principal_id)
+            authority = self.app.actor_snapshot(session.principal_id)
         except AccessDenied as exc:
             raise HTTPException(403, "Only this space's owners can approve actions.") from exc
         try:
@@ -456,6 +460,11 @@ class WebApi:
         session = self._need(request)
         try:
             self.app.require_approval_actor(session.principal_id)
+            self.app.require_actor(
+                session.principal_id,
+                version=authority.get("membership_version"),
+                principal_version=authority.get("principal_version"),
+            )
         except AccessDenied as exc:
             raise HTTPException(403, "Only this space's owners can approve actions.") from exc
         note = body.get("note") if isinstance(body.get("note"), str) else None
@@ -513,6 +522,11 @@ class WebApi:
 
     async def stream(self, request: Request) -> Response:
         session = self._need(request)
+        membership_version = (
+            self.app.identities.require_access(session.principal_id, self.app.space_id).version
+            if self.app.identities is not None
+            else None
+        )
         raw = request.headers.get("last-event-id") or request.query_params.get("after") or ""
         last_known = self.app.transcript.last_id()
         try:
@@ -520,7 +534,7 @@ class WebApi:
         except ValueError:
             raise HTTPException(400, "after is a number.") from None
         return StreamingResponse(
-            self._events(request, session, after),
+            self._events(request, session, after, membership_version=membership_version),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-store",
@@ -529,17 +543,44 @@ class WebApi:
         )
 
     async def _events(
-        self, request: Request, session: WebSession, after: int
+        self,
+        request: Request,
+        session: WebSession,
+        after: int,
+        *,
+        membership_version: int | None = None,
     ) -> AsyncIterator[bytes]:
         app = self.app
         token = self._token(request)
         sub = app.live.subscribe()
+
+        def authorize() -> None:
+            fresh = self.auth.lookup(token)
+            if fresh is None or fresh.id != session.id:
+                raise AccessDenied("Not signed in.")
+            app.require_actor(
+                session.principal_id,
+                write=False,
+                version=membership_version,
+                principal_version=session.authz_version,
+            )
+
+        def event_frame(event: str, data: Any, event_id: int | None = None) -> bytes:
+            # Every yield may wait on a slow browser. Recheck each frame, including frames
+            # already collected in this batch, before any more private content leaves.
+            authorize()
+            return sse(event, data, event_id)
+
         try:
-            self._need(request)
+            if membership_version is None and app.identities is not None:
+                membership_version = app.identities.require_access(
+                    session.principal_id, app.space_id
+                ).version
+            authorize()
             yield b"retry: 3000\n\n"
             approvals = self._recent_approvals()
             drafts = app.live.response_drafts()
-            yield sse(
+            yield event_frame(
                 "hello",
                 {
                     "working": app.live.busy,
@@ -554,50 +595,56 @@ class WebApi:
                 event = await sub.next(TICK_S)
                 if self.stop.is_set():
                     break
-                # Recheck before emitting any new content, including previews and approvals.
-                fresh = self.auth.lookup(token)
-                if (
-                    fresh is None
-                    or app.identities is None
-                    or not app.identities.authorized(fresh.principal_id, app.space_id, write=False)
-                ):
-                    yield sse("signout", {})
-                    return
+                authorize()  # Quiet streams also close promptly after revocation.
                 spoke = False
                 for turn in app.transcript.after(last_sent):
                     last_sent = turn.id
-                    yield sse("turn", self.turn_json(turn), turn.id)
+                    yield event_frame("turn", self.turn_json(turn), turn.id)
                     spoke = True
                 latest = None
+                assistant_changed = False
                 for item in ([event] if event else []) + sub.drain():
                     if item.get("type") == "activity":
                         latest = item
+                    elif (
+                        item.get("type") == "assistant_changed"
+                        and item.get("principal_id", session.principal_id) == session.principal_id
+                    ):
+                        assistant_changed = True
                 if latest is not None:
-                    yield sse(
+                    yield event_frame(
                         "activity",
                         {"working": bool(latest.get("working")), "tool": latest.get("tool")},
                     )
+                    spoke = True
+                if assistant_changed:
+                    # A nudge carries no proposal, credential or task content. The browser
+                    # reloads its own authorized cards; durable state survives missed nudges.
+                    yield event_frame("assistant_changed", {})
                     spoke = True
                 # Snapshot replacement tolerates missed nudges and a sleeping phone. Previews
                 # have no SSE id: only committed transcript turns advance Last-Event-ID.
                 current_drafts = app.live.response_drafts()
                 if current_drafts != drafts:
                     drafts = current_drafts
-                    yield sse("drafts", {"drafts": drafts})
+                    yield event_frame("drafts", {"drafts": drafts})
                     spoke = True
                 # Approvals are decided from other places too (Telegram, the terminal, which is
                 # another process): compare with the database rather than wait for a nudge.
                 current = self._recent_approvals()
                 if current != approvals:
                     approvals = current
-                    yield sse("approvals", {"approvals": approvals})
+                    yield event_frame("approvals", {"approvals": approvals})
                     spoke = True
                 if await request.is_disconnected():
                     return
                 quiet_s = 0.0 if spoke else quiet_s + TICK_S
                 if quiet_s >= PING_S:
                     quiet_s = 0.0
+                    authorize()
                     yield b": ping\n\n"
+        except AccessDenied:
+            yield sse("signout", {})
         finally:
             sub.close()
 
@@ -620,6 +667,7 @@ class WebApi:
             Route("/api/approvals/{approval_id}", self.decide, methods=["POST"]),
             Route("/api/status", self.status),
             Route("/api/activity", self.activity),
+            *assistant_routes(self),
             Route("/api/health", self.health),
             Route("/healthz", self.ready),
         ]
@@ -632,6 +680,11 @@ def body_limit_for(app: App) -> Callable[[str, str], int]:
     message = MAX_IMAGES * media.max_image_bytes + media.max_voice_bytes + 256 * 1024
 
     def limit(method: str, path: str) -> int:
+        if method == "POST" and path.startswith("/api/v4/"):
+            if "/worker/" in path and (path.endswith("/result") or path.endswith("/mcp")):
+                return 16 * 1024 * 1024
+            if path == "/api/v4/tasks":
+                return 1024 * 1024
         if method == "POST" and path.startswith("/api/v3/nodes/attempts/"):
             return 16 * 1024 * 1024
         return message if method == "POST" and path == "/api/messages" else 64 * 1024

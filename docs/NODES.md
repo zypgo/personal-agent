@@ -21,7 +21,9 @@ pa node status
 
 配对码通过隐藏提示输入。默认节点目录是 `~/.personal-agent-node`；`pair`、`run`、`status` 支持 `--node-home`。目录权限为 `0700`，凭据文件为 `0600`，控制面只保存 token 的哈希。节点 token 仅可操作被分配的执行尝试，不能当作浏览器登录或访问一般数据 API。
 
-`run` 支持 `--image`、`--memory-mb`、`--poll-s`。镜像由操作员预先拉取，Runner 不自动下载；镜像需有 `/bin/sh`、`date` 和 `/usr/bin/timeout`。生产使用可以指定镜像 digest，避免同名 tag 变化。Docker 使用本机/本机 Docker Desktop 的文件系统：远端 Docker context 若无法访问本机工作目录，不适用此 backend。
+`run` 支持 `--image`、`--memory-mb`、`--poll-s`、`--backend sdk|cli`。0.3.1 起默认使用官方 Docker SDK；兼容回退为 `pa node run --backend cli`，SSH Docker context 也须显式选择 CLI。镜像由操作员预先拉取，Runner 不自动下载；镜像需有 `/bin/sh`、`date` 和 `/usr/bin/timeout`。生产使用可以指定镜像 digest，避免同名 tag 变化。Docker 使用本机/本机 Docker Desktop 的文件系统：远端 Docker context 若无法访问本机工作目录，不适用此 backend。
+
+SDK 后端不会继承环境 HTTP 代理/netrc，也不把 Docker 客户端代理设置注入任务容器。取消等待时先中断日志读取；其他尚未结束的同步 SDK 调用仍占工作槽位。取消不表示 Docker 操作已经失败，原收据与固定资源必须继续核对。实现与回退说明见 [OPEN_SOURCE_ADAPTERS.md](OPEN_SOURCE_ADAPTERS.md)。
 
 电脑睡眠或离线时，尚未派发的任务保持等待；控制面不会把状态未知的尝试自动换到另一节点重跑。保留 `pa node run` 运行，或用自己已有的进程服务管理器启动这个命令。按 Ctrl-C 退出 Runner 不会丢失收据；已启动容器仍受自身截止时间约束，重开 Runner 会检查原容器。
 
@@ -34,7 +36,7 @@ pa node status
 1. 控制面先持久化尝试 ID、generation 和计划摘要，才把工作交给节点。
 2. 节点先把固定资源名和输入计划写入本地 SQLite，再向控制面确认受理。
 3. 确认受理后才创建固定名称的 Docker 容器；开始前再记录启动意图。
-4. 重启只检查同一个资源的标签、状态和日志。已经退出的容器不再 `start`；启动过却找不到的资源进入 `uncertain`，不会新建替代品。
+4. 重启只检查同一个资源的标签、状态和日志。已经退出的容器不再 `start`；记录启动意图后却无法证明结果的资源进入 `uncertain`，即使仍观察为 `created` 也不重复 `start`，不会新建替代品。取消此类资源必须确认原容器已删除，避免迟到的启动请求继续执行。
 5. 最终结果先落本地 SQLite，再重复上传，直到控制面返回持久接受确认。
 6. 得到确认才删除容器/工作目录；清理失败保留记录继续重试，成功后保留轻量去重收据。
 

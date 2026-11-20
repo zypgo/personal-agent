@@ -1,11 +1,19 @@
+import { RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest } from "./query.js";
+import { createProductShell } from "./product-shell.js";
 // API boundaries are documented in workbench.d.ts. No credential is stored in browser storage.
-/** @typedef {{id:string, display_name:string, is_admin:boolean}} Principal */
+/** @typedef {{id:string, display_name:string, is_admin:boolean, authz_version?:number}} Principal */
 /** @typedef {{id:string,name:string,kind:'personal'|'project'}} Space */
 /** @typedef {{principal:Principal,spaces:Space[],space_id:string,role:string}} Me */
 /** @typedef {import('./workbench').Task} Task */
 
-/** @type {{me:Me|null,space:string,tab:string,epoch:number,requests:Set<AbortController>,pendingInvite:string,taskId:string|null,knowledgeRevision:number|null}} */
-const state = {me:null,space:new URL(location.href).searchParams.get("space") || "",tab:"tasks",epoch:0,requests:new Set(),pendingInvite:"",taskId:null,knowledgeRevision:null};
+/** @type {{me:Me|null,space:string,tab:string,taskView:string,epoch:number,pendingInvite:string,taskId:string|null,knowledgeRevision:number|null}} */
+const WORKSPACE_TABS = {tasks:"任务",knowledge:"资料",agents:"助手与连接",spaces:"项目与成员",devices:"设备与账号"};
+function routeFromLocation(href = location.href) {
+  const params = new URL(href).searchParams;
+  const requested = params.get("tab");
+  return {space:params.get("space") || "",tab:Object.hasOwn(WORKSPACE_TABS,requested) ? requested : "tasks",taskView:params.get("view") === "computer" ? "computer" : "collaboration"};
+}
+const state = {me:null,...routeFromLocation(),epoch:0,pendingInvite:"",taskId:null,knowledgeRevision:null};
 const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 const input = (id) => /** @type {HTMLInputElement} */ (document.getElementById(id));
 const form = (id) => /** @type {HTMLFormElement} */ (document.getElementById(id));
@@ -13,8 +21,14 @@ const field = (f, name) => /** @type {HTMLInputElement|HTMLTextAreaElement|HTMLS
 const statuses = {awaiting_approval:"等待审批",queued:"等待执行设备",submitting:"正在交接",admitted:"设备已接收",running:"正在执行",collecting:"正在收集成果",succeeded:"已完成",failed:"执行失败",cancel_requested:"取消待确认",cancelled:"已取消",uncertain:"执行结果待核查",expired:"已过期",rejected:"已拒绝",waiting_for_runner:"等待设备上线",waiting_input:"等待补充信息"};
 const terminal = new Set(["succeeded","failed","cancelled","expired","rejected"]);
 let refreshing = false;
+let productShell = null;
+let refreshSerial = 0;
+const reads = {tasks:0,members:0,knowledge:0,devices:0};
 let restoringAccess = false;
 const openLogAttempts = new Set();
+let orchestration = null;
+let orchestrationLoading = null;
+const artifactUrls = new Set();
 
 // Consume the fragment before doing any network work. It never enters storage or an API URL.
 const fragment = new URLSearchParams(location.hash.slice(1));
@@ -32,18 +46,27 @@ function notice(text, error = false) {
   $("notice").className = error ? "notice error" : "notice";
   $("notice").hidden = !text;
 }
-function readable(error) { return error instanceof Error ? error.message : "操作未完成，请重试。"; }
-function run(action) { Promise.resolve().then(action).catch(async error => {
+function readable(error) {
+  if(error?.status === 0 || error instanceof TypeError) return "暂未收到服务器确认。请先刷新查看结果，再决定是否重试。";
+  if(error?.status === 409) return "内容或权限已变化。已保留填写内容，请刷新后重新核对。";
+  if(error?.status === 422) return "请检查填写内容后再提交。";
+  if(error?.status === 401 || error?.status === 403) return "当前访问权限已变化，请重新登录或切换空间。";
+  return error instanceof Error ? error.message : "操作未完成，请重试。";
+}
+function run(action) { Promise.resolve().then(action).catch(error => {
   if (error?.name === "AbortError") return;
-  if (error?.status === 403 && state.me && !restoringAccess) {
-    // A revoked membership must immediately discard its rendered content. The account and its
-    // other spaces remain usable; recover to its own personal space without keeping stale data.
-    restoringAccess = true;
-    try { await switchSpace(""); } catch (refreshError) { if (refreshError?.status === 401) showLogin(); }
-    finally { restoringAccess = false; }
-  }
   notice(readable(error),true);
 }); }
+async function restoreAccess() {
+  if (restoringAccess) return;
+  // Discard the revoked space synchronously, even when a parallel request is cancelled first.
+  restoringAccess = true;
+  try { await switchSpace("", {discard:true,historyMode:"replace"}); }
+  catch (error) {
+    if (error?.status === 401) showLogin();
+    else if (error?.name !== "AbortError") notice(readable(error),true);
+  } finally { restoringAccess = false; }
+}
 function date(value) {
   if (!value) return "";
   const result = new Date(Number(value) > 1e12 ? Number(value) : Number(value) * 1000);
@@ -56,46 +79,73 @@ function badge(value) {
   return result;
 }
 function empty(container, text) { container.replaceChildren(node("p",text,"empty")); }
+async function openWorkspace() {
+  $("workspace-loading").hidden=false;$("workspace-error").hidden=true;notice("");
+  try {if(await loadMe()) await refresh();}
+  catch(error) {if(error?.name!=="AbortError" && !state.me) $("workspace-error").hidden=false;throw error;}
+  finally {$("workspace-loading").hidden=true;}
+}
 function scopedUrl(path) {
   const url = new URL(path,location.origin);
   if (state.space) url.searchParams.set("space",state.space);
+  return url.pathname + url.search + url.hash;
+}
+function workspaceUrl() {
+  const url=new URL(scopedUrl("/workspace"),location.origin);
+  url.searchParams.set("tab",state.tab);
+  if(state.tab==="tasks" && state.taskView==="computer") url.searchParams.set("view","computer");
   return url.pathname + url.search;
 }
+function updateRoute(mode="replace") {
+  const path=workspaceUrl();
+  if(mode==="push" && location.pathname + location.search !== path) history.pushState(null,"",path);
+  else history.replaceState(null,"",path);
+}
+function hasDrafts(except=null) { return [...$("workspace").querySelectorAll('form[data-dirty="1"],form[data-busy="1"]')].some(item=>item!==except); }
+function showPanel({focus=false}={}) {
+  for(const name of Object.keys(WORKSPACE_TABS)) $("panel-" + name).hidden=name!==state.tab;
+  for(const name of ["collaboration","computer"]) {
+    const active=state.taskView===name;
+    $(name + "-tasks").hidden=!active;
+    $("task-view-" + name).classList.toggle("selected",active);
+    $("task-view-" + name).setAttribute("aria-pressed",String(active));
+  }
+  $("tasks-intro").textContent=state.taskView==="collaboration" ? "把目标交给助手，进度与成果都在这里。" : "安排电脑处理具体操作，核对计划后再开始。";
+  document.title=`${WORKSPACE_TABS[state.tab]} · Personal Agent`;
+  productShell?.setActive(state.tab);
+  if(focus) $("panel-" + state.tab).querySelector("h1")?.focus({preventScroll:true});
+}
+const requests = new RequestScope({
+  resolve: scopedUrl,
+  fetcher: (...args) => fetch(...args),
+  onAccessLost: status => {
+    if (!state.me) return;
+    if (status === 401) showLogin(); else void restoreAccess();
+  },
+});
 async function api(path, options = {}) {
-  const epoch = state.epoch;
-  const controller = new AbortController();
-  state.requests.add(controller);
-  try {
-    const response = await fetch(scopedUrl(path),{
-      method:options.method || "GET",credentials:"same-origin",cache:"no-store",signal:controller.signal,
-      headers:{"X-PA":"1",...(options.body === undefined ? {} : {"Content-Type":"application/json"})},
-      body:options.body === undefined ? undefined : JSON.stringify(options.body),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (epoch !== state.epoch) throw new DOMException("Space changed","AbortError");
-    if (!response.ok) {
-      const detail = typeof data.error === "string" ? data.error : typeof data.detail === "string" ? data.detail : `请求未完成（${response.status}）`;
-      const error = Object.assign(new Error(detail),{status:response.status});
-      if (response.status === 401 && state.me) showLogin();
-      throw error;
-    }
-    return data;
-  } finally { state.requests.delete(controller); }
+  return await requests.request(path, {method:options.method, json:options.body, signal:options.signal});
 }
 function cancelRequests() {
   state.epoch += 1;
-  for (const request of state.requests) request.abort();
-  state.requests.clear();
+  requests.clear();
 }
 function clearSpace() {
   state.taskId = null;
   state.knowledgeRevision = null;
+  for(const name of Object.keys(reads)) reads[name]++;
   openLogAttempts.clear();
+  orchestration?.clear();
+  for(const url of artifactUrls) URL.revokeObjectURL(url);
+  artifactUrls.clear();
   form("knowledge-form").reset();
   form("knowledge-search-form").reset();
   input("knowledge-history").disabled=true;
   form("task-form").reset();
-  delete form("task-form").dataset.requestId;
+  for(const id of ["knowledge-form","task-form","space-form","invite-form","device-pair-form","node-invite-form"]) {
+    form(id).reset();delete form(id).dataset.requestId;delete form(id).dataset.dirty;
+  }
+  $("knowledge-editor-panel").hidden=true;$("knowledge-empty-editor").hidden=false;
   for (const id of ["tasks-list","task-detail","members-list","knowledge-list","nodes-list","devices-list","channel-bindings-list","review-list"]) $(id).replaceChildren();
   $("task-detail").hidden = true;
   closeSecret();
@@ -104,16 +154,25 @@ function clearSpace() {
 function showLogin() {
   cancelRequests();
   state.me = null;
+  state.space = "";
   clearSpace();
   $("workspace").hidden = true;
   $("login").hidden = false;
   input("enroll-code").value = state.pendingInvite;
+  $("workspace-loading").hidden=true;
+  $("workspace-context").textContent="你的个人助理";
+  $("space-role").textContent="";
+  $("space-select").replaceChildren();
+  productShell?.setContext({name:"",space:"",role:""});
 }
 async function loadMe() {
+  const previous = state.me;
+  const previousSpace = state.space;
+  const epoch = state.epoch;
   try { state.me = await api("/api/v3/me"); }
   catch (error) {
     if (error.status === 401) {showLogin();return false;}
-    if (error.status === 403 && state.space) {
+    if (error.status === 403 && state.space && epoch === state.epoch) {
       cancelRequests();clearSpace();state.space="";
       state.me=await api("/api/v3/me");
     } else throw error;
@@ -121,6 +180,8 @@ async function loadMe() {
   const me = state.me;
   if (!me || !me.principal || !Array.isArray(me.spaces)) throw new Error("账号信息暂时不可用。");
   state.space = me.space_id || me.spaces[0]?.id || "";
+  if (previous && (previous.principal.id !== me.principal.id || previousSpace !== state.space || previous.role !== me.role || previous.principal.authz_version !== me.principal.authz_version)) clearSpace();
+  requests.setContext(`${me.principal.id}:${state.space}:${me.role}:${me.principal.authz_version ?? 0}`);
   const select = /** @type {HTMLSelectElement} */ ($("space-select"));
   select.replaceChildren();
   for (const space of me.spaces) {
@@ -130,13 +191,17 @@ async function loadMe() {
     select.append(option);
   }
   select.value = state.space;
-  $("identity-name").textContent = me.principal.display_name;
-  $("space-role").textContent = {owner:"负责人",member:"成员",viewer:"访客"}[me.role] || me.role || "";
-  $("chat-link").setAttribute("href",scopedUrl("/"));
-  $("device-chat-link").setAttribute("href",scopedUrl("/"));
+  const space=me.spaces.find(item=>item.id===state.space);
+  const role={owner:"负责人",member:"成员",viewer:"只读访问"}[me.role] || "";
+  $("workspace-context").textContent=space?.name || "个人空间";
+  $("space-role").textContent=space?.kind==="personal" ? "仅自己" : role;
+  productShell?.setContext({name:me.principal.display_name,space:space?.name || "个人空间",role:space?.kind==="personal" ? "个人空间" : role});
+  for(const id of ["header-chat-link","device-chat-link","knowledge-chat-link"]) $(id).setAttribute("href",scopedUrl("/"));
   const isProject = me.spaces.find(s => s.id === state.space)?.kind === "project";
   $("member-invite-card").hidden = !isProject || me.role !== "owner";
   $("node-invite-form").hidden = !me.principal.is_admin;
+  $("node-invite-details").hidden = !me.principal.is_admin;
+  input("knowledge-new").disabled = me.role === "viewer";
   $("review-card").hidden = !me.principal.is_admin;
   $("channel-pair-button").hidden = me.role === "viewer";
   $("task-compose").hidden = me.role === "viewer";
@@ -144,32 +209,83 @@ async function loadMe() {
   $("join-banner").hidden = !state.pendingInvite;
   $("login").hidden = true;
   $("workspace").hidden = false;
-  history.replaceState(null,"",scopedUrl("/workspace"));
+  $("workspace-loading").hidden=true;
+  showPanel();
+  updateRoute();
   return true;
 }
-async function switchSpace(space) {
+async function switchSpace(space, {discard=false,historyMode="push"}={}) {
+  if(!discard && space!==state.space && hasDrafts() && !confirm("切换空间会清除尚未提交的内容。继续切换？")) {
+    input("space-select").value=state.space;return false;
+  }
   cancelRequests();
   state.space = space;
   clearSpace();
   notice("");
+  updateRoute(historyMode);
   if (await loadMe()) await refresh();
+  return true;
 }
-async function selectTab(tab) {
-  state.tab = tab;
-  for (const button of document.querySelectorAll("[data-tab]")) {
-    const active = button.getAttribute("data-tab") === tab;
-    button.classList.toggle("selected",active);
-    if (active) button.setAttribute("aria-current","page"); else button.removeAttribute("aria-current");
-  }
-  for (const name of ["tasks","spaces","knowledge","devices"]) $("panel-" + name).hidden = name !== tab;
+async function selectTab(tab, {historyMode="push",focus=true}={}) {
+  if(!Object.hasOwn(WORKSPACE_TABS,tab)) return;
+  const changed=state.tab!==tab;
+  state.tab=tab;
+  showPanel({focus:focus && changed});
+  updateRoute(historyMode);
+  if(changed) notice("");
   await refresh();
 }
-async function refresh() {
+async function followLocation() {
+  const route=routeFromLocation();
+  if(route.space!==state.space && hasDrafts() && !confirm("切换空间会清除尚未提交的内容。继续切换？")) {updateRoute();return;}
+  const changedSpace=route.space!==state.space;
+  state.tab=route.tab;state.taskView=route.taskView;showPanel({focus:true});
+  if(changedSpace) await switchSpace(route.space,{discard:true,historyMode:"replace"});
+  else await refresh();
+}
+async function agentUI() {
+  if(!orchestrationLoading) orchestrationLoading=import("./orchestration.js").then(module=>{
+    orchestration=module.createOrchestrationUI({api,getContext:()=>state,notice,showSecret,
+      onOpenAgents:()=>selectTab("agents"),
+      downloadArtifact:async(path,name)=>{
+        const epoch=state.epoch,blob=await requests.blob(path);
+        if(epoch!==state.epoch || !state.me) return;
+        const url=URL.createObjectURL(blob);artifactUrls.add(url);
+        const link=node("a");link.href=url;link.download=String(name).replace(/[\\/\u0000-\u001f]/g,"_") || "result";
+        document.body.append(link);link.click();link.remove();
+        setTimeout(()=>{URL.revokeObjectURL(url);artifactUrls.delete(url);},1000);
+      },
+    });return orchestration;
+  }).catch(error=>{orchestrationLoading=null;throw error;});
+  return await orchestrationLoading;
+}
+async function selectTaskView(view) {
+  if(!["collaboration","computer"].includes(view)) return;
+  state.taskView=view;
+  showPanel();updateRoute("push");
+  await refresh();
+}
+async function refresh(force = false) {
   if (!state.me) return;
-  if (state.tab === "tasks") await loadTasks();
-  if (state.tab === "spaces") await loadMembers();
-  if (state.tab === "knowledge") await loadKnowledge();
-  if (state.tab === "devices") await loadDevices();
+  const epoch=state.epoch,tab=state.tab,view=state.taskView,serial=++refreshSerial;
+  const panel=$("panel-" + tab),button=$("refresh-" + tab);
+  panel.setAttribute("aria-busy","true");
+  if(button) {button.disabled=true;button.textContent="更新中…";}
+  try {
+    if(tab==="agents" || (tab==="tasks" && view==="collaboration")) {
+      const ui=await agentUI();
+      if(epoch!==state.epoch || tab!==state.tab || view!==state.taskView || !state.me) return;
+      if(tab==="agents") await ui.loadAgents(); else await ui.refreshTasks(force);
+    } else if(tab==="tasks") await loadTasks(force && !editingTask());
+    else if(tab==="spaces") await loadMembers();
+    else if(tab==="knowledge") await loadKnowledge();
+    else if(tab==="devices") await loadDevices();
+  } finally {
+    if(serial===refreshSerial || tab!==state.tab) {
+      panel.removeAttribute("aria-busy");
+      if(button) {button.disabled=false;button.textContent="刷新";}
+    }
+  }
 }
 function editingTask() {
   const panel=$("task-detail");
@@ -177,27 +293,43 @@ function editingTask() {
     (panel.contains(document.activeElement) && document.activeElement?.closest("form")));
 }
 async function loadTasks(force = false) {
+  const serial=++reads.tasks;
   const [data,diagnostics] = await Promise.all([api("/api/v3/tasks"),api("/api/v3/diagnostics")]);
+  if(serial!==reads.tasks) return;
   renderDiagnostics(diagnostics);
   const list = $("tasks-list");
+  const focusedTask=list.contains(document.activeElement) ? document.activeElement?.closest("button")?.dataset.taskId : null;
   list.replaceChildren();
   const tasks = data.tasks || [];
-  if (!tasks.length) empty(list,"还没有任务。交办一件事，进度和成果会留在这里。");
+  if (!tasks.length) {
+    const box=node("div","","empty");box.append(node("h3","从一件具体的事开始"),node("p","交办给电脑的任务，会在这里留下进度与成果。"));
+    if(state.me?.role!=="viewer") {
+      const button=node("button","新建电脑任务","primary");button.type="button";
+      button.addEventListener("click",()=>{$("task-compose").open=true;field(form("task-form"),"title").focus?.();});box.append(button);
+    }
+    list.append(box);
+  }
   for (const task of tasks) {
     const button = node("button","","task-card");
-    button.type = "button";
+    button.type = "button";button.dataset.taskId=task.id;
     button.classList.toggle("selected",state.taskId === task.id);
     button.append(node("h3",task.title || "未命名任务"));
     const meta = node("div","","task-meta");
     meta.append(badge(task.state || task.status),node("span",date(task.updated_at || task.created_at)));
     button.append(meta);
-    button.addEventListener("click",() => run(async () => {state.taskId=task.id;await loadTasks(true);if(matchMedia("(max-width:720px)").matches) $("task-detail").scrollIntoView({behavior:"smooth",block:"start"});}));
+    button.addEventListener("click",() => run(async () => {
+      if(state.taskId===task.id && editingTask()) return;
+      if(state.taskId!==task.id && editingTask() && !confirm("切换任务会丢弃尚未提交的内容，继续吗？")) return;
+      state.taskId=task.id;await loadTasks(true);
+      if(matchMedia("(max-width:760px)").matches) $("task-detail").scrollIntoView({behavior:matchMedia("(prefers-reduced-motion:reduce)").matches ? "auto" : "smooth",block:"start"});
+    }));
     list.append(button);
+    if(focusedTask===task.id) button.focus?.({preventScroll:true});
   }
   if (state.taskId && (force || !editingTask())) {
     const taskId=state.taskId;
     const data = await api(`/api/v3/tasks/${encodeURIComponent(taskId)}`);
-    if(taskId===state.taskId) renderTask(data.task || data, data.jobs);
+    if(taskId===state.taskId && serial===reads.tasks) renderTask(data.task || data, data.jobs);
   }
   if (state.me?.principal.is_admin) await loadReviews();
 }
@@ -209,7 +341,7 @@ function renderDiagnostics(data) {
   for(const id of ["task-diagnostics","device-diagnostics"]) {
     const box=$(id);box.replaceChildren();
     const grid=node("div","","diagnostics-grid");
-    for(const [label,value] of [["当前空间今日花费",money(budget.space_spent_usd)],["实例今日剩余额度",money(budget.instance_remaining_usd)],["已连接执行电脑",`${connected} / ${devices.length}`],["等待执行的任务",String(waiting)]]) {
+    for(const [label,value] of [["当前空间今日花费",money(budget.space_spent_usd)],["今日可用额度",money(budget.instance_remaining_usd)],["在线电脑",`${connected} / ${devices.length}`],["等待执行的任务",String(waiting)]]) {
       const metric=node("div","","metric");metric.append(node("span",label),node("strong",value));grid.append(metric);
     }
     box.append(grid);
@@ -227,7 +359,7 @@ async function loadReviews() {
     card.append(node("pre",job.plan?.command || ""));
     const plan = job.plan || {};
     card.append(node("p",`最长 ${plan.timeout_s || 900} 秒 · ${plan.network === "none" ? "不连接网络" : "按计划连接网络"}`,"hint"));
-    const paths = [...(plan.input_manifest || []).map(item => `输入：${item.path}（${item.size} 字节）\nSHA-256: ${item.sha256}`),...(plan.output_paths || []).map(path => `输出：${path}`)];
+    const paths = [...(plan.input_manifest || []).map(item => `输入：${item.path}（${item.size} 字节）`),...(plan.output_paths || []).map(path => `输出：${path}`)];
     if (paths.length) card.append(node("pre",paths.join("\n")));
     const actions=node("div","","actions");
     for (const [allowed,label] of [[true,"批准这份计划"],[false,"拒绝"]]) {
@@ -268,6 +400,9 @@ function submitButton(editor, text) {
   actions.append(button,discard);editor.append(actions);
 }
 function taskPaths(editor, name) { return field(editor,name).value.split(/\r?\n/).map(value=>value.trim()).filter(Boolean); }
+function planFields(editor) {
+  return Object.fromEntries(["command","input_paths","output_paths","timeout_s"].map(name=>[name,field(editor,name).value]));
+}
 async function finishTaskEdit(editor, message) {
   delete editor.dataset.dirty;delete editor.dataset.requestId;
   notice(message);await loadTasks(true);
@@ -294,7 +429,7 @@ function renderQuestions(panel, task, canWrite) {
       submitButton(editor,"提交回答");
       bindFormElement(editor,async f=>{
         await api(`/api/v3/tasks/${encodeURIComponent(task.id)}/questions/${encodeURIComponent(question.id)}/answer`,{
-          method:"POST",body:{expected_revision:task.revision,answer:field(f,"answer").value},
+          method:"POST",body:buildAnswerRequest(field(f,"answer").value,task.revision),
         });
         await finishTaskEdit(f,"回答已保存，任务可以继续。");
       });section.append(editor);
@@ -323,10 +458,8 @@ function renderTaskEditors(panel, task, jobs) {
   if(canContinue && currentJobs.length<8) {
     const step=String(currentJobs.reduce((maximum,job)=>Math.max(maximum,Number(job.step_id)||0),0)+1);
     const editor=taskEditor(panel,`＋ 添加第 ${step} 步`,async f=>{
-      await api(`/api/v3/tasks/${encodeURIComponent(task.id)}/steps`,{method:"POST",body:{
-        expected_revision:task.revision,step_id:step,command:field(f,"command").value,
-        input_paths:taskPaths(f,"input_paths"),output_paths:taskPaths(f,"output_paths"),timeout_s:Number(field(f,"timeout_s").value),
-      }});await finishTaskEdit(f,"新步骤已保存，等待审批；前一步成功后才会执行。");
+      await api(`/api/v3/tasks/${encodeURIComponent(task.id)}/steps`,{method:"POST",body:buildStepRequest(planFields(f),task.revision,step)});
+      await finishTaskEdit(f,"新步骤已保存，等待审批；前一步成功后才会执行。");
     });
     taskField(editor,"command","执行命令",{kind:"textarea",maxLength:16000});
     taskField(editor,"input_paths","输入文件",{kind:"textarea",required:false,placeholder:"当前工作区的相对路径，每行一个"});
@@ -370,7 +503,13 @@ function renderTask(task, jobs) {
   const panel = $("task-detail");
   panel.replaceChildren();
   panel.hidden = false;
-  panel.append(node("h2",task.title || "任务详情"));
+  const heading=node("div","","detail-heading"),close=node("button","返回列表","ghost detail-close");close.type="button";
+  close.addEventListener("click",()=>{
+    if(panel.querySelector('form[data-dirty="1"],form[data-busy="1"]') && !confirm("关闭详情会放弃尚未提交的内容。继续吗？")) return;
+    const selected=[...$("tasks-list").querySelectorAll("button")].find(button=>button.dataset.taskId===task.id);
+    state.taskId=null;panel.hidden=true;panel.replaceChildren();selected?.classList.toggle("selected",false);selected?.focus?.();
+  });
+  heading.append(node("h2",task.title || "任务详情"),close);panel.append(heading);
   const taskState = task.state || task.status;
   const canWrite=state.me?.role!=="viewer";
   const canManage=canWrite && (state.me?.role==="owner" || state.me?.principal.id===task.actor_id);
@@ -390,10 +529,10 @@ function renderTask(task, jobs) {
     section.append(badge(job.state || job.status));
     section.append(node("pre",job.plan?.command || job.command || ""));
     const plan=job.plan || {};
-    const inputs=(plan.input_manifest || []).map(item => `${item.path}（${item.size} 字节）\nSHA-256: ${item.sha256}`).join("\n");
+    const inputs=(plan.input_manifest || []).map(item => `${item.path}（${item.size} 字节）`).join("\n");
     const outputs=(plan.output_paths || []).join("、");
     section.append(node("p",`最长 ${plan.timeout_s || 900} 秒 · ${plan.network === "none" ? "不连接网络" : "按批准的网络范围执行"}`,"hint"));
-    if (inputs) {const files=node("details");files.append(node("summary","输入文件快照"),node("pre",inputs));section.append(files);}
+    if (inputs) {const files=node("details");files.append(node("summary","输入文件"),node("pre",inputs));section.append(files);}
     if (outputs) section.append(node("p",`保留成果：${outputs}`,"hint"));
     if ((job.state || job.status) === "awaiting_approval") {
       if (canWrite && (state.me?.principal.id === job.approver_id || (!job.approver_id && state.me?.principal.is_admin))) {
@@ -428,7 +567,9 @@ function renderTask(task, jobs) {
   if(canManage) renderTaskEditors(panel,task,steps);
 }
 async function loadMembers() {
+  const serial=++reads.members;
   const data=await api("/api/v3/members");
+  if(serial!==reads.members) return;
   const list=$("members-list");list.replaceChildren();
   for (const member of data.members || []) {
     const row=node("div","","row");
@@ -441,13 +582,16 @@ async function loadMembers() {
       select.value=member.role;
       select.addEventListener("change",()=>run(async()=>{
         select.disabled=true;
-        try {await api("/api/v3/members",{method:"POST",body:{principal_id:member.principal_id || member.id,role:select.value,action:"role"}});await loadMe();await loadMembers();}
+        try {await api("/api/v3/members",{method:"POST",body:{principal_id:member.principal_id || member.id,role:select.value}});await loadMe();await loadMembers();}
         finally{select.disabled=false;}
       }));
       const revoke=node("button","移除","ghost danger");
       revoke.addEventListener("click",()=>run(async()=>{
         if(!confirm(`从当前项目移除 ${member.display_name || "该成员"}？对方的私人空间保持独立。`)) return;
-        await api("/api/v3/members",{method:"POST",body:{principal_id:member.principal_id || member.id,action:"revoke",revoke:true}});
+        const principalId=member.principal_id || member.id;
+        const leaving=principalId===state.me?.principal.id;
+        await api("/api/v3/members",{method:"POST",body:{principal_id:principalId,revoke:true}});
+        if(leaving) {await switchSpace("",{discard:true});notice("已离开该项目，已切换到可访问的空间。");return;}
         await loadMe();await loadMembers();
       }));actions.append(select,revoke);row.append(actions);
     } else row.append(node("span",{owner:"负责人",member:"成员",viewer:"访客"}[member.role] || member.role,"badge"));
@@ -455,23 +599,59 @@ async function loadMembers() {
   }
   if (!list.childElementCount) empty(list,"此空间没有其他成员。");
 }
+function discardKnowledge() {
+  if(form("knowledge-form").dataset.busy) {
+    notice("资料正在保存，请等待保存完成后再切换或关闭。");
+    return false;
+  }
+  return !form("knowledge-form").dataset.dirty || confirm("这份资料有尚未保存的修改，继续会放弃修改。继续吗？");
+}
+function highlightKnowledge(path) {
+  for(const button of $("knowledge-list").querySelectorAll("button")) {
+    const selected=button.dataset.path===path;
+    button.classList.toggle("selected",selected);
+    if(selected) button.setAttribute("aria-current","true"); else button.removeAttribute("aria-current");
+  }
+}
+function openKnowledge(entry=null) {
+  if(!discardKnowledge()) return;
+  const editor=form("knowledge-form");
+  editor.reset();delete editor.dataset.dirty;
+  field(editor,"path").value=entry?.path || "";
+  field(editor,"text").value=entry?.text || entry?.content || "";
+  state.knowledgeRevision=entry?.revision ?? null;
+  $("knowledge-editor-title").textContent=entry ? (state.me?.role==="viewer" ? "查看资料" : "编辑资料") : "新建资料";
+  input("knowledge-history").disabled=state.knowledgeRevision===null;
+  $("knowledge-editor-panel").hidden=false;$("knowledge-empty-editor").hidden=true;
+  highlightKnowledge(entry?.path || "");
+  if(!entry) field(editor,"path").focus?.();
+  if(globalThis.matchMedia?.("(max-width:760px)").matches) $("knowledge-editor-panel").scrollIntoView?.({behavior:globalThis.matchMedia("(prefers-reduced-motion:reduce)").matches ? "auto" : "smooth",block:"start"});
+}
+function closeKnowledge() {
+  if(!discardKnowledge()) return;
+  form("knowledge-form").reset();delete form("knowledge-form").dataset.dirty;
+  state.knowledgeRevision=null;input("knowledge-history").disabled=true;
+  $("knowledge-editor-panel").hidden=true;$("knowledge-empty-editor").hidden=false;
+  highlightKnowledge("");$("knowledge-new").focus?.();
+}
 async function loadKnowledge() {
-  const query=input("knowledge-search").value.trim();
+  const serial=++reads.knowledge,query=input("knowledge-search").value.trim();
   const data=await api(`/api/v3/knowledge${query ? `?q=${encodeURIComponent(query)}` : ""}`);
-  if(query!==input("knowledge-search").value.trim()) return;
+  if(serial!==reads.knowledge || query!==input("knowledge-search").value.trim()) return;
   const list=$("knowledge-list");list.replaceChildren();
   for (const document of data.documents || []) {
     const entry=typeof document === "string" ? {path:document} : document;
     const button=node("button",entry.path || entry.name || "资料","document-link ghost");
-    button.addEventListener("click",() => {
-      const editor=form("knowledge-form");field(editor,"path").value=entry.path || "";field(editor,"text").value=entry.text || entry.content || "";
-      state.knowledgeRevision=entry.revision ?? null;$("knowledge-editor-title").textContent="编辑资料";input("knowledge-history").disabled=false;
-    });list.append(button);
+    button.type="button";button.dataset.path=entry.path || "";
+    button.addEventListener("click",() => openKnowledge(entry));list.append(button);
   }
-  if (!list.childElementCount) empty(list,query ? "没有找到匹配的资料，请调整关键词。" : "还没有资料。可以保存项目背景、来源和共同笔记。");
+  highlightKnowledge(field(form("knowledge-form"),"path").value);
+  if (!list.childElementCount) empty(list,query ? "没有找到匹配的资料。换个关键词试试。" : "还没有资料。保存一份笔记，也可以在对话中让助理帮你整理。");
 }
 async function loadDevices() {
+  const serial=++reads.devices;
   const [nodes,devices,diagnostics,channels]=await Promise.all([api("/api/v3/nodes"),api("/api/v3/devices"),api("/api/v3/diagnostics"),api("/api/v3/channel-bindings")]);
+  if(serial!==reads.devices) return;
   renderDiagnostics(diagnostics);
   const list=$("nodes-list");list.replaceChildren();
   for (const device of nodes.nodes || []) {
@@ -531,7 +711,9 @@ function closeHistory() {
 async function showHistory() {
   const path=field(form("knowledge-form"),"path").value.trim();
   if(!path || state.knowledgeRevision===null) return;
+  const revision=state.knowledgeRevision;
   const data=await api(`/api/v3/knowledge/history?path=${encodeURIComponent(path)}`);
+  if(path!==field(form("knowledge-form"),"path").value.trim() || revision!==state.knowledgeRevision) return;
   const list=$("knowledge-history-list");list.replaceChildren();
   $("knowledge-history-title").textContent=`资料历史 · ${path}`;
   for(const version of data.versions || []) {
@@ -547,17 +729,28 @@ function bindFormElement(f,handler,id="") {
   f.addEventListener("submit",event => {
     event.preventDefault();
     if (f.dataset.busy) return;
-    f.dataset.busy="1";
+    f.dataset.busy="1";f.setAttribute("aria-busy","true");
     const controls=[...f.elements].filter(item=>"disabled" in item);
     const disabled=controls.map(item=>item.disabled);
     for(const item of controls) item.disabled=true;
-    run(async () => {try {await handler(f);} finally {
-      delete f.dataset.busy;
+    run(async () => {try {if(await handler(f)!==false) delete f.dataset.dirty;} finally {
+      delete f.dataset.busy;f.removeAttribute("aria-busy");
       controls.forEach((item,index)=>{item.disabled=disabled[index] || (id === "knowledge-form" && state.me?.role === "viewer");});
+      // A successful save creates a revision. Restore read-only history from that new state,
+      // not from the disabled value captured before saving a new document.
+      if(id === "knowledge-form") input("knowledge-history").disabled=state.knowledgeRevision===null;
     }});
   });
 }
 function bindForm(id,handler) { bindFormElement(form(id),handler,id); }
+function bindButton(id,handler) {
+  const button=$(id);
+  button.addEventListener("click",()=>{
+    if(button.disabled) return;
+    button.disabled=true;
+    run(async()=>{try {await handler();} finally {button.disabled=false;}});
+  });
+}
 
 bindForm("enroll-form",async f => {
   const data=await api("/api/v3/enroll",{method:"POST",body:{code:field(f,"code").value.trim(),display_name:field(f,"display_name").value.trim()}});
@@ -569,16 +762,19 @@ bindForm("recover-form",async f => {
   await api("/api/v3/recover",{method:"POST",body:{code:field(f,"code").value.trim()}});f.reset();state.space="";
   if(await loadMe()) await refresh();notice("已恢复访问。请在设备页撤销丢失设备，并生成新的恢复码。");
 });
-$("accept-invite").addEventListener("click",() => run(async () => {
-  await api("/api/v3/enroll",{method:"POST",body:{code:state.pendingInvite,display_name:state.me?.principal.display_name || ""}});
-  state.pendingInvite="";if(await loadMe()) await selectTab("spaces");notice("已加入项目，可从上方切换空间。");
-}));
-bindForm("space-form",async f => {const data=await api("/api/v3/spaces",{method:"POST",body:{name:field(f,"name").value.trim()}});f.reset();await switchSpace(data.space?.id || data.id);await selectTab("spaces");});
+bindButton("accept-invite",async () => {
+  await api("/api/v3/enroll",{method:"POST",body:{code:state.pendingInvite,display_name:state.me?.principal.display_name || "",require_existing_session:true}});
+  state.pendingInvite="";if(await loadMe()) await selectTab("spaces");notice("已加入项目，可从菜单中切换空间。");
+});
+bindForm("space-form",async f => {
+  if(hasDrafts(f) && !confirm("创建后会进入新项目，其他页面尚未提交的内容会清除。继续吗？")) return false;
+  const data=await api("/api/v3/spaces",{method:"POST",body:{name:field(f,"name").value.trim()}});
+  f.reset();await switchSpace(data.space?.id || data.id,{discard:true});await selectTab("spaces");
+});
 bindForm("invite-form",async f => {const data=await api("/api/v3/invites",{method:"POST",body:{role:field(f,"role").value,label:field(f,"label").value.trim()}});showSecret("项目邀请",inviteLink(data.code,"invite"),"将此链接交给想邀请的人。链接只能使用一次。",`有效期至 ${date(data.expires_at)}`);});
 bindForm("task-form",async f => {
   if (!f.dataset.requestId) f.dataset.requestId=crypto.randomUUID();
-  const paths=name => field(f,name).value.split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
-  const data=await api("/api/v3/tasks",{method:"POST",body:{title:field(f,"title").value.trim(),command:field(f,"command").value,input_paths:paths("input_paths"),output_paths:paths("output_paths"),timeout_s:Number(field(f,"timeout_s").value),client_request_id:f.dataset.requestId}});
+  const data=await api("/api/v3/tasks",{method:"POST",body:buildTaskRequest({...planFields(f),title:field(f,"title").value},f.dataset.requestId)});
   state.taskId=data.task?.id || data.id;delete f.dataset.requestId;f.reset();/** @type {HTMLDetailsElement} */ ($("task-compose")).open=false;notice("任务已保存。审批和执行进度会显示在这里。");await loadTasks();
 });
 form("task-form").addEventListener("input",()=>{if(!form("task-form").dataset.busy) delete form("task-form").dataset.requestId;});
@@ -593,19 +789,30 @@ input("knowledge-search").addEventListener("search",()=>run(loadKnowledge));
 $("knowledge-history").addEventListener("click",()=>run(showHistory));
 $("knowledge-history-close").addEventListener("click",closeHistory);
 $("knowledge-history-dialog").addEventListener("close",()=>{$("knowledge-history-list").replaceChildren();$("knowledge-history-title").textContent="资料历史";});
-$("knowledge-new").addEventListener("click",()=>{form("knowledge-form").reset();state.knowledgeRevision=null;input("knowledge-history").disabled=true;$("knowledge-editor-title").textContent="新增资料";});
+$("knowledge-new").addEventListener("click",()=>openKnowledge());
+$("knowledge-close").addEventListener("click",closeKnowledge);
+form("knowledge-form").addEventListener("input",()=>{form("knowledge-form").dataset.dirty="1";});
 field(form("knowledge-form"),"path").addEventListener("input",()=>{state.knowledgeRevision=null;input("knowledge-history").disabled=true;});
 bindForm("device-pair-form",async f => {const data=await api("/api/v3/devices/pair",{method:"POST",body:{label:field(f,"label").value.trim()}});f.reset();showSecret("本人设备配对",inviteLink(data.code,"pair"),"在你自己的新设备上打开。它会登录同一个账号，请勿当作成员邀请分享。",`有效期至 ${date(data.expires_at)}`);});
 bindForm("node-invite-form",async f => {const data=await api("/api/v3/node-invites",{method:"POST",body:{label:field(f,"label").value.trim(),space_ids:[state.space]}});f.reset();showSecret("连接执行电脑",data.code,"仅在你管理的执行电脑上使用此代码。电脑只获得所选空间的任务权限。",`在电脑终端运行 pa node pair --url ${location.origin}，按提示粘贴代码，然后运行 pa node run。有效期至 ${date(data.expires_at)}。`);});
-$("channel-pair-button").addEventListener("click",()=>run(async()=>{const data=await api("/api/v3/channel-binding",{method:"POST",body:{}});showSecret("绑定聊天账号",`/bind ${data.code}`,"复制命令，在 Telegram 或钉钉与机器人私聊发送。它会绑定你的账号与当前空间。",`仅能使用一次，有效期至 ${date(data.expires_at)}。`);}));
-$("recovery-button").addEventListener("click",()=>run(async()=>{const data=await api("/api/v3/recovery-code",{method:"POST",body:{}});showSecret("保存新的恢复码",data.code,"旧恢复码已经失效。请离线保存这个一次性恢复码。");}));
-$("logout-button").addEventListener("click",()=>run(async()=>{await api("/api/logout",{method:"POST",body:{}});showLogin();notice("已退出当前设备。");}));
+bindButton("channel-pair-button",async()=>{const data=await api("/api/v3/channel-binding",{method:"POST",body:{}});showSecret("绑定聊天账号",`/bind ${data.code}`,"复制命令，在 Telegram 或钉钉与机器人私聊发送。它会绑定你的账号与当前空间。",`仅能使用一次，有效期至 ${date(data.expires_at)}。`);});
+bindButton("recovery-button",async()=>{const data=await api("/api/v3/recovery-code",{method:"POST",body:{}});showSecret("保存新的恢复码",data.code,"旧恢复码已经失效。请离线保存这个一次性恢复码。");});
+bindButton("retry-workspace",openWorkspace);
+bindButton("logout-button",async()=>{await api("/api/logout",{method:"POST",body:{}});showLogin();notice("已退出当前设备。");});
 $("space-select").addEventListener("change",event=>run(()=>switchSpace(event.target.value)));
-for (const button of document.querySelectorAll("[data-tab]")) button.addEventListener("click",()=>run(()=>selectTab(button.getAttribute("data-tab"))));
-for (const id of ["refresh-tasks","refresh-knowledge","refresh-devices"]) $(id).addEventListener("click",()=>run(refresh));
+
+for (const id of ["refresh-tasks","refresh-agents","refresh-knowledge","refresh-devices"]) $(id).addEventListener("click",()=>run(()=>refresh(true)));
+for (const view of ["collaboration","computer"]) $("task-view-"+view).addEventListener("click",()=>run(()=>selectTaskView(view)));
 $("secret-close").addEventListener("click",closeSecret);
 $("secret-dialog").addEventListener("close",()=>{input("secret-value").value="";$("secret-extra").textContent="";});
 $("secret-copy").addEventListener("click",()=>run(async()=>{if(navigator.clipboard) {await navigator.clipboard.writeText(input("secret-value").value);$("secret-copy").textContent="已复制";} else {input("secret-value").focus();input("secret-value").select();}}));
 document.addEventListener("visibilitychange",()=>{if(!document.hidden) run(refresh);});
-setInterval(()=>{if(!state.me || document.hidden || refreshing || !["tasks","devices"].includes(state.tab)) return;refreshing=true;run(async()=>{try{await refresh();}finally{refreshing=false;}});},8000);
-run(async()=>{if(await loadMe()) await refresh();});
+setInterval(()=>{if(!state.me || document.hidden || refreshing || !["tasks","agents","devices"].includes(state.tab)) return;refreshing=true;run(async()=>{try{await refresh();}finally{refreshing=false;}});},8000);
+productShell=createProductShell({document,content:document.querySelector(".shell"),current:state.tab,resolve:scopedUrl,onNavigate:tab=>run(()=>selectTab(tab)),spaceControl:$("space-select")});
+document.querySelector(".masthead").prepend(productShell.toggle);
+$("space-control-source").remove();
+window.addEventListener("popstate",()=>run(followLocation));
+window.addEventListener("beforeunload",event=>{if(hasDrafts()){event.preventDefault();event.returnValue="";}});
+for(const id of ["task-form","space-form","invite-form","device-pair-form","node-invite-form"]) form(id).addEventListener("input",()=>{form(id).dataset.dirty="1";});
+showPanel();
+run(openWorkspace);

@@ -104,6 +104,10 @@ for (const [what, url, options] of [
   ["the live stream", "/api/stream?after=3"],
   ["a picture", "/api/media/" + "a".repeat(64)],
   ["the approvals", "/api/approvals"],
+  ["an encoded API prefix", "/%61pi/history"],
+  ["an encoded API separator", "/api%2Fhistory"],
+  ["an unknown server route", "/private/report"],
+  ["an unknown static path", "/static/../%61pi/history"],
   ["its own file", "/sw.js"],
   ["a message being sent", "/static/app.js", { method: "POST" }],
   ["another site", "https://example.com/static/app.js"],
@@ -142,10 +146,10 @@ test("offline, a file it kept is served", async () => {
   assert.equal(await response.text(), "old /static/md.js");
 });
 
-test("offline, opening the page by any address gives the page, so it can say it cannot reach the agent", async () => {
+test("offline, a known page with a space query can fall back to the public shell", async () => {
   const worker = boot({ stores: { "pa-shell-v1": ["/"] } });
   worker.state.online = false;
-  const response = await ask(worker, "/some/old/bookmark", { mode: "navigate" }).answer;
+  const response = await ask(worker, "/workspace?space=project", { mode: "navigate" }).answer;
   assert.equal(await response.text(), "old /");
 });
 
@@ -159,7 +163,15 @@ test("offline with nothing kept, it says so plainly", async () => {
 test("offline, an api call is not answered from the cache even if a copy somehow got in", async () => {
   const worker = boot({ stores: { "pa-shell-v1": ["/api/history?limit=40", "/api/status"] } });
   worker.state.online = false;
-  for (const path of ["/api/history?limit=40", "/api/status"]) {
+  for (const path of ["/api/history?limit=40", "/api/status", "/%61pi/history", "/api%2Fhistory"]) {
     assert.equal(ask(worker, path).answer, null);
+  }
+});
+
+test("unknown navigation paths cannot retrieve a previously cached private response", async () => {
+  const worker = boot({ stores: { "pa-shell-v1": ["/", "/%61pi/history", "/private/report"] } });
+  worker.state.online = false;
+  for (const path of ["/%61pi/history", "/private/report", "/some/old/bookmark"]) {
+    assert.equal(ask(worker, path, { mode: "navigate" }).answer, null);
   }
 });

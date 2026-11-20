@@ -6,6 +6,9 @@
 !README.md
 !src/
 !src/**
+!docs/
+!docs/licenses/
+!docs/licenses/restic-BSD-2-Clause.txt
 **/__pycache__
 **/*.py[cod]
 **/.env

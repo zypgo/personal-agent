@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
+from fastapi import FastAPI
+from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
+from starlette.routing import BaseRoute, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from personal_agent.channels.ingress import Ingress
+from personal_agent.channels.web import contracts as dto
+from personal_agent.channels.web.openapi import Endpoint, document, router
 from personal_agent.collaboration.models import AccessDenied, IdentityError
 from personal_agent.execution.models import ExecutionConflict, ExecutionError, ExecutionNotFound
 from personal_agent.execution.workspaces import snapshot
@@ -47,7 +51,11 @@ async def error_response(_request: Request, exc: Exception) -> Response:
     return answer({"error": "The operation could not be completed."}, 500)
 
 
-async def body(request: Request) -> dict[str, Any]:
+BodyT = TypeVar("BodyT", bound=dto.RequestModel)
+
+
+async def body(request: Request, model: type[BodyT]) -> BodyT:
+    """Read only after authentication; fence authority before validating or doing work."""
     try:
         value = await request.json()
     except ValueError:
@@ -57,21 +65,18 @@ async def body(request: Request) -> dict[str, Any]:
         revalidate()
     if not isinstance(value, dict):
         raise HTTPException(400, "Send a JSON object.")
-    return value
-
-
-def text(data: dict[str, Any], key: str, default: str = "", maximum: int = 20000) -> str:
-    value = data.get(key, default)
-    if not isinstance(value, str) or len(value) > maximum:
-        raise HTTPException(400, f"Invalid {key}.")
-    return value
-
-
-def strings(data: dict[str, Any], key: str) -> list[str]:
-    value = data.get(key, [])
-    if not isinstance(value, list) or len(value) > 32 or any(not isinstance(x, str) for x in value):
-        raise HTTPException(400, f"Invalid {key}.")
-    return value
+    try:
+        return model.model_validate(value, strict=True)
+    except ValidationError as exc:
+        # Neither the input nor Pydantic's context can enter an HTTP error or exception chain.
+        errors = exc.errors(include_input=False, include_context=False, include_url=False)
+        location = errors[0]["loc"] if errors else ()
+        field = str(location[0]) if location else "request"
+        if issubclass(model, dto.NodeAttempt) and field == "generation":
+            raise ExecutionConflict("Stale attempt generation.") from None
+        if field not in model.model_fields and field not in model.errors:
+            field = "request"
+        raise HTTPException(400, model.errors.get(field, f"Invalid {field}.")) from None
 
 
 class V3Api:
@@ -169,49 +174,66 @@ class V3Api:
 
     async def create_space(self, request: Request) -> Response:
         session = self.session(request)
-        data = await body(request)
-        space = self.identities.create_project(
-            session.principal_id, text(data, "name", maximum=100)
-        )
+        data = await body(request, dto.CreateSpace)
+        space = self.identities.create_project(session.principal_id, data.name)
         self.spaces.get(space.id)
         return answer({"space": asdict(space)}, 201)
 
     async def members(self, request: Request) -> Response:
         app, session = self.selected(request, manage=request.method == "POST")
         if request.method == "POST":
-            data = await body(request)
-            target = text(data, "principal_id", maximum=80)
-            if data.get("revoke"):
+            data = await body(request, dto.ChangeMember)
+            target = data.principal_id
+            if data.revoke:
                 self.identities.revoke_member(session.principal_id, app.space_id, target)
             else:
-                self.identities.set_role(
-                    session.principal_id, app.space_id, target, text(data, "role", maximum=10)
-                )
+                assert data.role is not None
+                self.identities.set_role(session.principal_id, app.space_id, target, data.role)
             if app.jobs is not None:
                 app.jobs.revoke_actor(target)
             app.live.publish({"type": "authorization_changed"})
+            if data.revoke and target == session.principal_id:
+                return answer({"members": []})
         return answer({"members": self.identities.members(session.principal_id, app.space_id)})
 
     async def invite(self, request: Request) -> Response:
         app, session = self.selected(request, manage=True)
-        data = await body(request)
+        data = await body(request, dto.InviteMember)
         invitation = self.identities.create_member_invite(
             session.principal_id,
             app.space_id,
-            text(data, "role", "member", 10),
-            text(data, "label", maximum=100),
+            data.role,
+            data.label,
         )
         return answer(asdict(invitation), 201)
 
     async def enroll(self, request: Request) -> Response:
         self.throttle(request)
-        data = await body(request)
-        existing = self.root.web_auth.lookup(request.cookies.get(COOKIE, ""))
+        token = request.cookies.get(COOKIE, "")
+        initial = self.root.web_auth.lookup(token)
+        data = await body(request, dto.Enroll)
+
+        def existing_principal_id() -> str | None:
+            current = self.root.web_auth.lookup(token)
+            if data.require_existing_session and (
+                initial is None
+                or current is None
+                or (current.id, current.principal_id, current.authz_version)
+                != (initial.id, initial.principal_id, initial.authz_version)
+            ):
+                raise HTTPException(401, "Sign in again before joining this project.")
+            return current.principal_id if current else None
+
+        existing = existing_principal_id()
         with self.root.db.tx():
+            if data.require_existing_session:
+                # Recheck under the same lock as invitation redemption and session
+                # creation: losing the current identity must never register a new one.
+                existing = existing_principal_id()
             enrolled = self.identities.redeem_member(
-                text(data, "code", maximum=200),
-                existing_principal_id=existing.principal_id if existing else None,
-                label=text(data, "display_name", "Member", 100),
+                data.code,
+                existing_principal_id=existing,
+                label=data.display_name,
             )
             return self.signed(
                 enrolled.principal.id,
@@ -221,9 +243,9 @@ class V3Api:
 
     async def recover(self, request: Request) -> Response:
         self.throttle(request)
-        data = await body(request)
+        data = await body(request, dto.RedeemCode)
         with self.root.db.tx():
-            principal_id = self.identities.recover(text(data, "code", maximum=200))
+            principal_id = self.identities.recover(data.code)
             return self.signed(principal_id, request, {"ok": True})
 
     async def recovery(self, request: Request) -> Response:
@@ -243,13 +265,9 @@ class V3Api:
 
     async def device_pair(self, request: Request) -> Response:
         session = self.session(request)
-        data = await body(request)
+        data = await body(request, dto.PairDevice)
         return answer(
-            asdict(
-                self.identities.create_device_invite(
-                    session.principal_id, text(data, "label", maximum=100)
-                )
-            )
+            asdict(self.identities.create_device_invite(session.principal_id, data.label))
         )
 
     async def device_revoke(self, request: Request) -> Response:
@@ -275,12 +293,12 @@ class V3Api:
 
     async def channel_revoke(self, request: Request) -> Response:
         app, session = self.selected(request)
-        data = await body(request)
+        data = await body(request, dto.RevokeChannel)
         changed = self.identities.revoke_channel(
             session.principal_id,
-            text(data, "channel", maximum=200),
-            text(data, "account_id", maximum=200),
-            text(data, "sender_id", maximum=200),
+            data.channel,
+            data.account_id,
+            data.sender_id,
             space_id=app.space_id,
         )
         if not changed:
@@ -291,16 +309,16 @@ class V3Api:
         app, session = self.selected(request, write=request.method == "POST")
         assert app.jobs is not None
         if request.method == "POST":
-            data = await body(request)
-            inputs = snapshot(app.paths.workspace_dir, strings(data, "input_paths"))
+            data = await body(request, dto.CreateTask)
+            inputs = snapshot(app.paths.workspace_dir, data.input_paths)
             task = app.jobs.create_task(
-                title=text(data, "title", maximum=200),
-                command=text(data, "command"),
+                title=data.title,
+                command=data.command,
                 actor_id=session.principal_id,
-                request_id=text(data, "client_request_id", maximum=128),
-                timeout_s=data.get("timeout_s", 900),
+                request_id=data.client_request_id,
+                timeout_s=data.timeout_s,
                 input_manifest=inputs,
-                output_paths=strings(data, "output_paths"),
+                output_paths=data.output_paths,
                 channel="web",
             )
             return answer({"task": task}, 201)
@@ -329,17 +347,15 @@ class V3Api:
     async def revise(self, request: Request) -> Response:
         app, session = self.selected(request, write=True)
         assert app.jobs is not None
-        data = await body(request)
-        if type(data.get("revision")) is not int or data["revision"] < 1:
-            raise HTTPException(400, "revision must be a positive integer.")
+        data = await body(request, dto.ReviseTask)
         member = self.identities.require_access(session.principal_id, app.space_id)
         return answer(
             {
                 "task": app.jobs.revise_task(
                     request.path_params["task_id"],
                     actor_id=session.principal_id,
-                    expected_revision=data["revision"],
-                    title=text(data, "title", maximum=200),
+                    expected_revision=data.revision,
+                    title=data.title,
                     authorized=member.can_manage,
                 )
             }
@@ -348,23 +364,21 @@ class V3Api:
     async def step(self, request: Request) -> Response:
         app, session = self.selected(request, write=True)
         assert app.jobs is not None
-        data = await body(request)
-        revision = data.get("expected_revision", data.get("revision"))
-        if type(revision) is not int or revision < 1:
-            raise HTTPException(400, "expected_revision must be a positive integer.")
+        data = await body(request, dto.AddStep)
+        revision = data.expected_revision
         member = self.identities.require_access(session.principal_id, app.space_id)
-        inputs = snapshot(app.paths.workspace_dir, strings(data, "input_paths"))
+        inputs = snapshot(app.paths.workspace_dir, data.input_paths)
         return answer(
             {
                 "job": app.jobs.add_step(
                     request.path_params["task_id"],
                     actor_id=session.principal_id,
                     expected_revision=revision,
-                    step_id=text(data, "step_id", maximum=2),
-                    command=text(data, "command"),
-                    timeout_s=data.get("timeout_s", 900),
+                    step_id=data.step_id,
+                    command=data.command,
+                    timeout_s=data.timeout_s,
                     input_manifest=inputs,
-                    output_paths=strings(data, "output_paths"),
+                    output_paths=data.output_paths,
                     authorized=member.can_manage,
                 )
             },
@@ -374,10 +388,8 @@ class V3Api:
     async def question(self, request: Request) -> Response:
         app, session = self.selected(request, write=True)
         assert app.jobs is not None
-        data = await body(request)
-        revision = data.get("expected_revision")
-        if type(revision) is not int or revision < 1:
-            raise HTTPException(400, "expected_revision must be a positive integer.")
+        data = await body(request, dto.AskQuestion)
+        revision = data.expected_revision
         member = self.identities.require_access(session.principal_id, app.space_id)
         return answer(
             {
@@ -385,9 +397,9 @@ class V3Api:
                     request.path_params["task_id"],
                     actor_id=session.principal_id,
                     expected_revision=revision,
-                    question=text(data, "question", maximum=1000),
-                    choices=strings(data, "choices"),
-                    request_id=text(data, "request_id", maximum=128),
+                    question=data.question,
+                    choices=data.choices,
+                    request_id=data.request_id,
                     authorized=member.can_manage,
                 )
             },
@@ -397,10 +409,8 @@ class V3Api:
     async def answer_question(self, request: Request) -> Response:
         app, session = self.selected(request, write=True)
         assert app.jobs is not None
-        data = await body(request)
-        revision = data.get("expected_revision")
-        if type(revision) is not int or revision < 1:
-            raise HTTPException(400, "expected_revision must be a positive integer.")
+        data = await body(request, dto.AnswerQuestion)
+        revision = data.expected_revision
         return answer(
             {
                 "question": app.jobs.answer_input(
@@ -408,7 +418,7 @@ class V3Api:
                     request.path_params["question_id"],
                     actor_id=session.principal_id,
                     expected_revision=revision,
-                    answer=text(data, "answer", maximum=4000),
+                    answer=data.answer,
                     authorized=True,
                 )
             }
@@ -418,14 +428,12 @@ class V3Api:
         app, session = self.selected(request, write=True)
         self.identities.require_admin(session.principal_id)
         assert app.jobs is not None
-        data = await body(request)
-        if type(data.get("allowed")) is not bool:
-            raise HTTPException(400, "allowed must be a boolean.")
+        data = await body(request, dto.ApproveJob)
         job = app.jobs.approve_job(
             request.path_params["job_id"],
             actor_id=session.principal_id,
-            plan_hash=text(data, "plan_hash", maximum=64),
-            allowed=data["allowed"],
+            plan_hash=data.plan_hash,
+            allowed=data.allowed,
         )
         return answer({"job": job})
 
@@ -434,18 +442,16 @@ class V3Api:
         session = self.session(request)
         self.identities.require_admin(session.principal_id)
         if request.method == "POST":
-            data = await body(request)
-            app = self.spaces.get(text(data, "space_id", maximum=80))
+            data = await body(request, dto.ReviewJob)
+            app = self.spaces.get(data.space_id)
             assert app.jobs is not None
-            if type(data.get("allowed")) is not bool:
-                raise HTTPException(400, "allowed must be a boolean.")
             return answer(
                 {
                     "job": app.jobs.approve_job(
-                        text(data, "job_id", maximum=64),
+                        data.job_id,
                         actor_id=session.principal_id,
-                        plan_hash=text(data, "plan_hash", maximum=64),
-                        allowed=data["allowed"],
+                        plan_hash=data.plan_hash,
+                        allowed=data.allowed,
                     )
                 }
             )
@@ -543,20 +549,20 @@ class V3Api:
         app, _ = self.selected(request, write=request.method == "POST")
         prefix = "/memories/state/knowledge/"
         if request.method == "POST":
-            data = await body(request)
-            name = text(data, "path", maximum=100)
+            data = await body(request, dto.WriteKnowledge)
+            name = data.path
             import re
 
             if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,90}\.md", name):
                 raise HTTPException(400, "Use a simple Markdown filename.")
             path = prefix + name
-            content = text(data, "text", maximum=30000)
+            content = data.text
             with app.db.tx():
                 row = app.db.one(
                     "SELECT revision,content FROM memory_documents WHERE path=?", (path,)
                 )
                 revision = int(row["revision"]) if row else 0
-                if data.get("revision", 0) != revision:
+                if data.revision != revision:
                     raise ExecutionConflict("Document changed; reload before editing.")
                 from personal_agent.memory.store import PathError
 
@@ -601,13 +607,11 @@ class V3Api:
     async def node_invite(self, request: Request) -> Response:
         session = self.session(request)
         self.identities.require_admin(session.principal_id)
-        data = await body(request)
-        space_ids = strings(data, "space_ids")
+        data = await body(request, dto.InviteNode)
+        space_ids = data.space_ids
         for key in space_ids:
             self.identities.space(key)
-        invitation = self.nodes.create_invite(
-            session.principal_id, space_ids, label=text(data, "label", maximum=100)
-        )
+        invitation = self.nodes.create_invite(session.principal_id, space_ids, label=data.label)
         return answer(asdict(invitation), 201)
 
     async def node_revoke(self, request: Request) -> Response:
@@ -637,19 +641,17 @@ class V3Api:
 
     async def node_pair(self, request: Request) -> Response:
         self.throttle(request)
-        data = await body(request)
-        registered = self.nodes.redeem(
-            text(data, "code", maximum=200), strings(data, "capabilities")
-        )
+        data = await body(request, dto.PairNode)
+        registered = self.nodes.redeem(data.code, data.capabilities)
         if registered is None:
             raise HTTPException(403, "Node pairing code expired or was used.")
         return answer({"node": registered.node.to_dict(), "token": registered.token})
 
     async def node_claim(self, request: Request) -> Response:
         node = self.node(request)
-        data = await body(request)
+        data = await body(request, dto.ClaimNode)
         refreshed = self.nodes.heartbeat(
-            node.id, strings(data, "capabilities") if "capabilities" in data else None
+            node.id, data.capabilities if "capabilities" in data.model_fields_set else None
         )
         if refreshed is None:
             raise HTTPException(401, "Node credential is invalid or revoked.")
@@ -720,24 +722,24 @@ class V3Api:
 
     async def node_attempt(self, request: Request) -> Response:
         node = self.node(request)
-        data = await body(request)
+        method = request.path_params["action"]
+        data = await body(request, dto.NODE_ACTIONS.get(method, dto.NodeAttempt))
         node = self.node(request)  # Current grants may have changed while the body was arriving.
-        app = self.spaces.get(text(data, "space_id", maximum=80))
+        app = self.spaces.get(data.space_id)
         assert app.jobs is not None
         attempt_id = request.path_params["attempt_id"]
         attempt = app.jobs.get_attempt(attempt_id)
         if attempt["node_id"] != node.id:
             raise HTTPException(403, "Attempt belongs to another node.")
-        generation = data.get("generation")
+        generation = data.generation
         if type(generation) is not int or generation != attempt["generation"]:
             raise ExecutionConflict("Stale attempt generation.")
-        if text(data, "plan_hash", maximum=64) != attempt["plan_hash"]:
+        if data.plan_hash != attempt["plan_hash"]:
             raise ExecutionConflict("Attempt plan hash differs from the approved plan.")
         task = app.jobs.get_task(attempt["task_id"])
         allowed = self.node_authorized(node, app, attempt)
         if not allowed:
             app.jobs.cancel_task(task["id"], actor_id=task["actor_id"])
-        method = request.path_params["action"]
         self.nodes.heartbeat(node.id)
         if method == "status":
             return answer(
@@ -751,95 +753,69 @@ class V3Api:
         if method == "admit":
             if not allowed:
                 raise HTTPException(403, "Task authorization revoked.")
+            admitted = cast(dto.AdmitAttempt, data)
             result = app.jobs.admit(
                 attempt_id,
                 generation,
                 node_id=node.id,
-                plan_hash=text(data, "plan_hash", maximum=64),
-                resource_id=text(data, "resource_id", maximum=256),
+                plan_hash=data.plan_hash,
+                resource_id=admitted.resource_id,
             )
         elif method == "observe":
+            observed = cast(dto.ObserveAttempt, data)
             result = app.jobs.observe(
                 attempt_id,
                 generation,
                 node_id=node.id,
-                state=text(data, "state", maximum=30),
-                sequence=data.get("sequence"),
-                stdout=text(data, "stdout", maximum=100000),
-                stderr=text(data, "stderr", maximum=100000),
+                state=observed.state,
+                sequence=observed.sequence,
+                stdout=observed.stdout,
+                stderr=observed.stderr,
             )
         elif method == "complete":
+            completed = cast(dto.CompleteAttempt, data)
             result = app.jobs.complete(
                 attempt_id,
                 generation,
                 node_id=node.id,
-                status=text(data, "status", maximum=30),
-                exit_code=data.get("exit_code"),
-                stdout=text(data, "stdout", maximum=100000),
-                stderr=text(data, "stderr", maximum=100000),
-                artifacts=data.get("artifacts", []),
+                status=completed.status,
+                exit_code=completed.exit_code,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+                artifacts=[item.model_dump() for item in completed.artifacts or []],
                 deliver=allowed,
             )
             return answer({"accepted": True, "attempt": result})
         elif method == "cleanup":
-            if type(data.get("released")) is not bool:
-                raise HTTPException(400, "released must be a boolean.")
+            cleaned = cast(dto.CleanupAttempt, data)
             result = app.jobs.cleanup(
-                attempt_id, generation, node_id=node.id, released=data["released"]
+                attempt_id, generation, node_id=node.id, released=cleaned.released
             )
         else:
             raise HTTPException(404, "Unknown node operation.")
         return answer({"accepted": True, "attempt": result})
 
-    def routes(self) -> list[Route]:
-        return [
-            Route("/api/v3/me", self.me),
-            Route("/api/v3/spaces", self.create_space, methods=["POST"]),
-            Route("/api/v3/members", self.members, methods=["GET", "POST"]),
-            Route("/api/v3/invites", self.invite, methods=["POST"]),
-            Route("/api/v3/enroll", self.enroll, methods=["POST"]),
-            Route("/api/v3/recover", self.recover, methods=["POST"]),
-            Route("/api/v3/recovery-code", self.recovery, methods=["POST"]),
-            Route("/api/v3/devices", self.devices),
-            Route("/api/v3/devices/pair", self.device_pair, methods=["POST"]),
-            Route("/api/v3/devices/{device_id:int}/revoke", self.device_revoke, methods=["POST"]),
-            Route("/api/v3/channel-binding", self.channel_pair, methods=["POST"]),
-            Route("/api/v3/channel-bindings", self.channel_bindings),
-            Route("/api/v3/channel-bindings/revoke", self.channel_revoke, methods=["POST"]),
-            Route("/api/v3/tasks", self.tasks, methods=["GET", "POST"]),
-            Route("/api/v3/tasks/{task_id}", self.task),
-            Route("/api/v3/tasks/{task_id}/cancel", self.cancel, methods=["POST"]),
-            Route("/api/v3/tasks/{task_id}/revise", self.revise, methods=["POST"]),
-            Route("/api/v3/tasks/{task_id}/steps", self.step, methods=["POST"]),
-            Route("/api/v3/tasks/{task_id}/questions", self.question, methods=["POST"]),
-            Route(
-                "/api/v3/tasks/{task_id}/questions/{question_id}/answer",
-                self.answer_question,
-                methods=["POST"],
-            ),
-            Route("/api/v3/jobs/{job_id}/approve", self.approve, methods=["POST"]),
-            Route("/api/v3/review-jobs", self.review, methods=["GET", "POST"]),
-            Route("/api/v3/attempts/{attempt_id}/logs", self.logs),
-            Route("/api/v3/knowledge", self.knowledge, methods=["GET", "POST"]),
-            Route("/api/v3/knowledge/history", self.knowledge_history),
-            Route("/api/v3/diagnostics", self.diagnostics),
-            Route("/api/v3/nodes", self.node_list),
-            Route("/api/v3/node-invites", self.node_invite, methods=["POST"]),
-            Route("/api/v3/nodes/{node_id}/revoke", self.node_revoke, methods=["POST"]),
-            Route("/api/v3/nodes/pair", self.node_pair, methods=["POST"]),
-            Route("/api/v3/nodes/claim", self.node_claim, methods=["POST"]),
-            Route(
-                "/api/v3/nodes/attempts/{attempt_id}/{action}", self.node_attempt, methods=["POST"]
-            ),
-        ]
+    async def openapi(self, request: Request) -> Response:
+        self.session(request)
+        return answer(document())
+
+    def routes(self) -> list[BaseRoute]:
+        routes = router(lambda name: cast(Endpoint, getattr(self, name))).routes
+        return [*routes, Route("/api/v3/openapi.json", self.openapi)]
 
 
 class SpaceRouter:
     def __init__(self, fallback: ASGIApp, root: App, api: WebApi) -> None:
+        from personal_agent.channels.web.agents import AgentApi
+
         self.fallback, self.root, self.api = fallback, root, api
+        self.agents_asgi = AgentApi(root, secure=api.secure).asgi()
         self.v3 = V3Api(root, secure=api.secure)
-        self.v3_asgi = Starlette(
+        self.v3_asgi = FastAPI(
             routes=self.v3.routes(),
+            openapi_url=None,
+            docs_url=None,
+            redoc_url=None,
             exception_handlers={
                 Exception: error_response,
                 HTTPException: error_response,
@@ -855,6 +831,9 @@ class SpaceRouter:
             await self.fallback(scope, receive, send)
             return
         path = scope["path"]
+        if path.startswith("/api/v4/"):
+            await self.agents_asgi(scope, receive, send)
+            return
         if path.startswith("/api/v3/"):
             await self.v3_asgi(scope, receive, send)
             return
@@ -862,14 +841,14 @@ class SpaceRouter:
             response = self.api._asset(Request(scope), "workbench.html")
             await response(scope, receive, send)
             return
-        if not path.startswith("/api/") or path in ("/api/pair", "/api/health"):
+        if not path.startswith("/api/") or path in ("/api/pair", "/api/health", "/api/logout"):
             await self.fallback(scope, receive, send)
             return
         request = Request(scope)
         try:
             app, session = self.v3.selected(
                 request,
-                write=scope["method"] not in ("GET", "HEAD", "OPTIONS") and path != "/api/logout",
+                write=scope["method"] not in ("GET", "HEAD", "OPTIONS"),
             )
             if path.startswith("/api/approvals/"):
                 app.require_approval_actor(session.principal_id)

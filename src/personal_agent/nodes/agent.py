@@ -177,7 +177,21 @@ class Runner:
 
         if observed.state == "created":
             if cancel:
+                # Remove the unstarted resource before confirming cancellation. An older
+                # start request may still be in flight; removal either wins that race or
+                # fails because it is now running, which leaves the receipt recoverable.
+                await self.backend.cleanup(receipt)
                 await self._finish(receipt, "cancelled", None, "", "", [])
+                return
+            if receipt.state not in {"received", "prepared", "creating", "created"}:
+                # A lost start response is not permission to repeat it. Even an inspect
+                # showing 'created' can race a first request still executing at the daemon.
+                self.store.update(receipt.attempt_id, state="uncertain")
+                await self.transport.request(
+                    "POST",
+                    self._path(receipt, "observe"),
+                    {**self._body(receipt), "state": "uncertain"},
+                )
                 return
             # Store start intent before the first possibly side-effecting call.
             receipt = self.store.update(receipt.attempt_id, state="starting")

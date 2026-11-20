@@ -1,0 +1,1474 @@
+// node_modules/@tanstack/query-core/build/modern/timeoutManager.js
+var e = {
+	setTimeout: (e, t) => setTimeout(e, t),
+	clearTimeout: (e) => clearTimeout(e),
+	setInterval: (e, t) => setInterval(e, t),
+	clearInterval: (e) => clearInterval(e)
+}, t = new class {
+	#e = e;
+	setTimeoutProvider(e) {
+		this.#e = e;
+	}
+	setTimeout(e, t) {
+		return this.#e.setTimeout(e, t);
+	}
+	clearTimeout(e) {
+		this.#e.clearTimeout(e);
+	}
+	setInterval(e, t) {
+		return this.#e.setInterval(e, t);
+	}
+	clearInterval(e) {
+		this.#e.clearInterval(e);
+	}
+}();
+function n(e) {
+	setTimeout(e, 0);
+}
+// node_modules/@tanstack/query-core/build/modern/utils.js
+var r = typeof window > "u" || "Deno" in globalThis;
+function i() {}
+function a(e, t) {
+	return typeof e == "function" ? e(t) : e;
+}
+function o(e) {
+	return typeof e == "number" && e >= 0 && e !== Infinity;
+}
+function s(e, t) {
+	return Math.max(e + (t || 0) - Date.now(), 0);
+}
+function c(e, t) {
+	return typeof e == "function" ? e(t) : e;
+}
+function l(e, t) {
+	let { type: n = "all", exact: r, fetchStatus: i, predicate: a, queryKey: o, stale: s } = e;
+	if (o) {
+		if (r) {
+			if (t.queryHash !== d(o, t.options)) return !1;
+		} else if (!p(t.queryKey, o)) return !1;
+	}
+	if (n !== "all") {
+		let e = t.isActive();
+		if (n === "active" && !e || n === "inactive" && e) return !1;
+	}
+	return !(typeof s == "boolean" && t.isStale() !== s || i && i !== t.state.fetchStatus || a && !a(t));
+}
+function u(e, t) {
+	let { exact: n, status: r, predicate: i, mutationKey: a } = e;
+	if (a) {
+		if (!t.options.mutationKey) return !1;
+		if (n) {
+			if (f(t.options.mutationKey) !== f(a)) return !1;
+		} else if (!p(t.options.mutationKey, a)) return !1;
+	}
+	return !(r && t.state.status !== r || i && !i(t));
+}
+function d(e, t) {
+	return (t?.queryKeyHashFn || f)(e);
+}
+function f(e) {
+	return JSON.stringify(e, (e, t) => _(t) ? Object.keys(t).sort().reduce((e, n) => (e[n] = t[n], e), {}) : t);
+}
+function p(e, t) {
+	if (e === t) return !0;
+	if (typeof e != typeof t) return !1;
+	if (e && t && typeof e == "object" && typeof t == "object") {
+		if (Array.isArray(e) && Array.isArray(t)) {
+			if (t.length > e.length) return !1;
+			for (let n = 0; n < t.length; n++) if (!p(e[n], t[n])) return !1;
+			return !0;
+		}
+		let n = Object.keys(t);
+		for (let r of n) if (!p(e[r], t[r])) return !1;
+		return !0;
+	}
+	return !1;
+}
+var m = Object.prototype.hasOwnProperty;
+function h(e, t, n = 0) {
+	if (e === t) return e;
+	if (n > 500) return t;
+	let r = g(e) && g(t);
+	if (!r && !(_(e) && _(t))) return t;
+	let i = (r ? e : Object.keys(e)).length, a = r ? t : Object.keys(t), o = a.length, s = r ? Array(o) : {}, c = 0;
+	for (let l = 0; l < o; l++) {
+		let o = r ? l : a[l], u = e[o], d = t[o];
+		if (u === d) {
+			s[o] = u, (r ? l < i : m.call(e, o)) && c++;
+			continue;
+		}
+		if (u === null || d === null || typeof u != "object" || typeof d != "object") {
+			s[o] = d;
+			continue;
+		}
+		let f = h(u, d, n + 1);
+		s[o] = f, f === u && c++;
+	}
+	return i === o && c === i ? e : s;
+}
+function g(e) {
+	return Array.isArray(e) && e.length === Object.keys(e).length;
+}
+function _(e) {
+	if (!v(e)) return !1;
+	let t = Object.getPrototypeOf(e), n = t?.constructor;
+	if (n === void 0) return !0;
+	if (typeof n != "function") return !1;
+	let r = n.prototype;
+	return !(!v(r) || !r.hasOwnProperty("isPrototypeOf") || t !== Object.prototype);
+}
+function v(e) {
+	return Object.prototype.toString.call(e) === "[object Object]";
+}
+function ee(e) {
+	return new Promise((n) => {
+		t.setTimeout(n, e);
+	});
+}
+function y(e, t, n) {
+	return typeof n.structuralSharing == "function" ? n.structuralSharing(e, t) : n.structuralSharing === !1 ? t : h(e, t);
+}
+function te(e, t, n = 0) {
+	let r = [...e, t];
+	return n && r.length > n ? r.slice(-n) : r;
+}
+function b(e, t, n = 0) {
+	let r = [t, ...e];
+	return n && r.length > n ? r.slice(0, n) : r;
+}
+var x = Symbol();
+function S(e, t) {
+	return !e.queryFn && t?.initialPromise ? () => t.initialPromise : !e.queryFn || e.queryFn === x ? () => Promise.reject(/* @__PURE__ */ Error(`Missing queryFn: '${e.queryHash}'`)) : e.queryFn;
+}
+var C = Symbol();
+function w(e, t, n, r) {
+	let i = !1, a;
+	return Object.defineProperties(e, {
+		[C]: { value: r },
+		signal: {
+			enumerable: !0,
+			get: () => (a ??= t(), i || (i = !0, a.aborted ? n() : a.addEventListener("abort", n, { once: !0 })), a)
+		}
+	}), e;
+}
+// node_modules/@tanstack/query-core/build/modern/environmentManager.js
+var ne = () => r, T = () => ne(), E = class {
+	constructor() {
+		this.listeners = /* @__PURE__ */ new Set(), this.subscribe = this.subscribe.bind(this);
+	}
+	subscribe(e) {
+		return this.listeners.add(e), this.onSubscribe(), () => {
+			this.listeners.delete(e), this.onUnsubscribe();
+		};
+	}
+	hasListeners() {
+		return this.listeners.size > 0;
+	}
+	onSubscribe() {}
+	onUnsubscribe() {}
+}, D = new class extends E {
+	#e;
+	#t;
+	#n;
+	constructor() {
+		super(), this.#n = (e) => {
+			if (typeof window < "u" && window.addEventListener) {
+				let t = () => e();
+				return window.addEventListener("visibilitychange", t, !1), () => {
+					window.removeEventListener("visibilitychange", t);
+				};
+			}
+		};
+	}
+	onSubscribe() {
+		this.#t || this.setEventListener(this.#n);
+	}
+	onUnsubscribe() {
+		this.hasListeners() || (this.#t?.(), this.#t = void 0);
+	}
+	setEventListener(e) {
+		this.#n = e, this.#t?.(), this.#t = e((e) => {
+			typeof e == "boolean" ? this.setFocused(e) : this.onFocus();
+		});
+	}
+	setFocused(e) {
+		this.#e !== e && (this.#e = e, this.onFocus());
+	}
+	onFocus() {
+		let e = this.isFocused();
+		this.listeners.forEach((t) => {
+			t(e);
+		});
+	}
+	isFocused() {
+		return typeof this.#e == "boolean" ? this.#e : globalThis.document?.visibilityState !== "hidden";
+	}
+}(), O = n;
+function k() {
+	let e = [], t = 0, n = (e) => {
+		e();
+	}, r = (e) => {
+		e();
+	}, i = O, a = (r) => {
+		t ? e.push(r) : i(() => {
+			n(r);
+		});
+	}, o = () => {
+		let t = e;
+		e = [], t.length && i(() => {
+			r(() => {
+				t.forEach((e) => {
+					n(e);
+				});
+			});
+		});
+	};
+	return {
+		batch: (e) => {
+			let n;
+			t++;
+			try {
+				n = e();
+			} finally {
+				t--, t || o();
+			}
+			return n;
+		},
+		batchCalls: (e) => (...t) => {
+			a(() => {
+				e(...t);
+			});
+		},
+		schedule: a,
+		setNotifyFunction: (e) => {
+			n = e;
+		},
+		setBatchNotifyFunction: (e) => {
+			r = e;
+		},
+		setScheduler: (e) => {
+			i = e;
+		}
+	};
+}
+var A = k(), j = new class extends E {
+	#e = !0;
+	#t;
+	#n;
+	constructor() {
+		super(), this.#n = (e) => {
+			if (typeof window < "u" && window.addEventListener) {
+				let t = () => e(!0), n = () => e(!1);
+				return window.addEventListener("online", t, !1), window.addEventListener("offline", n, !1), () => {
+					window.removeEventListener("online", t), window.removeEventListener("offline", n);
+				};
+			}
+		};
+	}
+	onSubscribe() {
+		this.#t || this.setEventListener(this.#n);
+	}
+	onUnsubscribe() {
+		this.hasListeners() || (this.#t?.(), this.#t = void 0);
+	}
+	setEventListener(e) {
+		this.#n = e, this.#t?.(), this.#t = e(this.setOnline.bind(this));
+	}
+	setOnline(e) {
+		this.#e !== e && (this.#e = e, this.listeners.forEach((t) => {
+			t(e);
+		}));
+	}
+	isOnline() {
+		return this.#e;
+	}
+}();
+// node_modules/@tanstack/query-core/build/modern/retryer.js
+function M(e) {
+	return Math.min(1e3 * 2 ** e, 3e4);
+}
+function N(e) {
+	return (e ?? "online") !== "online" || j.isOnline();
+}
+var P = class extends Error {
+	constructor(e) {
+		super("CancelledError"), this.revert = e?.revert, this.silent = e?.silent;
+	}
+};
+function re(e) {
+	return e instanceof P;
+}
+function F(e) {
+	let t = !1, n = 0, r, a = "pending", o, s, c = new Promise((e, t) => {
+		o = e, s = t;
+	});
+	c.catch(i);
+	let l = () => a !== "pending", u = (t) => {
+		if (!l()) {
+			let n = new P(t);
+			g(n), e.onCancel?.(n);
+		}
+	}, d = () => {
+		t = !0;
+	}, f = () => {
+		t = !1;
+	}, p = () => D.isFocused() && (e.networkMode === "always" || j.isOnline()) && e.canRun(), m = () => N(e.networkMode) && e.canRun(), h = (e) => {
+		l() || (r?.(), a = "resolved", o(e));
+	}, g = (e) => {
+		l() || (r?.(), a = "rejected", s(e));
+	}, _ = (t) => new Promise((n) => {
+		r = (e) => {
+			(l() || t()) && n(e);
+		}, e.onPause?.();
+	}).then(() => {
+		r = void 0, l() || e.onContinue?.();
+	}), v = () => {
+		if (l()) return;
+		let r, i = n === 0 ? e.initialPromise : void 0;
+		try {
+			r = i ?? e.fn();
+		} catch (e) {
+			r = Promise.reject(e);
+		}
+		Promise.resolve(r).then(h).catch((r) => {
+			if (l()) return;
+			let i = e.retry ?? (T() ? 0 : 3), a = e.retryDelay ?? M, o = typeof a == "function" ? a(n, r) : a, s = i === !0 || typeof i == "number" && n < i || typeof i == "function" && i(n, r);
+			t || !s ? g(r) : (n++, e.onFail?.(n, r), ee(o).then(() => l() || p() ? void 0 : _(p)).then(() => {
+				t ? g(r) : v();
+			}));
+		});
+	};
+	return {
+		promise: c,
+		status: () => a,
+		cancel: u,
+		continue: () => (r?.(), c),
+		cancelRetry: d,
+		continueRetry: f,
+		canStart: m,
+		start: () => (m() ? v() : _(m).then(v), c)
+	};
+}
+// node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
+function I(e) {
+	return { onFetch: (t, n) => {
+		let r = t.options, i = t.fetchOptions?.meta?.fetchMore?.direction, a = t.state.data?.pages || [], o = t.state.data?.pageParams || [], s = {
+			pages: [],
+			pageParams: []
+		}, c = 0, l = async () => {
+			let n = !1, l = t, u = (e) => {
+				w(e, () => t.signal, () => n = !0, l[C]);
+			}, d = S(t.options, t.fetchOptions), f = async (e, r, i) => {
+				if (n) return Promise.reject(t.signal.reason);
+				if (r == null && e.pages.length) return Promise.resolve(e);
+				let a = (() => {
+					let e = {
+						client: t.client,
+						queryKey: t.queryKey,
+						pageParam: r,
+						direction: i ? "backward" : "forward",
+						meta: t.options.meta
+					};
+					return u(e), e;
+				})(), o = await d(a), { maxPages: s } = t.options, c = i ? b : te;
+				return {
+					pages: c(e.pages, o, s),
+					pageParams: c(e.pageParams, r, s)
+				};
+			};
+			if (i && a.length) {
+				let e = i === "backward", t = e ? R : L, n = {
+					pages: a,
+					pageParams: o
+				};
+				s = await f(n, t(r, n), e);
+			} else {
+				let t = e ?? a.length;
+				do {
+					let e = c === 0 ? o[0] === void 0 ? r.initialPageParam : o[0] : L(r, s);
+					if (c > 0 && e == null) break;
+					s = await f(s, e), c++;
+				} while (c < t);
+			}
+			return s;
+		};
+		t.fetchFn = t.options.persister ? () => t.options.persister?.(l, {
+			client: t.client,
+			queryKey: t.queryKey,
+			meta: t.options.meta,
+			signal: t.signal
+		}, n) : l;
+	} };
+}
+function L(e, { pages: t, pageParams: n }) {
+	let r = t.length - 1;
+	return t.length > 0 ? e.getNextPageParam(t[r], t, n[r], n) : void 0;
+}
+function R(e, { pages: t, pageParams: n }) {
+	return t.length > 0 ? e.getPreviousPageParam?.(t[0], t, n[0], n) : void 0;
+}
+// node_modules/@tanstack/query-core/build/modern/removable.js
+var z = class {
+	#e;
+	destroy() {
+		this.clearGcTimeout();
+	}
+	scheduleGc() {
+		this.clearGcTimeout(), o(this.gcTime) && (this.#e = t.setTimeout(() => {
+			this.optionalRemove();
+		}, this.gcTime));
+	}
+	updateGcTime(e) {
+		this.gcTime = Math.max(this.gcTime || 0, e ?? (T() ? Infinity : 3e5));
+	}
+	clearGcTimeout() {
+		this.#e !== void 0 && (t.clearTimeout(this.#e), this.#e = void 0);
+	}
+}, B = class extends z {
+	#e;
+	#t;
+	#n;
+	#r;
+	#i;
+	#a;
+	#o;
+	#s;
+	#c;
+	constructor(e) {
+		super(), this.#c = !1, this.#s = e.defaultOptions, this.setOptions(e.options), this.observers = [], this.#i = e.client, this.#r = this.#i.getQueryCache(), this.queryKey = e.queryKey, this.queryHash = e.queryHash, this.#t = U(this.options), this.state = e.state ?? this.#t, this.scheduleGc();
+	}
+	get meta() {
+		return this.options.meta;
+	}
+	get queryType() {
+		return this.#e;
+	}
+	get promise() {
+		return this.#a?.promise;
+	}
+	setOptions(e) {
+		if (this.options = {
+			...this.#s,
+			...e
+		}, e?._type && (this.#e = e._type), this.updateGcTime(this.options.gcTime), this.state && this.state.data === void 0) {
+			let e = U(this.options);
+			e.data !== void 0 && (this.setState(H(e.data, e.dataUpdatedAt)), this.#t = e);
+		}
+	}
+	optionalRemove() {
+		!this.observers.length && this.state.fetchStatus === "idle" && this.#r.remove(this);
+	}
+	setData(e, t) {
+		let n = y(this.state.data, e, this.options);
+		return this.#l({
+			data: n,
+			type: "success",
+			dataUpdatedAt: t?.updatedAt,
+			manual: t?.manual
+		}), n;
+	}
+	setState(e) {
+		this.#l({
+			type: "setState",
+			state: e
+		});
+	}
+	cancel(e) {
+		let t = this.#a?.promise;
+		return this.#a?.cancel(e), t ? t.then(i).catch(i) : Promise.resolve();
+	}
+	destroy() {
+		super.destroy(), this.cancel({ silent: !0 });
+	}
+	get resetState() {
+		return this.#t;
+	}
+	reset() {
+		this.destroy(), this.setState(this.resetState);
+	}
+	isActive() {
+		return this.observers.some((e) => c(e.options.enabled, this) !== !1);
+	}
+	isDisabled() {
+		return this.getObserversCount() > 0 ? !this.isActive() : this.options.queryFn === x || !this.isFetched();
+	}
+	isFetched() {
+		return this.state.dataUpdateCount + this.state.errorUpdateCount > 0;
+	}
+	isStatic() {
+		return this.state.data !== void 0 && this.getObserversCount() > 0 && this.observers.some((e) => c(e.options.staleTime, this) === "static");
+	}
+	isStale() {
+		return this.getObserversCount() > 0 ? this.observers.some((e) => e.getCurrentResult().isStale) : this.state.data === void 0 || this.state.isInvalidated;
+	}
+	isStaleByTime(e = 0) {
+		return this.state.data === void 0 ? !0 : e === "static" ? !1 : this.state.isInvalidated ? !0 : !s(this.state.dataUpdatedAt, e);
+	}
+	onFocus() {
+		this.observers.find((e) => e.shouldFetchOnWindowFocus())?.refetch({ cancelRefetch: !1 }), this.#a?.continue();
+	}
+	onOnline() {
+		this.observers.find((e) => e.shouldFetchOnReconnect())?.refetch({ cancelRefetch: !1 }), this.#a?.continue();
+	}
+	addObserver(e) {
+		this.observers.includes(e) || (this.observers.push(e), this.clearGcTimeout(), this.#r.notify({
+			type: "observerAdded",
+			query: this,
+			observer: e
+		}));
+	}
+	removeObserver(e) {
+		let t = this.observers.indexOf(e);
+		t !== -1 && (this.observers.splice(t, 1), this.observers.length || (this.#a && (this.#c || this.state.fetchStatus === "paused" && this.state.status === "pending" ? this.#a.cancel({ revert: !0 }) : this.#a.cancelRetry()), this.scheduleGc()), this.#r.notify({
+			type: "observerRemoved",
+			query: this,
+			observer: e
+		}));
+	}
+	getObserversCount() {
+		return this.observers.length;
+	}
+	invalidate() {
+		this.state.isInvalidated || this.#l({ type: "invalidate" });
+	}
+	async fetch(e, t) {
+		if (this.state.fetchStatus !== "idle" && this.#a?.status() !== "rejected") {
+			if (this.state.data !== void 0 && t?.cancelRefetch) this.cancel({ silent: !0 });
+			else if (this.#a && this.#o) return this.#a.continueRetry(), this.#o;
+		}
+		if (e && this.setOptions(e), !this.options.queryFn) {
+			let e = this.observers.find((e) => e.options.queryFn);
+			e && this.setOptions(e.options);
+		}
+		let n = new AbortController(), r = (e) => {
+			Object.defineProperties(e, {
+				[C]: {
+					value: n.signal,
+					enumerable: !0
+				},
+				signal: {
+					enumerable: !0,
+					get: () => (this.#c = !0, n.signal)
+				}
+			});
+		}, i = () => {
+			let e = S(this.options, t), n = (() => {
+				let e = {
+					client: this.#i,
+					queryKey: this.queryKey,
+					meta: this.meta
+				};
+				return r(e), e;
+			})();
+			return this.#c = !1, this.options.persister ? this.options.persister(e, n, this) : e(n);
+		}, a = (() => {
+			let e = {
+				fetchOptions: t,
+				options: this.options,
+				queryKey: this.queryKey,
+				client: this.#i,
+				state: this.state,
+				fetchFn: i
+			};
+			return r(e), e;
+		})();
+		(this.#e === "infinite" ? I(this.options.pages) : this.options.behavior)?.onFetch(a, this), this.#n = this.state, (this.state.fetchStatus === "idle" || this.state.fetchMeta !== a.fetchOptions?.meta) && this.#l({
+			type: "fetch",
+			meta: a.fetchOptions?.meta
+		});
+		let o = this.#a = F({
+			initialPromise: t?.initialPromise,
+			fn: a.fetchFn,
+			onCancel: (e) => {
+				e instanceof P && e.revert && this.setState({
+					...this.#n,
+					fetchStatus: "idle"
+				}), n.abort();
+			},
+			onFail: (e, t) => {
+				this.#l({
+					type: "failed",
+					failureCount: e,
+					error: t
+				});
+			},
+			onPause: () => {
+				this.#l({ type: "pause" });
+			},
+			onContinue: () => {
+				this.#l({ type: "continue" });
+			},
+			retry: a.options.retry,
+			retryDelay: a.options.retryDelay,
+			networkMode: a.options.networkMode,
+			canRun: () => !0
+		}), s = (async () => {
+			try {
+				let e = await o.promise;
+				if (e === void 0) throw Error(`${this.queryHash} data is undefined`);
+				return this.setData(e), this.#r.config.onSuccess?.(e, this), this.#r.config.onSettled?.(e, this.state.error, this), e;
+			} catch (e) {
+				if (e instanceof P) {
+					if (e.silent) {
+						if (this.#a !== o && this.#o) return this.#o;
+						throw e;
+					}
+					if (e.revert) {
+						if (this.state.data === void 0) throw e;
+						return this.state.data;
+					}
+				}
+				throw this.#l({
+					type: "error",
+					error: e
+				}), this.#r.config.onError?.(e, this), this.#r.config.onSettled?.(this.state.data, e, this), e;
+			} finally {
+				this.#a === o && (this.#a = void 0, this.#o = void 0), this.scheduleGc();
+			}
+		})();
+		return this.#o = s, o.start(), s;
+	}
+	#l(e) {
+		let t = (t) => {
+			switch (e.type) {
+				case "failed": return {
+					...t,
+					fetchFailureCount: e.failureCount,
+					fetchFailureReason: e.error
+				};
+				case "pause": return {
+					...t,
+					fetchStatus: "paused"
+				};
+				case "continue": return {
+					...t,
+					fetchStatus: "fetching"
+				};
+				case "fetch": return {
+					...t,
+					...V(t.data, this.options),
+					fetchMeta: e.meta ?? null
+				};
+				case "success": {
+					let n = {
+						...t,
+						...H(e.data, e.dataUpdatedAt),
+						dataUpdateCount: t.dataUpdateCount + 1,
+						...!e.manual && {
+							fetchStatus: "idle",
+							fetchFailureCount: 0,
+							fetchFailureReason: null
+						}
+					};
+					return this.#n = e.manual ? n : void 0, n;
+				}
+				case "error": {
+					let n = e.error;
+					return {
+						...t,
+						error: n,
+						errorUpdateCount: t.errorUpdateCount + 1,
+						errorUpdatedAt: Date.now(),
+						fetchFailureCount: t.fetchFailureCount + 1,
+						fetchFailureReason: n,
+						fetchStatus: "idle",
+						status: "error",
+						isInvalidated: !0
+					};
+				}
+				case "invalidate": return {
+					...t,
+					isInvalidated: !0
+				};
+				case "setState": return {
+					...t,
+					...e.state
+				};
+			}
+		};
+		this.state = t(this.state), A.batch(() => {
+			this.observers.slice().forEach((e) => {
+				e.onQueryUpdate();
+			}), this.#r.notify({
+				query: this,
+				type: "updated",
+				action: e
+			});
+		});
+	}
+};
+function V(e, t) {
+	return {
+		fetchFailureCount: 0,
+		fetchFailureReason: null,
+		fetchStatus: N(t.networkMode) ? "fetching" : "paused",
+		...e === void 0 && {
+			error: null,
+			status: "pending"
+		}
+	};
+}
+function H(e, t) {
+	return {
+		data: e,
+		dataUpdatedAt: t ?? Date.now(),
+		error: null,
+		isInvalidated: !1,
+		status: "success"
+	};
+}
+function U(e) {
+	let t = typeof e.initialData == "function" ? e.initialData() : e.initialData, n = t !== void 0, r = n ? typeof e.initialDataUpdatedAt == "function" ? e.initialDataUpdatedAt() : e.initialDataUpdatedAt : 0;
+	return {
+		data: t,
+		dataUpdateCount: 0,
+		dataUpdatedAt: n ? r ?? Date.now() : 0,
+		error: null,
+		errorUpdateCount: 0,
+		errorUpdatedAt: 0,
+		fetchFailureCount: 0,
+		fetchFailureReason: null,
+		fetchMeta: null,
+		isInvalidated: !1,
+		status: n ? "success" : "pending",
+		fetchStatus: "idle"
+	};
+}
+// node_modules/@tanstack/query-core/build/modern/mutation.js
+var W = class extends z {
+	#e;
+	#t;
+	#n;
+	#r;
+	constructor(e) {
+		super(), this.#e = e.client, this.mutationId = e.mutationId, this.#n = e.mutationCache, this.#t = [], this.state = e.state || G(), this.setOptions(e.options), this.scheduleGc();
+	}
+	setOptions(e) {
+		this.options = e, this.updateGcTime(this.options.gcTime);
+	}
+	get meta() {
+		return this.options.meta;
+	}
+	addObserver(e) {
+		this.#t.includes(e) || (this.#t.push(e), this.clearGcTimeout(), this.#n.notify({
+			type: "observerAdded",
+			mutation: this,
+			observer: e
+		}));
+	}
+	removeObserver(e) {
+		this.#t = this.#t.filter((t) => t !== e), this.scheduleGc(), this.#n.notify({
+			type: "observerRemoved",
+			mutation: this,
+			observer: e
+		});
+	}
+	optionalRemove() {
+		this.#t.length || (this.state.status === "pending" ? this.scheduleGc() : this.#n.remove(this));
+	}
+	continue() {
+		return this.#r?.continue() ?? (this.state.status === "pending" ? this.execute(this.state.variables) : Promise.resolve());
+	}
+	async execute(e) {
+		let t = () => {
+			this.#i({ type: "continue" });
+		}, n = {
+			client: this.#e,
+			meta: this.options.meta,
+			mutationKey: this.options.mutationKey
+		}, r = this.#r = F({
+			fn: () => this.options.mutationFn ? this.options.mutationFn(e, n) : Promise.reject(/* @__PURE__ */ Error("No mutationFn found")),
+			onFail: (e, t) => {
+				this.#i({
+					type: "failed",
+					failureCount: e,
+					error: t
+				});
+			},
+			onPause: () => {
+				this.#i({ type: "pause" });
+			},
+			onContinue: t,
+			retry: this.options.retry ?? 0,
+			retryDelay: this.options.retryDelay,
+			networkMode: this.options.networkMode,
+			canRun: () => this.#n.canRun(this)
+		}), i = this.state.status === "pending", a = !r.canStart();
+		try {
+			if (i) t();
+			else {
+				this.#i({
+					type: "pending",
+					variables: e,
+					isPaused: a
+				}), this.#n.config.onMutate && await this.#n.config.onMutate(e, this, n);
+				let t = await this.options.onMutate?.(e, n);
+				t !== this.state.context && this.#i({
+					type: "pending",
+					context: t,
+					variables: e,
+					isPaused: a
+				});
+			}
+			this.state.isPaused && r.canStart() && t();
+			let o = await r.start();
+			return await this.#n.config.onSuccess?.(o, e, this.state.context, this, n), await this.options.onSuccess?.(o, e, this.state.context, n), await this.#n.config.onSettled?.(o, null, this.state.variables, this.state.context, this, n), await this.options.onSettled?.(o, null, e, this.state.context, n), this.#i({
+				type: "success",
+				data: o
+			}), o;
+		} catch (t) {
+			try {
+				await this.#n.config.onError?.(t, e, this.state.context, this, n);
+			} catch (e) {
+				Promise.reject(e);
+			}
+			try {
+				await this.options.onError?.(t, e, this.state.context, n);
+			} catch (e) {
+				Promise.reject(e);
+			}
+			try {
+				await this.#n.config.onSettled?.(void 0, t, this.state.variables, this.state.context, this, n);
+			} catch (e) {
+				Promise.reject(e);
+			}
+			try {
+				await this.options.onSettled?.(void 0, t, e, this.state.context, n);
+			} catch (e) {
+				Promise.reject(e);
+			}
+			throw this.#i({
+				type: "error",
+				error: t
+			}), t;
+		} finally {
+			this.#r === r && (this.#r = void 0), this.#n.runNext(this);
+		}
+	}
+	#i(e) {
+		let t = (t) => {
+			switch (e.type) {
+				case "failed": return {
+					...t,
+					failureCount: e.failureCount,
+					failureReason: e.error
+				};
+				case "pause": return {
+					...t,
+					isPaused: !0
+				};
+				case "continue": return {
+					...t,
+					isPaused: !1
+				};
+				case "pending": return {
+					...t,
+					context: e.context,
+					data: void 0,
+					failureCount: 0,
+					failureReason: null,
+					error: null,
+					isPaused: e.isPaused,
+					status: "pending",
+					variables: e.variables,
+					submittedAt: Date.now()
+				};
+				case "success": return {
+					...t,
+					data: e.data,
+					failureCount: 0,
+					failureReason: null,
+					error: null,
+					status: "success",
+					isPaused: !1
+				};
+				case "error": return {
+					...t,
+					data: void 0,
+					error: e.error,
+					failureCount: t.failureCount + 1,
+					failureReason: e.error,
+					isPaused: !1,
+					status: "error"
+				};
+			}
+		};
+		this.state = t(this.state), A.batch(() => {
+			this.#t.forEach((t) => {
+				t.onMutationUpdate(e);
+			}), this.#n.notify({
+				mutation: this,
+				type: "updated",
+				action: e
+			});
+		});
+	}
+};
+function G() {
+	return {
+		context: void 0,
+		data: void 0,
+		error: null,
+		failureCount: 0,
+		failureReason: null,
+		isPaused: !1,
+		status: "idle",
+		variables: void 0,
+		submittedAt: 0
+	};
+}
+// node_modules/@tanstack/query-core/build/modern/mutationCache.js
+var K = class extends E {
+	#e;
+	#t;
+	#n;
+	constructor(e = {}) {
+		super(), this.config = e, this.#e = /* @__PURE__ */ new Set(), this.#t = /* @__PURE__ */ new Map(), this.#n = 0;
+	}
+	build(e, t, n) {
+		let r = new W({
+			client: e,
+			mutationCache: this,
+			mutationId: ++this.#n,
+			options: e.defaultMutationOptions(t),
+			state: n
+		});
+		return this.add(r), r;
+	}
+	add(e) {
+		this.#e.add(e);
+		let t = q(e);
+		if (typeof t == "string") {
+			let n = this.#t.get(t);
+			n ? n.push(e) : this.#t.set(t, [e]);
+		}
+		this.notify({
+			type: "added",
+			mutation: e
+		});
+	}
+	remove(e) {
+		if (this.#e.delete(e)) {
+			let t = q(e);
+			if (typeof t == "string") {
+				let n = this.#t.get(t);
+				if (n) {
+					if (n.length > 1) {
+						let t = n.indexOf(e);
+						t !== -1 && n.splice(t, 1);
+					} else n[0] === e && this.#t.delete(t);
+				}
+			}
+		}
+		this.notify({
+			type: "removed",
+			mutation: e
+		});
+	}
+	canRun(e) {
+		let t = q(e);
+		if (typeof t == "string") {
+			let n = this.#t.get(t)?.find((e) => e.state.status === "pending");
+			return !n || n === e;
+		}
+		return !0;
+	}
+	runNext(e) {
+		let t = q(e);
+		return typeof t == "string" ? (this.#t.get(t)?.find((t) => t !== e && t.state.isPaused))?.continue() ?? Promise.resolve() : Promise.resolve();
+	}
+	clear() {
+		A.batch(() => {
+			let e = this.getAll();
+			this.#e.clear(), this.#t.clear(), e.forEach((e) => {
+				this.notify({
+					type: "removed",
+					mutation: e
+				});
+			});
+		});
+	}
+	getAll() {
+		return Array.from(this.#e);
+	}
+	find(e) {
+		let t = {
+			exact: !0,
+			...e
+		};
+		return this.getAll().find((e) => u(t, e));
+	}
+	findAll(e = {}) {
+		return this.getAll().filter((t) => u(e, t));
+	}
+	notify(e) {
+		A.batch(() => {
+			this.listeners.forEach((t) => {
+				t(e);
+			});
+		});
+	}
+	resumePausedMutations() {
+		let e = this.getAll().filter((e) => e.state.isPaused);
+		return A.batch(() => Promise.all(e.map((e) => e.continue().catch(i))));
+	}
+};
+function q(e) {
+	return e.options.scope?.id;
+}
+// node_modules/@tanstack/query-core/build/modern/queryCache.js
+var J = class extends E {
+	#e;
+	constructor(e = {}) {
+		super(), this.config = e, this.#e = /* @__PURE__ */ new Map();
+	}
+	build(e, t, n) {
+		let r = t.queryKey, i = t.queryHash ?? d(r, t), a = this.get(i);
+		return a || (a = new B({
+			client: e,
+			queryKey: r,
+			queryHash: i,
+			options: e.defaultQueryOptions(t),
+			state: n,
+			defaultOptions: e.getQueryDefaults(r)
+		}), this.add(a)), a;
+	}
+	add(e) {
+		this.#e.has(e.queryHash) || (this.#e.set(e.queryHash, e), this.notify({
+			type: "added",
+			query: e
+		}));
+	}
+	remove(e) {
+		this.#e.get(e.queryHash) === e && (e.destroy(), this.#e.delete(e.queryHash), this.notify({
+			type: "removed",
+			query: e
+		}));
+	}
+	clear() {
+		A.batch(() => {
+			this.getAll().forEach((e) => {
+				this.remove(e);
+			});
+		});
+	}
+	get(e) {
+		return this.#e.get(e);
+	}
+	getAll() {
+		return [...this.#e.values()];
+	}
+	find(e) {
+		let t = {
+			exact: !0,
+			...e
+		};
+		return this.getAll().find((e) => l(t, e));
+	}
+	findAll(e = {}) {
+		let t = this.getAll();
+		return Object.keys(e).length > 0 ? t.filter((t) => l(e, t)) : t;
+	}
+	notify(e) {
+		A.batch(() => {
+			this.listeners.forEach((t) => {
+				t(e);
+			});
+		});
+	}
+	onFocus() {
+		A.batch(() => {
+			this.getAll().forEach((e) => {
+				e.onFocus();
+			});
+		});
+	}
+	onOnline() {
+		A.batch(() => {
+			this.getAll().forEach((e) => {
+				e.onOnline();
+			});
+		});
+	}
+}, Y = class {
+	#e;
+	#t;
+	#n;
+	#r;
+	#i;
+	#a;
+	#o;
+	#s;
+	constructor(e = {}) {
+		this.#e = e.queryCache || new J(), this.#t = e.mutationCache || new K(), this.#n = e.defaultOptions || {}, this.#r = /* @__PURE__ */ new Map(), this.#i = /* @__PURE__ */ new Map(), this.#a = 0;
+	}
+	mount() {
+		this.#a++, this.#a === 1 && (this.#o = D.subscribe(async (e) => {
+			e && (await this.resumePausedMutations(), this.#e.onFocus());
+		}), this.#s = j.subscribe(async (e) => {
+			e && (await this.resumePausedMutations(), this.#e.onOnline());
+		}));
+	}
+	unmount() {
+		this.#a--, this.#a === 0 && (this.#o?.(), this.#o = void 0, this.#s?.(), this.#s = void 0);
+	}
+	isFetching(e) {
+		return this.#e.findAll({
+			...e,
+			fetchStatus: "fetching"
+		}).length;
+	}
+	isMutating(e) {
+		return this.#t.findAll({
+			...e,
+			status: "pending"
+		}).length;
+	}
+	getQueryData(e) {
+		let t = this.defaultQueryOptions({ queryKey: e });
+		return this.#e.get(t.queryHash)?.state.data;
+	}
+	ensureQueryData(e) {
+		let t = this.defaultQueryOptions(e), n = this.#e.build(this, t), r = n.state.data;
+		return r === void 0 ? this.fetchQuery(e) : (e.revalidateIfStale && n.isStaleByTime(c(t.staleTime, n)) && this.prefetchQuery(t), Promise.resolve(r));
+	}
+	getQueriesData(e) {
+		return this.#e.findAll(e).map(({ queryKey: e, state: t }) => [e, t.data]);
+	}
+	setQueryData(e, t, n) {
+		let r = this.defaultQueryOptions({ queryKey: e }), i = this.#e.get(r.queryHash)?.state.data, o = a(t, i);
+		if (o !== void 0) return this.#e.build(this, r).setData(o, {
+			...n,
+			manual: !0
+		});
+	}
+	setQueriesData(e, t, n) {
+		return A.batch(() => this.#e.findAll(e).map(({ queryKey: e }) => [e, this.setQueryData(e, t, n)]));
+	}
+	getQueryState(e) {
+		let t = this.defaultQueryOptions({ queryKey: e });
+		return this.#e.get(t.queryHash)?.state;
+	}
+	removeQueries(e) {
+		let t = this.#e;
+		A.batch(() => {
+			t.findAll(e).forEach((e) => {
+				t.remove(e);
+			});
+		});
+	}
+	resetQueries(e, t) {
+		let n = this.#e;
+		return A.batch(() => {
+			let r = n.findAll(e), i = new Set(r);
+			return r.forEach((e) => {
+				e.reset();
+			}), this.refetchQueries({
+				type: "active",
+				predicate: (e) => i.has(e)
+			}, t);
+		});
+	}
+	cancelQueries(e, t = {}) {
+		let n = {
+			revert: !0,
+			...t
+		}, r = A.batch(() => this.#e.findAll(e).map((e) => e.cancel(n)));
+		return Promise.all(r).then(i).catch(i);
+	}
+	invalidateQueries(e, t = {}) {
+		return A.batch(() => (this.#e.findAll(e).forEach((e) => {
+			e.invalidate();
+		}), e?.refetchType === "none" ? Promise.resolve() : this.refetchQueries({
+			...e,
+			type: e?.refetchType ?? e?.type ?? "active"
+		}, t)));
+	}
+	refetchQueries(e, t = {}) {
+		let n = {
+			...t,
+			cancelRefetch: t.cancelRefetch ?? !0
+		}, r = A.batch(() => this.#e.findAll(e).filter((e) => !e.isDisabled() && !e.isStatic()).map((e) => {
+			let t = e.fetch(void 0, n), r = e.state.fetchStatus === "paused";
+			return (!n.throwOnError || r) && (t = t.catch(i)), r ? Promise.resolve() : t;
+		}));
+		return Promise.all(r).then(i);
+	}
+	async query(e) {
+		let t = this.defaultQueryOptions(e);
+		t.retry === void 0 && (t.retry = !1);
+		let n = this.#e.build(this, t), r = n.isStaleByTime(c(t.staleTime, n)) ? await n.fetch(t) : n.state.data, i = t.select;
+		return i ? i(r) : r;
+	}
+	fetchQuery(e) {
+		let t = this.defaultQueryOptions(e);
+		t.retry === void 0 && (t.retry = !1);
+		let n = this.#e.build(this, t);
+		return n.isStaleByTime(c(t.staleTime, n)) ? n.fetch(t) : Promise.resolve(n.state.data);
+	}
+	prefetchQuery(e) {
+		return this.fetchQuery(e).then(i).catch(i);
+	}
+	infiniteQuery(e) {
+		return e._type = "infinite", this.query(e);
+	}
+	fetchInfiniteQuery(e) {
+		return e._type = "infinite", this.fetchQuery(e);
+	}
+	prefetchInfiniteQuery(e) {
+		return this.fetchInfiniteQuery(e).then(i).catch(i);
+	}
+	ensureInfiniteQueryData(e) {
+		return e._type = "infinite", this.ensureQueryData(e);
+	}
+	resumePausedMutations() {
+		return j.isOnline() ? this.#t.resumePausedMutations() : Promise.resolve();
+	}
+	getQueryCache() {
+		return this.#e;
+	}
+	getMutationCache() {
+		return this.#t;
+	}
+	getDefaultOptions() {
+		return this.#n;
+	}
+	setDefaultOptions(e) {
+		this.#n = e;
+	}
+	setQueryDefaults(e, t) {
+		this.#r.set(f(e), {
+			queryKey: e,
+			defaultOptions: t
+		});
+	}
+	getQueryDefaults(e) {
+		let t = [...this.#r.values()], n = {};
+		return t.forEach((t) => {
+			p(e, t.queryKey) && Object.assign(n, t.defaultOptions);
+		}), n;
+	}
+	setMutationDefaults(e, t) {
+		this.#i.set(f(e), {
+			mutationKey: e,
+			defaultOptions: t
+		});
+	}
+	getMutationDefaults(e) {
+		let t = [...this.#i.values()], n = {};
+		return t.forEach((t) => {
+			p(e, t.mutationKey) && Object.assign(n, t.defaultOptions);
+		}), n;
+	}
+	defaultQueryOptions(e) {
+		if (e._defaulted) return e;
+		let t = {
+			...this.#n.queries,
+			...this.getQueryDefaults(e.queryKey),
+			...e,
+			_defaulted: !0
+		};
+		return t.queryHash ||= d(t.queryKey, t), t.refetchOnReconnect === void 0 && (t.refetchOnReconnect = t.networkMode !== "always"), t.throwOnError === void 0 && (t.throwOnError = !!t.suspense), !t.networkMode && t.persister && (t.networkMode = "offlineFirst"), t.queryFn === x && (t.enabled = !1), t;
+	}
+	defaultMutationOptions(e) {
+		return e?._defaulted ? e : {
+			...this.#n.mutations,
+			...e?.mutationKey && this.getMutationDefaults(e.mutationKey),
+			...e,
+			_defaulted: !0
+		};
+	}
+	clear() {
+		this.#e.clear(), this.#t.clear();
+	}
+}, X = (e) => e.split(/\r?\n/).map((e) => e.trim()).filter(Boolean), Z = (e) => ({
+	command: e.command,
+	input_paths: X(e.input_paths),
+	output_paths: X(e.output_paths),
+	timeout_s: Number(e.timeout_s)
+});
+function ie(e, t) {
+	return {
+		...Z(e),
+		title: e.title.trim(),
+		client_request_id: t
+	};
+}
+function ae(e, t, n) {
+	return {
+		...Z(e),
+		expected_revision: t,
+		step_id: n
+	};
+}
+function oe(e, t) {
+	return {
+		answer: e,
+		expected_revision: t
+	};
+}
+// frontend/query.ts
+var Q = class extends Error {
+	status;
+	data;
+	constructor(e, t, n = null) {
+		super(t), this.status = e, this.data = n, this.name = "ApiError";
+	}
+}, $ = () => new DOMException("Session or space changed", "AbortError"), se = () => new Q(0, "Cannot reach the agent. Is the computer awake and the agent running?"), ce = class {
+	#e = new Y({ defaultOptions: {
+		queries: {
+			retry: !1,
+			staleTime: 0,
+			gcTime: 0,
+			networkMode: "always",
+			refetchOnWindowFocus: !1,
+			refetchOnReconnect: !1,
+			refetchOnMount: !1
+		},
+		mutations: {
+			retry: !1,
+			gcTime: 0
+		}
+	} });
+	#t;
+	#n;
+	#r;
+	#i = /* @__PURE__ */ new Set();
+	#a = /* @__PURE__ */ new Set();
+	#o;
+	#s = 0;
+	#c = 0;
+	#l = "unpaired";
+	constructor({ resolve: e = (e) => e, fetcher: t = (...e) => fetch(...e), onAccessLost: n = () => {} } = {}) {
+		this.#t = e, this.#n = t, this.#r = n, this.#o = this.#e.getQueryCache().subscribe(() => this.#u());
+	}
+	setContext(e) {
+		e !== this.#l && (this.#l = e, this.clear());
+	}
+	clear() {
+		this.#s += 1;
+		for (let e of this.#i) e.abort();
+		this.#i.clear(), this.#e.cancelQueries(), this.#e.clear(), this.#u();
+	}
+	dispose() {
+		this.clear(), this.#a.clear(), this.#o();
+	}
+	get activity() {
+		return {
+			pending: this.#e.isFetching() + this.#i.size,
+			cached: this.#e.getQueryCache().getAll().filter((e) => e.state.data !== void 0).length
+		};
+	}
+	subscribe(e) {
+		return this.#a.add(e), e(this.activity), () => this.#a.delete(e);
+	}
+	#u() {
+		let e = this.activity;
+		for (let t of this.#a) t(e);
+	}
+	#d(e) {
+		let t = this.#t(e);
+		if (!t.startsWith("/") || t.startsWith("//") || /[\\\u0000-\u0020\u007f]/.test(t)) throw new Q(400, "Requests must stay on this server.");
+		return t;
+	}
+	#f(e, t) {
+		if (e !== this.#s || t.aborted) throw $();
+	}
+	#p(e, t) {
+		t !== this.#s || !(e instanceof Q) || e.status !== 401 && e.status !== 403 || (this.clear(), this.#r(e.status));
+	}
+	async request(e, t = {}) {
+		let n = (t.method ?? "GET").toUpperCase(), r = this.#s, i = this.#d(e);
+		if (t.signal?.aborted) throw $();
+		try {
+			let e;
+			if (n === "GET") {
+				let n = t.signal ? ++this.#c : 0;
+				e = await this.#e.fetchQuery({
+					queryKey: [
+						"private",
+						this.#l,
+						r,
+						i,
+						n
+					],
+					queryFn: ({ signal: e }) => this.#h(i, t, r, e, "json")
+				});
+			} else e = await this.#m(i, {
+				...t,
+				method: n
+			}, r, "json");
+			if (r !== this.#s || t.signal?.aborted) throw $();
+			return e;
+		} catch (e) {
+			throw re(e) ? $() : (this.#p(e, r), e);
+		} finally {
+			n !== "GET" && r === this.#s && (this.#e.cancelQueries(), this.#e.removeQueries());
+		}
+	}
+	async blob(e, t = {}) {
+		let n = this.#s;
+		try {
+			let r = await this.#m(this.#d(e), t, n, "blob");
+			if (n !== this.#s || t.signal?.aborted) throw $();
+			return r;
+		} catch (e) {
+			throw this.#p(e, n), e;
+		}
+	}
+	async #m(e, t, n, r) {
+		let i = new AbortController();
+		this.#i.add(i), this.#u();
+		try {
+			return await this.#h(e, t, n, i.signal, r);
+		} finally {
+			this.#i.delete(i), this.#u();
+		}
+	}
+	async #h(e, t, n, r, i) {
+		let a = new AbortController(), o = t.signal ? [r, t.signal] : [r], s = () => a.abort();
+		for (let e of o) e.aborted && s(), e.addEventListener("abort", s, { once: !0 });
+		try {
+			this.#f(n, a.signal);
+			let r = {
+				Accept: i === "json" ? "application/json" : "*/*",
+				"X-PA": "1"
+			}, o;
+			t.json === void 0 ? t.form !== void 0 && (o = t.form) : (r["Content-Type"] = "application/json", o = JSON.stringify(t.json));
+			let s;
+			try {
+				s = await this.#n(e, {
+					method: t.method ?? "GET",
+					headers: r,
+					body: o,
+					signal: a.signal,
+					credentials: "same-origin",
+					cache: "no-store"
+				});
+			} catch {
+				throw this.#f(n, a.signal), se();
+			}
+			let c = null, l = !1;
+			if (i === "blob" && s.ok) try {
+				c = await s.blob();
+			} catch {
+				throw this.#f(n, a.signal), new Q(0, "The download was interrupted. Please try again.");
+			}
+			else if (s.status === 204 || s.status === 205) l = !0;
+			else if (!s.headers || (s.headers.get("content-type") ?? "").toLowerCase().includes("json")) try {
+				c = await s.json(), l = !0;
+			} catch {
+				c = null;
+			}
+			if (this.#f(n, a.signal), !s.ok) {
+				let e = c && typeof c == "object" ? c : {}, t = typeof e.error == "string" ? e.error : typeof e.detail == "string" ? e.detail : `The agent answered ${s.status}.`;
+				throw new Q(s.status, t, c);
+			}
+			if (i === "json" && !l) throw new Q(0, "The agent returned an incomplete or invalid response. Refresh before trying again.");
+			return c;
+		} finally {
+			for (let e of o) e.removeEventListener("abort", s);
+		}
+	}
+};
+export { Q as ApiError, ce as RequestScope, oe as buildAnswerRequest, ae as buildStepRequest, ie as buildTaskRequest };
