@@ -1,3 +1,3 @@
-"""personal-agent: a local, always-on personal agent."""
+"""personal-agent: a personal AI assistant for everyday work."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

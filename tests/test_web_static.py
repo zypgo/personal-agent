@@ -80,6 +80,8 @@ def test_the_page_is_made_of_exactly_the_expected_files(assets):
         "api.js",
         "app.js",
         "apple-touch-icon.png",
+        "assistant.css",
+        "assistant.js",
         "audio-metadata.js",
         "format.js",
         "icon-192.png",
@@ -248,6 +250,7 @@ FORBIDDEN_CODE = [
     [
         "api.js",
         "app.js",
+        "assistant.js",
         "format.js",
         "md.js",
         "markdown-parser.js",
@@ -297,7 +300,7 @@ def test_the_page_keeps_nothing_secret_where_a_script_could_read_it(assets):
 def test_a_hostile_agent_name_is_text_in_the_page_and_never_markup():
     found, _ = load_assets(agent=HOSTILE)
     page = Page(found["index.html"].body.decode())
-    assert page.title == HOSTILE
+    assert page.title == "个人助理 · " + HOSTILE
     titles = [
         a["content"] for a in page.named("meta") if a.get("name") == "apple-mobile-web-app-title"
     ]
@@ -318,7 +321,7 @@ def test_a_hostile_agent_name_stays_one_string_in_the_manifest():
 
 def test_the_name_is_never_read_as_a_placeholder_itself():
     found, version = load_assets(agent="{{version}}")
-    assert Page(found["index.html"].body.decode()).title == "{{version}}"
+    assert Page(found["index.html"].body.decode()).title == "个人助理 · {{version}}"
     assert json.loads(found["manifest.webmanifest"].body)["name"] == "{{version}}"
     assert version != "{{version}}"
 
@@ -392,7 +395,8 @@ needs_node = pytest.mark.skipif(
 
 @needs_node
 @pytest.mark.parametrize(
-    "name", ["api.js", "app.js", "format.js", "md.js", "media.js", "store.js", "sw.js"]
+    "name",
+    ["api.js", "app.js", "assistant.js", "format.js", "md.js", "media.js", "store.js", "sw.js"],
 )
 def test_every_script_parses(name):
     result = subprocess.run(

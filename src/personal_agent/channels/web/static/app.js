@@ -6,7 +6,8 @@
 // file, and none may be added: the page's policy forbids inline code, and the answers it shows can
 // repeat text that someone else wrote.
 
-import { Live, api, artifactBlob, scopedURL, invalidateRequests, setRequestContext, onAccessLost } from "./api.js";
+import { Live, api, artifactBlob, scopedArtifactBlob, agentSetupBlob, scopedURL, invalidateRequests, setRequestContext, onAccessLost } from "./api.js";
+import { createAssistantCards, createAssistantNavigation, createAssistantWelcome } from "./assistant.js";
 import { activityLabel, connectionLabel } from "./activity.js";
 import { audioDuration } from "./audio-metadata.js";
 import {
@@ -146,7 +147,7 @@ async function start(notice = "", { paired = false } = {}) {
 /** The code in the address (`#pair=...`), taken out of the address bar and history at once. */
 function takePairingCode() {
   const code = parsePairing(location.hash);
-  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+  if (location.hash && location.hash !== "#assistant-inbox") history.replaceState(null, "", location.pathname + location.search);
   return code;
 }
 
@@ -229,6 +230,7 @@ function signedOut() {
 // ---- the chat -------------------------------------------------------------------------------
 function teardownChat() {
   invalidateRequests();
+  ui?.cards?.destroy();
   for (const entry of store.pending) releasePreviews(entry.files);
   store.principalId = null;
   if (live) live.stop();
@@ -261,7 +263,11 @@ async function showChat(notice) {
     toast(error.message, { error: true });
   }
   renderLog();
-  scrollToBottom(false);
+  if (store.timeline.length) scrollToBottom(false);
+  else ui.log.scrollTo({ top: 0, behavior: "auto" });
+  const view = ui;
+  void ui.cards.refresh().then(() => { if (ui === view && location.hash === "#assistant-inbox") ui.cards.focus(); });
+  void loadAssistantSpaces();
   live = new Live({
     after: () => store.lastId,
     onHello: onHello,
@@ -281,6 +287,7 @@ async function showChat(notice) {
       renderLog();
       if (stick) scrollToBottom(false);
     },
+    onAssistantChanged: () => ui?.cards?.refresh(),
     onSignout: signedOut,
     onState: onStreamState,
   });
@@ -293,15 +300,43 @@ function buildChat() {
   const lamp = h("span", { class: "lamp idle", "aria-hidden": "true" });
   const state = h("span", { class: "state", "aria-live": "polite" });
   const waiting = h("button", { type: "button", class: "waiting", hidden: true, onclick: showFirstWaiting });
-  const menu = iconButton("more", "Menu", openSettings);
+  const menu = iconButton("more", "设置", openSettings);
   const banner = h("div", { class: "banner", role: "status", hidden: true });
-  const update = h("button", { type: "button", class: "update", hidden: true, text: "A new version is ready. Tap to reload.", onclick: () => location.reload() });
-  const loadMore = h("button", { type: "button", class: "earlier", hidden: true, text: "Earlier messages", onclick: loadEarlier });
+  const update = h("button", { type: "button", class: "update", hidden: true, text: "有新版本可用，点击更新。", onclick: () => location.reload() });
+  const loadMore = h("button", { type: "button", class: "earlier", hidden: true, text: "查看更早的对话", onclick: loadEarlier });
   const working = h("div", { class: "working", hidden: true, "aria-hidden": "true" }, h("span", { class: "pen" }), h("span", { class: "working-text" }));
-  const log = h("main", { class: "log", id: "log", role: "log", "aria-live": "polite", "aria-label": "Conversation", tabindex: "-1" }, loadMore, working);
+  const log = h("main", { class: "log", id: "log", role: "log", "aria-live": "polite", "aria-label": "个人助理对话", tabindex: "-1" }, loadMore, working);
   const jump = h("button", { type: "button", class: "jump", hidden: true, onclick: () => scrollToBottom(true) }, icon("down"), h("span", { class: "jump-count" }));
   const toasts = h("div", { class: "toasts" });
   ui = { name, lamp, state, waiting, banner, update, log, loadMore, working, jump, toasts, composer: buildComposer() };
+  ui.welcome = createAssistantWelcome({ document, onPrompt: setAssistantPrompt });
+  ui.cardCount = 0;
+  ui.cards = createAssistantCards({
+    document, api, onPrompt: setAssistantPrompt,
+    onContextChanged: change => { if (change?.leftSpace) location.assign("/"); else void loadAssistantSpaces(); },
+    onChange: count => { if (ui) { ui.cardCount = count; renderStatus(); } },
+    onNotice: (message, error = false) => toast(message, { error }),
+    downloadConnection: async (agentId, kind) => {
+      const view = ui, blob = await agentSetupBlob(agentId, kind);
+      if (!ui || ui !== view) return;
+      const name = kind === "openapi" ? "personal-agent-openapi.json" : "pa-agent-bridge.py";
+      const url = URL.createObjectURL(blob), link = h("a", { href: url, download: name, hidden: true });
+      document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    },
+    downloadArtifact: async (path, name) => {
+      const view = ui, match = /^\/api\/artifacts\/([0-9a-f]{32})$/.exec(path);
+      const blob = await (match ? artifactBlob(match[1]) : scopedArtifactBlob(path));
+      if (!ui || ui !== view) return;
+      const url = URL.createObjectURL(blob), link = h("a", { href: url, download: name, hidden: true });
+      document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    },
+  });
+  ui.spaceSelect = h("select", { "aria-label": "当前空间", class: "assistant-space-select", hidden: true });
+  ui.spaceSelect.addEventListener("change", () => {
+    const url = new URL("/", location.origin); url.searchParams.set("space", ui.spaceSelect.value); location.assign(url.pathname + url.search);
+  });
   pinned = true;
   ui.log.addEventListener("scroll", onScroll, { passive: true });
   ui.log.addEventListener("click", onLogClick);
@@ -313,7 +348,8 @@ function buildChat() {
     h(
       "div",
       { class: "chat" },
-      h("header", { class: "bar" }, h("div", { class: "who" }, lamp, name, state), h("a", { href: scopedURL("/workspace"), text: "工作台", class: "workspace-link" }), waiting, menu),
+      h("header", { class: "bar" }, h("div", { class: "who" }, lamp, name, state), waiting, menu),
+      h("div", { class: "assistant-navigation" }, createAssistantNavigation({ document, resolve: scopedURL }), ui.spaceSelect),
       banner,
       update,
       h("div", { class: "stage" }, log, jump),
@@ -326,6 +362,25 @@ function buildChat() {
   watchViewport();
 }
 
+function setAssistantPrompt(text) {
+  if (!ui) return;
+  const input = ui.composer.input;
+  // Shortcuts prepare a normal message. They never send it or overwrite a drafted message.
+  input.value = input.value.trim() ? `${input.value}\n${text}` : text;
+  ui.composer.refresh(); input.focus();
+}
+
+async function loadAssistantSpaces() {
+  const view = ui;
+  try {
+    const context = await api("/api/v3/me");
+    if (!ui || ui !== view) return;
+    const choices = (context.spaces || []).map(space => h("option", { value: space.id, text: space.name || (space.kind === "personal" ? "个人空间" : "项目空间") }));
+    ui.spaceSelect.replaceChildren(...choices); ui.spaceSelect.value = context.space_id;
+    ui.spaceSelect.hidden = choices.length === 0;
+  } catch (error) { if (error?.name !== "AbortError" && ui === view) ui.spaceSelect.hidden = true; }
+}
+
 // ---- the stream's events ----------------------------------------------------------------------
 function onHello(data) {
   store.setWorking(data.working);
@@ -333,6 +388,7 @@ function onHello(data) {
   store.replaceDrafts(data.drafts);
   renderLog();
   renderStatus();
+  void ui?.cards?.refresh();
 }
 
 function onTurn(turn) {
@@ -348,6 +404,7 @@ function onTurn(turn) {
     unread += 1;
     setBadge(unread);
   }
+  if (turn.direction === "out") void ui?.cards?.refresh();
 }
 
 let bannerTimer = null;
@@ -360,7 +417,7 @@ function onStreamState(state) {
   } else if (state === "down") {
     bannerTimer = setTimeout(() => {
       if (!ui) return;
-      ui.banner.textContent = navigator.onLine === false ? "You are offline. Waiting for a connection…" : "Reconnecting to your agent…";
+      ui.banner.textContent = navigator.onLine === false ? "当前离线，等待网络恢复…" : "正在重新连接你的助理…";
       ui.banner.hidden = false;
     }, 2500);
   }
@@ -370,15 +427,15 @@ function renderStatus() {
   if (!ui) return;
   const offline = Boolean(live) && live.state === "down";
   ui.lamp.className = `lamp ${offline ? "down" : store.working ? "on" : "idle"}`;
-  ui.state.textContent = offline ? "reconnecting…" : store.working ? (store.tool ? `working · ${store.tool}` : "working") : "idle";
+  ui.state.textContent = offline ? "连接中…" : store.working ? "正在处理" : "随时可以开始";
   const appearing = ui.working.hidden && store.working;
   const stick = appearing && nearBottom(); // the indicator is the newest line: keep it in view
   ui.working.hidden = !store.working;
-  ui.working.querySelector(".working-text").textContent = store.tool ? `using ${store.tool}` : "working on it";
+  ui.working.querySelector(".working-text").textContent = "正在为你处理…";
   if (stick) scrollToBottom(!document.hidden);
-  const waiting = store.waiting;
-  ui.waiting.hidden = waiting.length === 0;
-  ui.waiting.textContent = waiting.length === 1 ? "1 waiting for you" : `${waiting.length} waiting for you`;
+  const waiting = store.waiting.length + (ui.cardCount || 0);
+  ui.waiting.hidden = waiting === 0;
+  ui.waiting.textContent = `${waiting} 项待处理`;
 }
 
 function showUpdate() {
@@ -463,6 +520,8 @@ function renderLog() {
     wanted.push(cached(key, `${draft.sequence}|${draft.text}`, () => draftNode(draft)));
     seen.add(key);
   }
+  if (!wanted.length && ui.welcome) wanted.push(ui.welcome);
+  if (ui.cards) wanted.push(ui.cards.element);
   let ref = ui.loadMore.nextSibling;
   for (const node of wanted) {
     if (node === ref) ref = ref.nextSibling;
@@ -666,7 +725,7 @@ async function decide(approval, decision, card, note = "") {
 
 function showFirstWaiting() {
   const first = store.waiting[0];
-  if (!first) return;
+  if (!first) return ui?.cards?.focus();
   const card = ui.log.querySelector(`[data-approval="${first.id}"]`);
   if (!card) return;
   card.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
@@ -723,8 +782,8 @@ function buildComposer() {
     class: "input",
     rows: "1",
     enterkeyhint: "send",
-    placeholder: "Message",
-    "aria-label": "Message",
+    placeholder: "说说你想做的事…",
+    "aria-label": "给个人助理发消息",
     autocomplete: "off",
     autocapitalize: "sentences",
     maxlength: "20000",
@@ -732,8 +791,8 @@ function buildComposer() {
   const chips = h("div", { class: "chips", hidden: true });
   const hints = h("div", { class: "hints", hidden: true, role: "listbox", "aria-label": "Commands" });
   const picker = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
-  const attach = features.images ? iconButton("clip", "Attach a picture", () => picker.click(), "attach") : null;
-  const send = iconButton("send", "Send", () => submit(), "send primary");
+  const attach = features.images ? iconButton("clip", "添加图片", () => picker.click(), "attach") : null;
+  const send = iconButton("send", "发送", () => submit(), "send primary");
   const mic = features.voice && canRecord() ? iconButton("mic", "Record a voice message", () => startVoice(), "mic") : null;
   const voicePicker = h("input", { type: "file", accept: "audio/*", hidden: true });
   const audio = features.voice && !canRecord() ? iconButton("mic", "Send a voice file", () => voicePicker.click(), "mic") : null;
@@ -1042,10 +1101,11 @@ document.addEventListener("visibilitychange", () => {
   unread = 0;
   setBadge(0);
   live.reconnect(); // a phone that slept may have left the stream half open
+  void ui?.cards?.refresh();
 });
-window.addEventListener("online", () => live?.reconnect());
+window.addEventListener("online", () => { live?.reconnect(); void ui?.cards?.refresh(); });
 window.addEventListener("pageshow", (event) => {
-  if (event.persisted) live?.reconnect();
+  if (event.persisted) { live?.reconnect(); void ui?.cards?.refresh(); }
 });
 
 main();

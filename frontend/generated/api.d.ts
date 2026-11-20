@@ -785,6 +785,11 @@ export interface components {
              * @default Member
              */
             display_name: string;
+            /**
+             * Require Existing Session
+             * @default false
+             */
+            require_existing_session: boolean;
         };
         /** EnrollmentResponse */
         EnrollmentResponse: {

@@ -58,6 +58,7 @@ class RedeemCode(RequestModel):
 
 class Enroll(RedeemCode):
     display_name: Label = "Member"
+    require_existing_session: bool = False
 
 
 class PairDevice(RequestModel):

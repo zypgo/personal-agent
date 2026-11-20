@@ -35,6 +35,7 @@ from starlette.routing import Route
 from personal_agent.channels.commands import ChatCommands
 from personal_agent.channels.ingress import MAX_IMAGES, Ingress, Upload
 from personal_agent.channels.web.artifacts import artifact_routes
+from personal_agent.channels.web.assistant import assistant_routes
 from personal_agent.channels.web.connect import connection_info
 from personal_agent.channels.web.probe import probe_signature
 from personal_agent.channels.web.security import Guard
@@ -601,14 +602,25 @@ class WebApi:
                     yield event_frame("turn", self.turn_json(turn), turn.id)
                     spoke = True
                 latest = None
+                assistant_changed = False
                 for item in ([event] if event else []) + sub.drain():
                     if item.get("type") == "activity":
                         latest = item
+                    elif (
+                        item.get("type") == "assistant_changed"
+                        and item.get("principal_id", session.principal_id) == session.principal_id
+                    ):
+                        assistant_changed = True
                 if latest is not None:
                     yield event_frame(
                         "activity",
                         {"working": bool(latest.get("working")), "tool": latest.get("tool")},
                     )
+                    spoke = True
+                if assistant_changed:
+                    # A nudge carries no proposal, credential or task content. The browser
+                    # reloads its own authorized cards; durable state survives missed nudges.
+                    yield event_frame("assistant_changed", {})
                     spoke = True
                 # Snapshot replacement tolerates missed nudges and a sleeping phone. Previews
                 # have no SSE id: only committed transcript turns advance Last-Event-ID.
@@ -655,6 +667,7 @@ class WebApi:
             Route("/api/approvals/{approval_id}", self.decide, methods=["POST"]),
             Route("/api/status", self.status),
             Route("/api/activity", self.activity),
+            *assistant_routes(self),
             Route("/api/health", self.health),
             Route("/healthz", self.ready),
         ]

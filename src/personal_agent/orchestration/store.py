@@ -1914,7 +1914,11 @@ class OrchestrationStore:
         self._require_agent_owner(self._agent(agent_id), actor_id)
         attempts = []
         for row in self.db.query(
-            "SELECT * FROM orchestration_attempts WHERE agent_id=? AND state IN ('claimed','running','waiting_input','uncertain') ORDER BY claimed_at",
+            """SELECT a.* FROM orchestration_attempts a
+               JOIN orchestration_steps s ON s.task_id=a.task_id AND s.id=a.step_id
+               WHERE a.agent_id=? AND s.current_attempt=a.id
+               AND a.state IN ('claimed','running','waiting_input','uncertain','revoked')
+               ORDER BY a.claimed_at""",
             (agent_id,),
         ):
             attempts.append(
@@ -1924,7 +1928,7 @@ class OrchestrationStore:
                     "attempt_id": row["id"],
                     "state": row["state"],
                     "desired_state": row["desired_state"],
-                    "can_confirm_stopped": row["state"] == "uncertain"
+                    "can_confirm_stopped": row["state"] in {"uncertain", "revoked"}
                     or row["desired_state"] == "cancel",
                 }
             )

@@ -209,12 +209,30 @@ class V3Api:
 
     async def enroll(self, request: Request) -> Response:
         self.throttle(request)
+        token = request.cookies.get(COOKIE, "")
+        initial = self.root.web_auth.lookup(token)
         data = await body(request, dto.Enroll)
-        existing = self.root.web_auth.lookup(request.cookies.get(COOKIE, ""))
+
+        def existing_principal_id() -> str | None:
+            current = self.root.web_auth.lookup(token)
+            if data.require_existing_session and (
+                initial is None
+                or current is None
+                or (current.id, current.principal_id, current.authz_version)
+                != (initial.id, initial.principal_id, initial.authz_version)
+            ):
+                raise HTTPException(401, "Sign in again before joining this project.")
+            return current.principal_id if current else None
+
+        existing = existing_principal_id()
         with self.root.db.tx():
+            if data.require_existing_session:
+                # Recheck under the same lock as invitation redemption and session
+                # creation: losing the current identity must never register a new one.
+                existing = existing_principal_id()
             enrolled = self.identities.redeem_member(
                 data.code,
-                existing_principal_id=existing.principal_id if existing else None,
+                existing_principal_id=existing,
                 label=data.display_name,
             )
             return self.signed(

@@ -213,10 +213,12 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
         "delegate_agents",
         "edit_file",
         "http_request",
+        "inspect_workspace",
         "job_status",
         "list_agents",
         "list_files",
         "memory",
+        "prepare_workspace_action",
         "publish_artifact",
         "read_file",
         "schedule",
@@ -226,6 +228,7 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
         "submit_job",
         "web_fetch",
         "web_search",
+        "workspace_capabilities",
         "write_file",
     ]  # no `shell`: the test app has no sandbox, so none is offered
 

@@ -97,4 +97,14 @@ dialog { color:var(--ink); background:var(--card); border:1px solid var(--rule);
 dialog::backdrop { background:#0008; }
 dialog textarea { font-family:ui-monospace,monospace; font-size:12px; margin:6px 0 14px; }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-@media(max-width:720px) { .shell{padding:0 18px 65px}.masthead{padding:20px 0}.brand{font-size:20px}.brand span{font-size:10px}.masthead .button{padding:8px 11px;font-size:12px}.space-heading{padding:24px 0 18px}.tabs{position:fixed;bottom:0;left:0;right:0;margin:0;z-index:5;justify-content:space-around;border-top:1px solid var(--rule);border-bottom:0;background:var(--card);padding-bottom:env(safe-area-inset-bottom)}.tab{flex:1;padding:13px 4px;border-bottom:0;border-top:2px solid transparent;font-size:13px}.tab.selected{border-top-color:var(--accent)}.two-columns,.task-layout{grid-template-columns:1fr}.task-detail{position:static}.card{padding:18px}h1{font-size:26px}.section-title{margin-bottom:18px}.login{margin:38px auto}.invite-banner{align-items:flex-start;flex-direction:column}.panel{padding-top:8px}input,select,textarea{font-size:16px}.two-columns{gap:0}.two-columns label{margin-bottom:12px}.footer{padding:26px 0} }
+@media(max-width:720px) {
+  .shell{padding:0 18px calc(18px + env(safe-area-inset-bottom))}
+  .masthead{padding:20px 0}.brand{font-size:20px}.brand span{font-size:10px}
+  .masthead .button{padding:8px 11px;font-size:12px}.space-heading{padding:24px 0 18px}
+  .tabs{position:static;overflow-x:auto;gap:0;margin-bottom:20px;border-bottom:1px solid var(--rule);background:transparent}
+  .tab{flex:0 0 auto;padding:11px 14px;font-size:13px;white-space:nowrap}
+  .two-columns,.task-layout{grid-template-columns:1fr}.task-detail{position:static}.card{padding:18px}
+  h1{font-size:26px}.section-title{margin-bottom:18px}.login{margin:38px auto}
+  .invite-banner{align-items:flex-start;flex-direction:column}.panel{padding-top:8px}
+  input,select,textarea{font-size:16px}.two-columns{gap:0}.two-columns label{margin-bottom:12px}.footer{padding:26px 0}
+}

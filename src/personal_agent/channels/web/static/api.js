@@ -35,6 +35,36 @@ export async function artifactBlob(id) {
   }
 }
 
+/** Agent result files use the same session and selected-space checks as chat files. */
+export async function scopedArtifactBlob(path) {
+  if (typeof path !== "string" || !/^\/api\/v4\/artifacts\/[0-9a-f]{32}$/.test(path)) {
+    throw new ApiError(400, "Invalid file reference.");
+  }
+  try { return await requests.blob(path); }
+  catch (error) {
+    if (error?.name === "AbortError" || error.status === 0) throw error;
+    const messages = {
+      401: "请重新连接此浏览器后下载文件。",
+      403: "你目前没有权限下载此文件。",
+      404: "此文件已不可用。",
+    };
+    throw new ApiError(error.status || 0, messages[error.status] ?? "文件下载失败，请稍后重试。");
+  }
+}
+
+/** Download only the two first-party connection files, under the current space. */
+export async function agentSetupBlob(agentId, kind) {
+  if (typeof agentId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_:-]{0,127}$/.test(agentId) || !["openapi", "bridge"].includes(kind)) {
+    throw new ApiError(400, "连接文件引用无效。");
+  }
+  const path = kind === "openapi" ? `/api/v4/agents/${encodeURIComponent(agentId)}/openapi.json` : "/api/v4/bridge.py";
+  try { return await requests.blob(path); }
+  catch (error) {
+    if (error?.name === "AbortError" || error.status === 0) throw error;
+    throw new ApiError(error.status || 0, error.status === 401 ? "请重新连接此浏览器后下载文件。" : "连接文件暂不可用，请核对权限后重试。");
+  }
+}
+
 /**
  * The live stream. The browser's EventSource already reconnects by itself and says where it left
  * off (the server numbers turns), so this adds only what it does not do:
@@ -43,9 +73,9 @@ export async function artifactBlob(id) {
  * Whatever is missed is replayed from the database, so a late or lost nudge costs nothing.
  */
 export class Live {
-  constructor({ after, onHello, onTurn, onActivity, onApprovals, onDrafts = () => {}, onSignout, onState }) {
+  constructor({ after, onHello, onTurn, onActivity, onApprovals, onDrafts = () => {}, onAssistantChanged = () => {}, onSignout, onState }) {
     this.after = after;
-    this.on = { onHello, onTurn, onActivity, onApprovals, onDrafts, onSignout, onState };
+    this.on = { onHello, onTurn, onActivity, onApprovals, onDrafts, onAssistantChanged, onSignout, onState };
     this.source = null;
     this.state = "closed";
     this.retryTimer = null;
@@ -64,7 +94,7 @@ export class Live {
       this._set("open");
       this.on.onHello(JSON.parse(e.data));
     });
-    for (const [event, callback] of [["turn", "onTurn"], ["activity", "onActivity"], ["approvals", "onApprovals"], ["drafts", "onDrafts"]]) {
+    for (const [event, callback] of [["turn", "onTurn"], ["activity", "onActivity"], ["approvals", "onApprovals"], ["drafts", "onDrafts"], ["assistant_changed", "onAssistantChanged"]]) {
       source.addEventListener(event, (e) => {
         if (this.source === source) this.on[callback](JSON.parse(e.data));
       });

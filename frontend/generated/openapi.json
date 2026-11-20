@@ -3,7 +3,7 @@
   "info": {
     "title": "Personal Agent V3 API",
     "description": "Authenticated collaboration and durable execution. Browser writes also require an allowed Origin and X-PA: 1. Bodies are strictly validated only after authentication; the session and membership are checked again after the body is read. All responses are private and must not be cached persistently.",
-    "version": "0.4.0"
+    "version": "0.5.0"
   },
   "paths": {
     "/api/v3/me": {
@@ -5407,6 +5407,11 @@
             "maxLength": 100,
             "title": "Display Name",
             "type": "string"
+          },
+          "require_existing_session": {
+            "default": false,
+            "title": "Require Existing Session",
+            "type": "boolean"
           }
         },
         "required": [
