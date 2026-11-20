@@ -8,9 +8,12 @@ The full history lives on `origin`. GitHub's copy differs in one way, on purpose
 is the only thing that makes it differ: the commits that touch `.github/workflows` are rewritten
 without those files, because the token that pushes has no `workflow` scope and GitHub refuses a
 push that carries one. The rewrite gives the same commit ids every time it is run on the same
-history, so what GitHub has stays an ancestor of what is published next and each push is a
-fast-forward. When it is not (somebody pushed to GitHub, or the rewrite changed), the script
-stops: it never forces a push and never moves a tag.
+history, and it leaves alone every commit GitHub already has, so what GitHub has stays an
+ancestor of what is published next and each push is a fast-forward. That second part matters once
+GitHub makes commits of its own: it signs the ones it creates when a pull request is merged on its
+site, and rewriting a signed commit drops the signature and gives it another id. When the history
+is still not an extension of GitHub's (somebody pushed to GitHub, or the rewrite changed), the
+script stops: it never forces a push and never moves a tag.
 
 Before anything leaves this machine, what is new there is read, and any one finding stops it all:
 
@@ -208,8 +211,12 @@ def find_gitleaks(config: Config) -> Path:
 
 
 # ---- building the copy that is published ------------------------------------------------------
-def filtered_clone(source: Path, work: Path, branch: str) -> bool:
-    """Clone `source` into `work` and rewrite it as GitHub is to see it. Whether it was rewritten."""
+def filtered_clone(source: Path, work: Path, branch: str, remote_url: str | None = None) -> bool:
+    """Clone `source` into `work` and rewrite it as GitHub is to see it. Whether it was rewritten.
+
+    With the address of GitHub's copy, what GitHub already has is fetched first (as `REMOTE_REF`)
+    and left out of the rewrite: those commits stay exactly as they are, signatures included, and
+    only what is ours and not yet there is rewritten on top of them."""
     git(
         "clone",
         "--quiet",
@@ -221,6 +228,8 @@ def filtered_clone(source: Path, work: Path, branch: str) -> bool:
         str(work),
         cwd=source,
     )
+    if remote_url:
+        git("fetch", "--quiet", "--no-tags", remote_url, f"{branch}:{REMOTE_REF}", cwd=work)
     touching = git("rev-list", branch, "--", WORKFLOWS, cwd=work).split()
     if not touching:
         return False
@@ -229,7 +238,7 @@ def filtered_clone(source: Path, work: Path, branch: str) -> bool:
         "-c", "commit.gpgsign=false",
         "filter-branch", "-f", "--prune-empty", "--tag-name-filter", "cat",
         "--index-filter", f"git rm -r --cached --ignore-unmatch -q -- {WORKFLOWS}",
-        "--", branch, *[f"^{p}" for p in parents],
+        "--", branch, *[f"^{p}" for p in parents], *([f"^{REMOTE_REF}"] if remote_url else []),
         cwd=work,
         env={"FILTER_BRANCH_SQUELCH_WARNING": "1"},
     )  # fmt: skip
@@ -417,15 +426,14 @@ def export(
 
     with tempfile.TemporaryDirectory(prefix="pa-export-") as scratch:
         work = Path(scratch) / "work"
-        rewritten = filtered_clone(source, work, branch)
+        rewritten = filtered_clone(source, work, branch, url if tip_there else None)
         new_tip = git("rev-parse", branch, cwd=work).strip()
         say(
             f"{branch} is {new_tip[:7]} here ({'workflow files left out' if rewritten else 'as it is'})"
         )
 
         exclude = tip_there is not None
-        if tip_there:
-            git("fetch", "--quiet", "--no-tags", url, f"{branch}:{REMOTE_REF}", cwd=work)
+        if tip_there:  # fetched into `work` before the rewrite: GitHub's commits are left alone
             if tip_there == new_tip:
                 say(f"GitHub already has {new_tip[:7]}")
             elif is_ancestor(new_tip, tip_there, work):

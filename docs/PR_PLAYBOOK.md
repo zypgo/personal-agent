@@ -95,6 +95,8 @@ git push origin main                                    # origin 是完整历史
 ```
 
 - GitHub 只通过 `scripts/github_export.py` 推送；不在 GitHub 上点合并，不强推，不移动标签。
+- 导出只改写 GitHub 还没有的提交，GitHub 已有的原样保留。在 GitHub 网页上合并 PR 会生成带 GitHub 签名的新提交；改写会丢掉签名、改掉提交号，
+  导出就不再是快进而被拒。把这类提交合并回本地 main 之后，下一次导出仍是快进。
 - 导出被拒（隐私名单、`.env` 值、gitleaks、非 noreply 地址、体积、GitHub 领先）时，**在源头修**，再重跑。本地还没推到 origin 的提交可以改写。
   **已经推到 origin 的提交里的发现，追加一个修复提交清不掉**：导出逐个提交扫描新范围，早先那个提交仍在里面。
   真密钥：先作废它，再请用户决定怎么改写历史（改写已推送的历史要对 origin 强推，不得自行做）。

@@ -672,6 +672,95 @@ def test_a_push_is_never_forced_even_when_github_moved_after_the_check(
     assert world.remote_tip() == moved
 
 
+# ---- when GitHub makes commits of its own ------------------------------------------------------
+SIGNATURE = "-----BEGIN PGP SIGNATURE-----\n\n{body}\n-----END PGP SIGNATURE-----"
+
+
+def github_merges_a_pull_request(world, tmp_path, message="Merge pull request #4 from x/y") -> str:
+    """A commit GitHub created and signed itself, pushed on top of what the export published."""
+    web = tmp_path / "web"
+    sh("clone", "-q", str(world.remote), str(web), cwd=tmp_path)
+    env = {"GIT_AUTHOR_NAME": "Owner", "GIT_AUTHOR_EMAIL": GOOD, "GIT_COMMITTER_NAME": "GitHub",
+           "GIT_COMMITTER_EMAIL": "noreply@github.com"}  # fmt: skip
+    (web / "from-github.txt").write_text("made on the web\n")
+    sh("add", "-A", cwd=web)
+    sh("commit", "-q", "-m", message, cwd=web, env=env)
+    raw = sh("cat-file", "commit", "HEAD", cwd=web)
+    head, _, text = raw.partition("\n\n")
+    armour = "\n ".join(SIGNATURE.format(body="not a real signature").splitlines())
+    signed = f"{head}\ngpgsig {armour}\n\n{text}"
+    done = subprocess.run(
+        ["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+        cwd=web, input=signed, capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    oid = done.stdout.strip()
+    sh("update-ref", "refs/heads/main", oid, cwd=web)
+    sh("push", "-q", str(world.remote), "HEAD:refs/heads/main", cwd=web)
+    return oid
+
+
+def owner_merges_github(world) -> None:
+    """What the owner does on this side: fetch GitHub's main and merge it, keeping the workflow."""
+    sh("fetch", "-q", "github", cwd=world.local)
+    env = {"GIT_AUTHOR_NAME": "Owner", "GIT_AUTHOR_EMAIL": GOOD, "GIT_COMMITTER_NAME": "Owner",
+           "GIT_COMMITTER_EMAIL": GOOD}  # fmt: skip
+    sh("merge", "-q", "--no-edit", "--no-ff", "refs/remotes/github/main", cwd=world.local, env=env)
+
+
+def test_commits_github_made_itself_stay_as_they_are_when_the_next_export_goes_out(world, tmp_path):
+    world.standard()
+    assert world.export().code == 0
+    theirs = github_merges_a_pull_request(world, tmp_path)
+    owner_merges_github(world)
+    world.commit(
+        "four", {"src.py": "print(4)\n", ".github/workflows/check.yml": "on: [push, pr]\n"}
+    )
+
+    result = world.export()
+
+    assert result.code == 0, result.err
+    assert world.at_remote("cat-file", "commit", theirs).count("gpgsig ") == 1  # signature kept
+    subprocess.run(
+        ["git", "merge-base", "--is-ancestor", theirs, "main"], cwd=world.remote, check=True
+    )
+    assert world.at_remote("log", "-1", "--format=%s", "main").strip() == "four"
+    assert world.at_remote("log", "main", "--format=%h", "--", ".github/workflows") == ""
+    assert "Merge pull request" not in result.out  # GitHub's own commit is not published again
+
+
+def test_a_tag_on_a_commit_github_made_is_not_taken_for_a_moved_tag(world, tmp_path):
+    world.standard()
+    assert world.export().code == 0
+    theirs = github_merges_a_pull_request(world, tmp_path)
+    world.at_remote("tag", "release", theirs)
+    sh("fetch", "-q", "github", "refs/tags/release:refs/tags/release", cwd=world.local)
+    owner_merges_github(world)
+    world.commit("four", {"src.py": "print(4)\n"})
+
+    result = world.export()
+
+    assert result.code == 0, result.err
+    assert world.at_remote("rev-parse", "release").strip() == theirs
+    assert world.at_remote("log", "-1", "--format=%s", "main").strip() == "four"
+
+
+def test_what_github_made_is_not_rewritten_even_when_nothing_of_ours_has_to_change(world, tmp_path):
+    world.standard()
+    assert world.export().code == 0
+    theirs = github_merges_a_pull_request(world, tmp_path)
+    owner_merges_github(world)  # the merge keeps the workflow file, so it has to be rewritten
+
+    result = world.export()
+
+    assert result.code == 0, result.err
+    subprocess.run(
+        ["git", "merge-base", "--is-ancestor", theirs, "main"], cwd=world.remote, check=True
+    )
+    assert world.at_remote("cat-file", "-p", "main^{tree}") == world.at_remote(
+        "cat-file", "-p", f"{theirs}^{{tree}}"
+    )  # the same files as GitHub already had: only the way they got there is new
+
+
 def test_a_rewrite_that_left_the_workflow_files_in_stops_the_export(world, monkeypatch):
     real = ge.git
     monkeypatch.setattr(ge, "git", lambda *a, **k: "" if "filter-branch" in a else real(*a, **k))
