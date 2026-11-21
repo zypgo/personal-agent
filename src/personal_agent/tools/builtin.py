@@ -345,9 +345,11 @@ def _schedule_category(_rc: RunContext, args: dict[str, Any]) -> Category:
 def register_builtin(registry: ToolRegistry, config: Config | None = None) -> None:
     from personal_agent.tools.agents import register_agents
     from personal_agent.tools.jobs import register_jobs
+    from personal_agent.tools.vault import register_vault
     from personal_agent.tools.workspace import register_workspace
 
     register_agents(registry)
+    register_vault(registry)
     register_jobs(registry, config)
     register_workspace(registry)
     """The tools every agent has. `config.tools` switches the optional families on and off."""

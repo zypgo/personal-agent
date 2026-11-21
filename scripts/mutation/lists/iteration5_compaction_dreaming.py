@@ -272,14 +272,14 @@ M = [
     (
         "dr review: no revert",
         DR,
-        "        app.memory.revert_run(run_id)\n        app.outbox.enqueue(",
+        "        self._undo(run_id)\n        app.outbox.enqueue(",
         "        pass\n        app.outbox.enqueue(",
         TD,
     ),
     (
         "dr complete: a failed pass keeps its edits",
         DR,
-        '            if not reverted:\n                app.memory.revert_run(run_id)\n            self._failed("it did not finish")',
+        '            if not reverted:\n                self._undo(run_id)\n            self._failed("it did not finish")',
         '            if not reverted:\n                pass\n            self._failed("it did not finish")',
         TDR,
     ),

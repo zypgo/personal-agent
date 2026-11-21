@@ -41,7 +41,7 @@ function key(s, value, extra = {}) { const event = { key: value, defaultPrevente
 test("chat is the first destination and all existing tools retain their scoped deep links", () => {
   const s = setup();
   const links = find(s.nav, "a");
-  assert.deepEqual(links.map(item => item.textContent), ["对话", "任务", "资料", "助手与连接", "项目与成员", "设备与账号"]);
+  assert.deepEqual(links.map(item => item.textContent), ["对话", "任务", "知识库", "助手与连接", "项目与成员", "设备与账号"]);
   assert.equal(links[0].getAttribute("aria-current"), "page");
   for (const [index, tab] of ["", "tasks", "knowledge", "agents", "spaces", "devices"].entries()) {
     const url = new URL(links[index].getAttribute("href"), "https://example.invalid");

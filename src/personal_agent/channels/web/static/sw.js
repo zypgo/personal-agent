@@ -14,6 +14,7 @@ const SHELL = [
   "/static/workbench.css",
   "/static/orchestration.js",
   "/static/orchestration.css",
+  "/static/vault.js",
   "/static/assistant.js",
   "/static/assistant.css",
   "/static/product-shell.js",

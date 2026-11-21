@@ -118,7 +118,13 @@ src/personal_agent/
     errors.py      ✅ 判断失败的原因：环境问题，不消耗事件的重试次数
     runctx.py      ✅ 每次 run 传给工具的上下文
     compaction.py  ✅ 会话压缩：旧的部分换成摘要，近的原样保留；日志不删（只追加一条标记）
-    dreaming.py    ✅ 夜间整理：按固定规则生成的摘要，加只有记忆和检索两个工具的 dream 画像，再加复核（删得太多，就整次撤销）
+    dreaming.py    ✅ 夜间整理：按固定规则生成的摘要，加只有记忆、检索和（知识库开着时）三个笔记工具的 dream 画像，再加复核（删得太多或没做完，就整次撤销，笔记也一并撤回）
+  vault/           ✅ 知识库：一个文件夹的 Markdown 笔记，Obsidian 直接打开。note（属性、`[[链接]]`、`origin`）、
+                      index（内存里的增量索引、反向链接、检查）、store（谁能写什么、冲突检查、历史和撤销）、
+                      generated（`wiki/index.md`、`wiki/log.md`、任务笔记、交回结果的笔记）、legacy（旧“资料”的搬运）
+  orchestration/
+    threads.py     ✅ 任务线：交给其他助手的每个任务一条线；跟进、巡检（卡住、等你）、自动收起、先别提醒、任务笔记
+    narration.py   ✅ 任务相关的固定句子，和巡检的判断；纯函数，不碰数据库，不调用模型
   memory/
     store.py       ✅ VirtualFS：挂载 /memories、路径防护、大小上限、版本
     tasks.py       ✅ 任务进度索引：`state/tasks/` 里没做完的任务，一行一条（迭代 9 起，从 store.py 里分出来）
@@ -145,6 +151,7 @@ src/personal_agent/
     urls.py        ✅ 出站地址的来源记录：主人写的、页面里链接过的，还是模型自己拼的
     skills.py      ✅ `skill`：按名字读取一个已经安装的技能的完整说明（渐进披露的第二层）
     history.py     ✅ `search_history`：检索对话记录（更早的、别的渠道的、被压缩或被 /new 隐藏的）
+    vault.py       ✅ `vault_search`、`vault_read`、`vault_write`：知识库的三个工具（读到外面来的笔记，按不可信的内容处理）
   skills/          ✅ Agent Skills：宽松的解析、目录扫描和目录块、安装（审阅 / 原子替换 / 回滚）、随 `pa init` 附带的起步技能
   plugins/
     mcp.py         ✅ MCP 枢纽：连接、列出、按审阅状态决定提供哪些工具、调用、重连和退避
@@ -157,6 +164,7 @@ src/personal_agent/
     cli.py         ✅ 终端渠道
     pairing.py     ✅ 配对：8 位没有易混字符的码、1 小时有效、每个渠道最多 3 个待批、只能在本机批准
     ingress.py     ✅ 所有聊天渠道交给 agent 的唯一入口：清洗、命令、语音转文字、图片入库、去重、记账
+    pacing.py      ✅ 短的纯文字回复，按段落分成几条，隔一会儿发出（Telegram、钉钉）；带格式的、长的、紧急的整条发
     commands.py    ✅ `/new` `/status` `/approvals` `/approve` `/deny` `/help`：在渠道层处理，不经过模型
     transcribe.py  ✅ 语音转文字的端口（默认 OpenAI；Ogg 经 ffmpeg 转成 m4a）；音频从不落盘
     registry.py    ✅ 按配置装配渠道（内置的和插件的，走同一条路）
@@ -168,7 +176,7 @@ src/personal_agent/
   daemon.py        ✅ 单实例锁，加 worker / scheduler / dispatcher / 巡检循环，加优雅停机；渠道服务（迭代 4）挂在这里
   cli.py           ✅ `pa` 命令的装配（约 90 行）：每个主题一个 Typer 应用，在 `GROUPS` 里挂起来；只有真的要跑 agent 的命令，才加载模型 SDK
   commands/        ✅ 每个主题一个模块：setup、chat、conversation、serve、inspection、timers、outbox、sessions、budget、memory、
-                      skills、mcp、plugins、channels、web、webhooks、dream、service、evals、db；共用的东西在 `common.py`
+                      skills、mcp、plugins、channels、web、webhooks、dream、service、evals、db、vault；共用的东西在 `common.py`
                       （终端、`say` / `echo` / `warn` / `fail`、`opened()`、退出码：0 成功 / 1 失败 / 2 用法错误或没设置好），
                       `pa status` 和聊天里的 `/status`，共用 `views.py`
   evals/           ✅ 行为评测：spec（YAML 场景的格式）、bench（在一次性的 home 里，真的把 harness 跑一遍）、checks（只看效果的判分）、
@@ -180,10 +188,11 @@ src/personal_agent/
 ```
 config.toml          用户配置（不含密钥）
 .env                 密钥（0600）
-state.db             收件箱 / 会话日志 / 计时器 / 发件箱 / runs / approvals / audit / memory_versions / senders / pairings / web_invites / web_sessions / transcript / spend
+state.db             收件箱 / 会话日志 / 计时器 / 发件箱 / runs / approvals / audit / memory_versions / vault_versions / threads / senders / pairings / web_invites / web_sessions / transcript / spend
 memory/
   preferences/       归用户所有，agent 只能读（instructions.md、profile.md …）
   state/             归 agent 所有，可读写（MEMORY.md 索引、notes/、tasks/、ledger.md、bookmarks.json、proposals.md、runs/）
+vault/               知识库：wiki/ raw/ threads/ daily/（`[vault] path` 可以改到你的 Obsidian 仓库里；每个项目空间在 spaces/<id>/vault）
 skills/              用户安装的 Agent Skills
 media/               收到的图片（文件名就是内容哈希，0600；语音不保存）
 workspace/           shell / files 工具的工作目录（沙箱里唯一能写的地方）
@@ -408,11 +417,36 @@ Anthropic 的 always-on 文章里，agent 大多数时间都在睡觉；每一�
 
 - **什么时候**：调度循环每秒调用一次 `Dreamer.tick()`——每个本地日（`[dreaming] at`，默认 03:30）之后，至多排一次；电脑那时在睡觉，醒来就补；“今天已经决定了”，先于一切写下，所以安静的夜晚，当天不会被再看一遍；`enabled = false` 可以关掉。**新条目少于 `min_new_items`（默认 20）就不做**——一个安静的夜晚，不花钱。
 - **读什么**：不让模型自己去找发生了什么，由代码，从**原始的** `session_events`（被 `/new` 和压缩隐藏的，也在里面），按固定的规则，生成摘要：游标（kv `dream:cursor`）之后的条目、不含它自己的会话，按对话分组，旧的在前；工具结果，截到 300 个字，并包进 `<untrusted>`；整体围进 `<session_log>`；超过 `max_digest_chars`（6 万字）的部分，留给下一晚——游标只移到**实际读到的**最后一行。没有摘要，就不调用模型。
-- **工具**：`dream` 画像里只有 `memory` 和 `search_history`。偏好（`/memories/preferences`）对它只读，想改的，写成建议（`proposals.md`）；每晚是一个新对话；一次的花费封顶 `max_cost_usd`（0.30，不会超过普通的单次 run 上限），超了，就在下一次调用模型之前停下。
-- **能被撤销**：它的每个改动，都是一行带 run 编号的 `memory_versions`。跑完之后要**复核**：删掉的笔记，超过 `max_deleted_files`（10）个，或者超过原有笔记的 `max_deleted_share`（50%；笔记至少有 5 个，才看比例）→ **整次撤销**（倒着还原，`MemoryStore.revert_run`），通知主人一次，并算一次失败。
+- **工具**：`dream` 画像里只有 `memory` 和 `search_history`；知识库开着时，再加 `vault_search`、`vault_read`、`vault_write`，而且只能在 `wiki/`、`daily/` 里新增，或往不是主人写的笔记后面追加，不能整篇改写，一晚最多 `max_new_notes`（6）篇新笔记。偏好（`/memories/preferences`）对它只读，想改的，写成建议（`proposals.md`）；每晚是一个新对话；一次的花费封顶 `max_cost_usd`（0.30，不会超过普通的单次 run 上限），超了，就在下一次调用模型之前停下。
+- **能被撤销**：它的每个改动，都是一行带 run 编号的 `memory_versions`。跑完之后要**复核**：删掉的笔记，超过 `max_deleted_files`（10）个，或者超过原有笔记的 `max_deleted_share`（50%；笔记至少有 5 个，才看比例）→ **整次撤销**（倒着还原，`MemoryStore.revert_run`），通知主人一次，并算一次失败。这一晚没做完的，也走同一条撤销；知识库里这一轮写的笔记，由 `Vault.revert_run` 一并撤回（主人在那之后改过的，留着不动）。
 - **进度，只在做完之后才动**：游标只在 run 完成（`completed` / `silent`）之后前进，只前进，不后退；失败，就不动，下一晚，会读到这一晚漏掉的。
 - **保持安静，除非连续出问题**：它从不为了自己整理了什么，而发消息；预算封顶、出错，都不打扰；**连续三晚没做成**（run 失败、被撤销，或者收件箱重试了几次，放弃了它）→ 暂停一周，并发**一条**消息，说明用 `pa dream log` 看详情，用 `pa dream run` 手动重试；做成一次，就清零。
 - **命令**：`pa dream`（开没开、几点、等着多少条新记录、上次的情况）、`pa dream log`（最近几次：它说了什么、改了哪些笔记，每个改动，都能用 `pa memory restore` 还原）、`pa dream run`（现在做一次，不管钟点，也不管安静不安静）、`pa dream run --dry-run`（只打印模型会读到的内容，不调用任何东西）。
+
+### 知识库（`vault/`、`tools/vault.py`、`commands/vault.py`、`channels/web/vault_views.py`）
+
+多个助手的成果要放在一个人也能用 Obsidian 打开的地方，所以知识库就是**一个文件夹的 Markdown 笔记**，文件是唯一的真相：每次读之前先看文件有没有变，索引（内存里，按修改时间增量更新，带 CJK 切词和反向链接）只是缓存，丢了就重建。完整说明见 [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md)，取舍见 [research/reference-analysis.md](research/reference-analysis.md) 第十节。
+
+- **文件夹**：`wiki/`（知识）、`raw/`（外面来的，只新增）、`threads/`（每个任务一篇）、`daily/`；`wiki/index.md` 和 `wiki/log.md` 由系统生成。
+- **谁的话**：每篇笔记的 `origin`（owner / assistant / agent / web / tainted / system）；没有这个属性的，当作主人写的。写笔记的人由工具的画像决定，助手写的，由系统盖章，没法写成“主人的话”。读过外面内容的那一轮（污点），写出来的标 `tainted`；读到外面来的笔记，当作不可信的内容。
+- **写入规则**（`Vault._allowed`，按调用者）：`private: true` 和 `[vault] exclude` 里的文件夹，助手看不到；密钥写不进去；`raw/` 只新增；夜里的整理只新增，且只在 `wiki/`、`daily/`；整篇改写要带上读到的版本（`rev`），冲突就失败，往后追加和改某一节不受影响。写入是临时文件加替换，Obsidian 和同步软件不会看到半截文件。
+- **历史**：每一笔进 `vault_versions`（旧内容、谁、哪一轮），可以撤销一篇（`restore`），或一整轮（`revert_run`）；之后被主人改过的笔记，撤销时不覆盖，只提示留着没动；保留 `history_days`（180）天，由任务线的巡检顺带清理。
+- **交回的结果**：接进来的助手交回结果时，`capture()` 原样存成 `raw/agents/<助手名>/<日期>-<标题>-<key>.md`，属性里记着是哪个助手、任务、步骤、结果；同一份存两次，只有一篇。
+- **空间**：每个项目空间一个文件夹（`spaces/<id>/vault`），谁能读写和项目里的角色一致；`[vault] path` 只对你自己的根空间生效。
+- **旧的“资料”**：第一次启动时搬进 `wiki/`（kv `vault.legacy_import` 记着做过了），旧入口保存时同步一份（`vault/legacy.py`）。
+- **检查**（`lint`，也是 `pa vault lint`）：断掉的链接、没人链接的笔记、还没整理（`wiki/` 里没有笔记链接它）的 `raw/` 资料、重名、属性有问题的；只报告，不改。
+
+### 任务线（`orchestration/threads.py`、`orchestration/narration.py`、`orchestration/thread_schema.py`）
+
+交给其他助手的每个任务，就是一条线：一行 `threads` 记录（会话、渠道、收起时间、先别提醒到什么时候、对应的笔记），加 `orchestration_tasks` 里的状态。`ThreadKeeper` 做五件事，全是固定规则，不调用模型：
+
+- **接住**：`delegate_agents` 派出任务时，记下是从哪个会话、哪个渠道发起的，之后的话回到同一个地方。
+- **说一次**：有话要对你说的时候（助手提问、交回结果、没做成、联系断了、超时），用 `narration.say()` 的固定句子，经发件箱发出（`dedupe_key` 保证不重复）；做着的时候不说。
+- **巡检**：调度进程的整理循环，定时调用 `tick()`：做着的任务一直没动静，说一次（`stall_minutes`）；等你的事，`remind_minutes` 之后提醒一次，`remind_again_hours` 之后再一次，不会更多；先别提醒的，到点才恢复。服务刚启动，或者两次巡检之间隔了两分钟以上（电脑睡过），那段时间不算（`plan_patrol` 的 `baseline`；提醒的 key 不跟着变，所以不会重复）；一次到点的有三件以上，合成一条（`narration.bundle`），已经合在里面的，不再单独说（kv `threads.said:`）。
+- **收起**：已经结束的任务，过了 `archive_after_hours`（24）自动收起；没结束的、等你的，永远不收。收起不删数据，随时能取消。
+- **记下来**：每个任务一篇 `threads/` 里的笔记（`follow()` 第一次运行从“现在”开始，升级之前的任务不补记）；`decorate()` 给任务加上 `thread`（阶段、标签、下一步、是否收起），网页的任务页、聊天里的卡片和栖序回复前拿到的 `<threads>` 清单，都用同一份。
+
+“阶段”只有：等你（批准 / 回答 / 验收 / 确认）、做着、做完、已结束（没做成、取消、超时）、已收起。
 
 ### 常驻服务（`launchd.py`、`commands/service.py`）
 
@@ -491,6 +525,7 @@ Anthropic 的 always-on 文章说“先安静，再去赢得注意力”，“De
 | Web 页面（PWA）/ Webhook / 插件渠道 / 真实模型验证套件 | ✅ 迭代 4b |
 | 新对话（每次唤醒一段）/ 过去的消息 / 任务进度索引 / 压缩 / `search_history` / 每夜做梦 | ✅ 迭代 5 |
 | 子代理（`delegate`）、run 内的工具结果清理 | ⏳ 未做（见已知限制） |
+| 说话的规矩（提示词）、短回复分条发出（Telegram、钉钉）、任务线（跟进、巡检、自动收起、先别提醒）、知识库（Obsidian 能直接打开；多个助手共用；每一笔能撤销；夜里的整理也照看它）、`pa vault` | ✅ 0.9.0 |
 | launchd 常驻服务（`pa service`）；`pa eval`：场景评测，先验证评分器本身，再用真实模型多次试验；一次真实模型的评测，发现并补上了提示词里的一处缺口 | ✅ 迭代 6 |
 | 系统性优化：整个包通过 mypy strict；属性测试和模糊测试；崩溃一致性（在每一次落盘之后杀进程）和真实进程的端到端测试；CLI 按主题拆分，并延迟加载；数据的生命周期（`pa db`、`[retention]`、每日整理） | ✅ 迭代 7 |
 | 一次全新的代码复盘和修复：11 条确认的发现（记忆写入的旁路、请求头带走数据、不会被截断也不会被改写的审批文字、安全读文件、`deny` 对链式命令的处理、租约围栏、3.11 …）和 15 项次要问题，每一条都是先有一个会失败的测试 | ✅ 迭代 8 |
@@ -516,7 +551,7 @@ MCP 工具的结果，用单独的 `error` / `untrusted` 元数据传递状态�
 - **会话窗口，现在只是兜底**：压缩让对话，在条数窗口占到 80% 的时候，就被摘要，所以窗口（`agent.history_items`，默认 400，从最近的用户消息处对齐，避免切断工具往返），只在压缩连续失败的时候，才真的丢掉前面的条目；日志保留全部。压缩和滑动，都会让提示缓存，在那一刻，失效一次。
 - **没有子代理（`delegate`），也没有 run 内的工具结果清理**：一个 run 里，读了很多大结果，上下文只增不减，直到这个 run 结束；下一次唤醒，本来就是新对话，所以影响限于单个很长的 run。
 - **压缩之前，不强制先存记忆**：需要长期保存的信息，仍然应该在工作过程中，写入记忆。`search_history` 找人能看见的对话；新增的 `search_tool_history`，按来源、run、call 和分页游标，找原始的工具结果，并重新标记不可信的来源。日志检索，受保留策略约束，不等于永远不丢细节。
-- **摘要和做梦，都是模型的判断**：摘要可能漏掉一个细节，做梦可能把一条笔记改得更糟。做梦只有 `memory` 和 `search_history`，每次改动都是带 run 编号的版本，删得太多会整次撤销（`pa memory restore`），花费也有上限。
+- **摘要和做梦，都是模型的判断**：摘要可能漏掉一个细节，做梦可能把一条笔记改得更糟。做梦只有 `memory`、`search_history` 和（知识库开着时）三个笔记工具，每次改动都是带 run 编号的版本，删得太多或没做完会整次撤销（`pa memory restore`），花费也有上限。
 - **每个会话，同时只有一个 run，同时最多 `runtime.concurrency`（默认 2）个会话在跑**：一个会话的 run 进行的时候，到达的事件排队，等它结束之后，作为下一批（同一会话连续的消息，合并成一个 run）；两个会话，都在跑长 run 的时候，第三个会话的事件，要等其中一个结束。
 - **网页没有系统推送**：SSE 只在页面开着的时候推；Web Push 需要 VAPID 密钥、订阅存储和 Service Worker 的推送处理，没有做。想要被主动叫醒，同时开着 Telegram（`notify.channel = auto` 会选你最近用的、能推送的那个）。
 - **iOS 的“主屏幕 App”，不和 Safari 共享 cookie**：在主屏幕 App 里，要再配对一次（`pa web pair` 再生成一个）。

@@ -18,6 +18,28 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const STOPPED_NOTE = "已确认停止";
 export const statusLabel = state => STATES[state] || "等待状态更新";
 
+// Every task is a thread: it stands somewhere (needs you, running, done, over, put away), and the
+// ones that need you come first. A server that does not say gets it worked out from the state.
+const THREAD_FILTERS = Object.freeze([["all","全部"],["needs","等你处理"],["archived","已收起"]]);
+const PHASE_RANK = Object.freeze({needs_you:0,running:1,done:2,closed:2,archived:3});
+export function threadOf(task) {
+  if(task.thread?.phase)return task.thread;
+  const over=TASK_TERMINAL.has(task.state);
+  return {phase:over ? (task.state==="succeeded" ? "done" : "closed") : "running",label:statusLabel(task.state),need:null,archived:false,snoozed_until:null,note:null};
+}
+/** What the list shows for a filter, and how many tasks each filter would show. */
+export function arrangeThreads(tasks,filter="all") {
+  const counts={all:0,needs:0,archived:0},shown=[];
+  for(const task of tasks) {
+    const thread=threadOf(task);
+    if(thread.archived) {counts.archived++;if(filter==="archived")shown.push(task);continue;}
+    counts.all++;if(thread.phase==="needs_you")counts.needs++;
+    if(filter==="all" || (filter==="needs" && thread.phase==="needs_you"))shown.push(task);
+  }
+  if(filter!=="archived")shown.sort((a,b)=>(PHASE_RANK[threadOf(a).phase] ?? 1)-(PHASE_RANK[threadOf(b).phase] ?? 1));
+  return {shown,counts};
+}
+
 export function connectionStatus(agent, now=Date.now()/1000) {
   if(agent.revoked_at || agent.state==="revoked")return "已撤销";
   if(agent.availability==="offline")return "执行端离线";
@@ -87,10 +109,10 @@ export function artifactPath(artifact) {
   return `/api/v4/artifacts/${encodeURIComponent(id)}`;
 }
 
-export function createOrchestrationUI({api,getContext,notice,showSecret,downloadArtifact,onOpenAgents,document:doc=globalThis.document,confirm:confirmAction=globalThis.confirm,randomUUID=()=>globalThis.crypto.randomUUID()}) {
+export function createOrchestrationUI({api,getContext,notice,showSecret,downloadArtifact,onOpenAgents,onOpenNote,document:doc=globalThis.document,confirm:confirmAction=globalThis.confirm,randomUUID=()=>globalThis.crypto.randomUUID()}) {
   const get = id=>doc.getElementById(id);
   const motionBehavior = ()=>(doc.defaultView || globalThis).matchMedia?.("(prefers-reduced-motion:reduce)").matches ? "auto" : "smooth";
-  const state = {agents:[],members:[],lastTasks:[],task:null,taskId:null,steps:[],generation:0,agentsRead:0,tasksRead:0,detailRead:0,agentFormBuilt:false,taskFormBuilt:false,taskAgentsSignature:"",connections:new Map(),openConnections:new Set(),progress:new Map(),occupancies:new Map(),openOccupancies:new Set()};
+  const state = {filter:"all",agents:[],members:[],lastTasks:[],task:null,taskId:null,steps:[],generation:0,agentsRead:0,tasksRead:0,detailRead:0,agentFormBuilt:false,taskFormBuilt:false,taskAgentsSignature:"",connections:new Map(),openConnections:new Set(),progress:new Map(),occupancies:new Map(),openOccupancies:new Set()};
   const context = ()=>getContext() || {};
   const key = ()=>{const c=context();return `${c.epoch}:${c.space}:${c.me?.principal?.id}:${c.me?.role}:${c.me?.principal?.authz_version ?? 0}:${state.generation}`;};
   const canWrite = ()=>Boolean(context().me && context().me.role !== "viewer");
@@ -115,8 +137,9 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
   const agentForStep = step=>step.agent_name ? {...agentById(step.agent_id),name:step.agent_name,kind:step.agent_kind,owner_id:step.agent_owner_id,shared_environment:step.shared_environment} : agentById(step.agent_id);
   const stepAgentName = step=>agentForStep(step)?.name || "已连接的 Agent";
   const nativeShared = agent=>Boolean(agent && (agent.shared_environment || agent.kind==="grok"));
-  const taskLabel = task=>task.state==="waiting_input" && !(task.questions || []).some(question=>question.state==="open") ? "等待 Agent 继续" : statusLabel(task.state);
+  const taskLabel = task=>task.thread?.phase ? (task.thread.archived ? "已收起" : task.thread.label) : task.state==="waiting_input" && !(task.questions || []).some(question=>question.state==="open") ? "等待 Agent 继续" : statusLabel(task.state);
   const choicesSignature = ()=>JSON.stringify(state.agents.map(agent=>[agent.id,agent.name,agent.kind,agent.state,agent.revoked_at,agent.shared_environment,agent.wake_mode]));
+  const snoozed = task=>Number(task.thread?.snoozed_until || 0)>Date.now()/1000;
   const memberName = id=>id===context().me?.principal?.id ? "我" : state.members.find(member=>(member.principal_id || member.id)===id)?.display_name || "其他项目成员";
   const editing = root=>Boolean(root?.querySelector('form[data-dirty="1"],form[data-busy="1"]') || (root?.contains(doc.activeElement) && doc.activeElement?.closest("form")));
   const interrupted = ()=>new DOMException("Space changed","AbortError");
@@ -161,8 +184,8 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
 
   function clear() {
     state.generation++;state.agentsRead++;state.tasksRead++;state.detailRead++;
-    state.agents=[];state.members=[];state.lastTasks=[];state.task=null;state.taskId=null;state.steps=[];state.agentFormBuilt=false;state.taskFormBuilt=false;state.taskAgentsSignature="";state.connections.clear();state.openConnections.clear();state.progress.clear();state.occupancies.clear();state.openOccupancies.clear();
-    for(const id of ["agents-list","agent-create-content","collaboration-compose-content","collaboration-list","collaboration-detail"])get(id)?.replaceChildren();
+    state.filter="all";state.agents=[];state.members=[];state.lastTasks=[];state.task=null;state.taskId=null;state.steps=[];state.agentFormBuilt=false;state.taskFormBuilt=false;state.taskAgentsSignature="";state.connections.clear();state.openConnections.clear();state.progress.clear();state.occupancies.clear();state.openOccupancies.clear();
+    for(const id of ["agents-list","agent-create-content","collaboration-compose-content","collaboration-list","collaboration-detail","thread-filter"])get(id)?.replaceChildren();
     if(get("collaboration-detail"))get("collaboration-detail").hidden=true;
     if(get("agent-create"))get("agent-create").open=false;
     if(get("agent-create-summary"))get("agent-create-summary").textContent="连接 Agent";
@@ -374,15 +397,34 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     }
     if(state.taskId && (force || !editing(get("collaboration-detail"))))await loadTask(force);
   }
+  function renderFilter(counts,total) {
+    const bar=get("thread-filter");
+    const focused=bar.contains(doc.activeElement) ? doc.activeElement?.dataset?.filter : null;
+    bar.hidden=!total;
+    const buttons=[];
+    for(const [id,text] of THREAD_FILTERS) {
+      if(id!=="all" && !counts[id] && state.filter!==id)continue;
+      const button=node("button",id==="all" ? text : `${text} ${counts[id]}`,state.filter===id ? "selected" : "");
+      button.type="button";button.dataset.filter=id;button.setAttribute("aria-pressed",String(state.filter===id));
+      button.addEventListener("click",()=>{state.filter=id;renderTaskList(state.lastTasks);});
+      buttons.push(button);
+    }
+    bar.replaceChildren(...buttons);
+    if(focused)buttons.find(button=>button.dataset.filter===focused)?.focus?.({preventScroll:true});
+  }
   function renderTaskList(tasks) {
     state.lastTasks=tasks;
+    let view=arrangeThreads(tasks,state.filter);
+    if(state.filter!=="all" && !view.counts[state.filter]){state.filter="all";view=arrangeThreads(tasks,"all");}
+    renderFilter(view.counts,tasks.length);
     const root=get("collaboration-list");
     const focusedTask=root.contains(doc.activeElement) ? doc.activeElement?.closest("button")?.dataset.taskId : null;
     root.replaceChildren();
-    for(const task of tasks) {
+    for(const task of view.shown) {
       const button=node("button","","task-card");button.dataset.taskId=task.id;button.classList.toggle("selected",state.taskId===task.id);
       button.append(node("h3",task.title || "协作任务"));const meta=node("div","","task-meta");
       meta.append(badge(task.state,taskLabel(task)),node("span",task.visibility==="space" ? "项目可见" : "私人"));
+      if(snoozed(task))meta.append(node("span","提醒推迟中"));
       const wake=(task.wakes || []).find(item=>item.claimed_at==null && ["failed","uncertain"].includes(item.state));if(wake)meta.append(badge(wake.state,wakeStatus(wake).label));
       if(task.steps?.length)meta.append(node("span",`${task.steps.filter(step=>step.state==="accepted").length}/${task.steps.length} 步已验收`));
       button.append(meta,node("p",when(task.updated_at || task.created_at),"hint"));
@@ -394,6 +436,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       });root.append(button);
       if(focusedTask===task.id) button.focus?.({preventScroll:true});
     }
+    if(tasks.length && !view.shown.length)root.append(node("p","任务都收起来了，在「已收起」里能找回。","empty"));
     if(!tasks.length) {
       const empty=node("section","","empty");empty.append(node("h3","还没有协作任务"),node("p","写清楚目标，选好让谁来做。你确认计划之后，进度和结果会显示在这里。"));
       if(canWrite()) {
@@ -505,6 +548,26 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
         await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/cancel`,{method:"POST",body:{}});notice("已提交取消。");await loadTasks(true);
       }));root.append(actions);
     }
+    renderThread(root,task);
+  }
+  /** What can be done with the thread itself: read its note, put it away, bring it back, quiet it. */
+  function renderThread(root,task) {
+    const thread=threadOf(task),threadPath=`/api/v4/tasks/${encodeURIComponent(task.id)}`;
+    const actions=node("div","","actions or-thread");
+    if(thread.note && onOpenNote)actions.append(action(node("button","在知识库里看这条线索","ghost"),()=>onOpenNote(thread.note)));
+    if(canManageTask(task)) {
+      if(thread.archived)actions.append(action(node("button","放回列表","ghost"),async()=>{
+        await request(`${threadPath}/unarchive`,{method:"POST",body:{}});notice("放回列表了。");await loadTasks(true);
+      }));
+      else if(TASK_TERMINAL.has(task.state))actions.append(action(node("button","收起","ghost"),async()=>{
+        await request(`${threadPath}/archive`,{method:"POST",body:{}});notice("收起来了，在「已收起」里能找回。");await loadTasks(true);
+      }));
+      else if(thread.need && !snoozed(task))actions.append(action(node("button","先不提醒我","ghost"),async()=>{
+        await request(`${threadPath}/snooze`,{method:"POST",body:{hours:24}});notice("24 小时内不再提醒这件事。");await loadTasks(true);
+      }));
+    }
+    if(snoozed(task))root.append(node("p",`提醒推迟到 ${when(thread.snoozed_until)}`,"hint"));
+    if(actions.children.length)root.append(actions);
   }
   function renderPlanReview(root,task) {
     const review=node("section","","or-plan-review");review.append(node("h3","确认这份派发计划"));

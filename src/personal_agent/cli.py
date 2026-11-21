@@ -30,6 +30,7 @@ from personal_agent.commands import (
     setup,
     skills,
     timers,
+    vault,
     web,
     webhooks,
 )
@@ -70,6 +71,7 @@ GROUPS = {
     "db": db.app,
     "memory": memory.app,
     "prefs": memory.prefs,
+    "vault": vault.app,
     "skills": skills.app,
     "eval": evals.app,
     "mcp": mcp.app,

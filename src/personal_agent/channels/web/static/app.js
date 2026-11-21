@@ -214,7 +214,7 @@ function showPairing(problem = "") {
       createAgentMark(document, "pair-brand-mark tile", "idle"),
       h("p", { class: "assistant-eyebrow", text: "栖序 Qixu" }),
       h("h1", { text: "连接你的个人助理" }),
-      h("p", { class: "lede", text: "可以和它聊天、整理资料、设提醒，也可以把要做的事交给它去办。先连接你的账号。" }),
+      h("p", { class: "lede", text: "可以和它聊天、记笔记、设提醒，也可以把要做的事交给它去办。先连接你的账号。" }),
       h(
         "ol",
         { class: "steps" },

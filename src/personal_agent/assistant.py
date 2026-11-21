@@ -55,7 +55,7 @@ CAPABILITIES = (
     ),
     Capability("invite_node", "连接执行电脑", "nodes", ("label", "space_ids"), authority="admin"),
     Capability("revoke_node", "撤销执行电脑", "nodes", target="node", authority="admin"),
-    Capability("write_knowledge", "编辑项目资料", "knowledge", ("path", "text", "revision")),
+    Capability("write_knowledge", "编辑知识库笔记", "knowledge", ("path", "text", "revision")),
     Capability(
         "create_execution_task",
         "创建电脑任务",
@@ -689,7 +689,10 @@ def action_cards(
                 )
             )
     if app.orchestration is not None:
+        put_away = app.threads.archived_ids() if app.threads is not None else set()
         for task in app.orchestration.list_tasks(actor_id)[:20]:
+            if task["id"] in put_away:
+                continue  # finished a while ago and put away: the Tasks page still has it
             if task["state"] == "planned":
                 actions = (
                     [("approve", "确认并派发"), ("cancel", "取消这项计划")]

@@ -57,6 +57,10 @@ class AnswerInput(RequestModel):
     answer: Annotated[str, Field(min_length=1, max_length=8000)]
 
 
+class SnoozeInput(RequestModel):
+    hours: Annotated[float, Field(gt=0, le=720, allow_inf_nan=False)] = 24
+
+
 class StoppedInput(RequestModel):
     step_id: Identifier
     attempt_id: Identifier

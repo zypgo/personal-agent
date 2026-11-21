@@ -70,3 +70,16 @@
 [产物约定](ARTIFACTS.md)写了它的限制、文件保留多久，以及投递结果不确定的时候怎么办。
 
 以后可能做的：验收义务（来自 Grok 的想法）、持久的后台作业状态、结构化的提问，和优先级通道。这些，这里都没有实现。
+
+## 补充（2026-11-21）：开源的 Grok Bot 类项目和知识库项目
+
+为“对话和流程的活人味”“一件事一条线”“基于 Obsidian 的知识库”这三件事，又读了 19 个项目。栖序里的代码仍然都是独立写的，没有从它们那里复制任何代码。
+
+| 许可 | 项目 | 怎么用 |
+| --- | --- | --- |
+| MIT / Apache-2.0 | OpenGrokBot（aierzs、z4yton、nickylin、callmejustdodo 四个分支）、dsh-bots、eta、rakazo、rome、T3 Code、T3 Tots、obsidian-skills、karpathy-llm-wiki、obsidian-mcp-server、seekstone、llm-wiki-hermes | 读它们的设计，取其中经过验证的想法，自己重写。哪个想法取自哪里，见 [同类开源项目：对比和取舍](research/reference-analysis.md) 第十节 |
+| AGPL-3.0 | guaca | 只读，不复制，不引入依赖 |
+| 没有许可证 | Grok Bot 重建版、ant-bots | 只读想法，什么都没复制（和上面第一次复核时一样） |
+
+每个项目锁定的 commit 和许可证文件，在 [`references/SOURCES.lock`](../references/SOURCES.lock)；`scripts/fetch_references.sh` 能重新拉取。它们放在 `references/` 里，已经被 git 忽略，不会进到发布里。
+

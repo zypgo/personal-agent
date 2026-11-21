@@ -58,6 +58,7 @@ def build_instructions(
     index: str,
     skills: str = "",
     tasks: str = "",
+    knowledge: bool = False,
 ) -> str:
     base = (
         _prompt("system.md")
@@ -81,6 +82,8 @@ def build_instructions(
             "# About the owner\nFrom /memories/preferences/profile.md.\n"
             f"<owner_profile>\n{profile_text}\n</owner_profile>"
         )
+    if knowledge:
+        parts.append(_prompt("knowledge_dream.md" if profile == "dream" else "knowledge.md"))
     if skills:
         parts.append(skills)  # changes rarely, so it sits before the memory index (cache prefix)
     cleaned_index = strip_invisible(_clean(index))  # the agent's own notes: data, shown as typed

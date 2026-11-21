@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { FakeElement, elements, find, toHtml } from "./fake_dom.mjs";
-import { createOrchestrationUI, buildCollaborationTask, secretReferences, wakeDescription, artifactPath, statusLabel, wakeStatus, connectionStatus } from "../../src/personal_agent/channels/web/static/orchestration.js";
+import { createOrchestrationUI, buildCollaborationTask, secretReferences, wakeDescription, artifactPath, statusLabel, wakeStatus, connectionStatus, threadOf, arrangeThreads } from "../../src/personal_agent/channels/web/static/orchestration.js";
 
 class Element extends FakeElement {
   constructor(tag) {
@@ -29,7 +29,7 @@ function setup({task=taskFixture(),agents=agentsFixture(),principal="alice",role
   const ids=new Map();const get=id=>{if(!ids.has(id))ids.set(id,new Element("div"));return ids.get(id);};
   const document={createElement:tag=>new Element(tag),getElementById:get,activeElement:null};
   const context={epoch:0,space:"space-a",me:{principal:{id:principal,display_name:"Alice",is_admin:admin},role,spaces:[{id:"space-a",kind:"project"}]}};
-  const calls=[],notices=[],secrets=[],downloads=[];
+  const calls=[],notices=[],secrets=[],downloads=[],opened=[];
   const api=async(path,options={})=>{
     calls.push({path,body:options.body,method:options.method || "GET"});
     const override=respond?.(path,options);if(override!==undefined)return await override;
@@ -40,8 +40,8 @@ function setup({task=taskFixture(),agents=agentsFixture(),principal="alice",role
     if(path===`/api/v4/tasks/${task.id}`)return {task};
     return {task};
   };
-  const ui=createOrchestrationUI({api,getContext:()=>context,document,confirm:()=>confirm,randomUUID:()=>"stable-request",notice:(...args)=>notices.push(args),showSecret:(...args)=>secrets.push(args),downloadArtifact:(...args)=>downloads.push(args)});
-  return {ui,get,document,context,calls,notices,secrets,downloads,task,agents};
+  const ui=createOrchestrationUI({api,getContext:()=>context,document,confirm:()=>confirm,randomUUID:()=>"stable-request",notice:(...args)=>notices.push(args),showSecret:(...args)=>secrets.push(args),onOpenNote:path=>opened.push(path),downloadArtifact:(...args)=>downloads.push(args)});
+  return {ui,get,document,context,calls,notices,secrets,downloads,opened,task,agents};
 }
 const button=(root,text)=>find(root,"button").find(el=>el.textContent===text);
 const submit=async form=>form.listeners.get("submit")({preventDefault(){}});
@@ -313,4 +313,114 @@ for(const reduced of [true,false])test(`opening an agent editor ${reduced ? "hon
   await ui.loadAgents();await click(button(get("agents-list"),"编辑连接"));
   assert.deepEqual(scrolls,[{behavior:reduced ? "auto" : "smooth",block:"start"}]);
   assert.equal(get("agent-create").open,true);
+});
+
+// ---- every task is a thread: the ones that need you come first, finished ones can be put away ----
+const threaded=(id,state,thread={})=>({...taskFixture(),id,title:`任务 ${id}`,state,thread:{phase:"running",label:"进行中",need:null,archived:false,snoozed_until:null,note:null,...thread}});
+const row=(root,title)=>find(root,"button").find(el=>el.className.includes("task-card") && el.textContent.includes(title));
+
+test("tasks that need you come first and the filters count what they would show",()=>{
+  const tasks=[
+    threaded("a","running"),
+    threaded("b","succeeded",{phase:"done",label:"完成了"}),
+    threaded("c","awaiting_acceptance",{phase:"needs_you",label:"等你验收",need:"accept"}),
+    threaded("d","succeeded",{phase:"archived",label:"完成了",archived:true}),
+  ];
+  const all=arrangeThreads(tasks);
+  assert.deepEqual(all.shown.map(task=>task.id),["c","a","b"]);
+  assert.deepEqual(all.counts,{all:3,needs:1,archived:1});
+  assert.deepEqual(arrangeThreads(tasks,"needs").shown.map(task=>task.id),["c"]);
+  assert.deepEqual(arrangeThreads(tasks,"archived").shown.map(task=>task.id),["d"]);
+});
+
+test("a server that does not describe the thread still gets a sensible list",()=>{
+  const plain=taskFixture();
+  assert.equal(threadOf(plain).phase,"running");
+  assert.equal(threadOf({...plain,state:"succeeded"}).phase,"done");
+  assert.equal(threadOf({...plain,state:"failed"}).phase,"closed");
+  assert.equal(arrangeThreads([plain]).counts.archived,0);
+});
+
+test("the list shows the thread's own words, and the filter bar switches what is listed",async()=>{
+  const tasks=[
+    threaded("a","running"),
+    threaded("c","awaiting_acceptance",{phase:"needs_you",label:"等你验收",need:"accept"}),
+    threaded("d","succeeded",{phase:"archived",label:"完成了",archived:true}),
+  ];
+  const {ui,get}=setup({respond:(path,options)=>path==="/api/v4/tasks" && options.method!=="POST" ? {tasks} : undefined});
+  await ui.loadTasks();
+  const list=get("collaboration-list"),bar=get("thread-filter");
+  assert.equal(bar.hidden,false);
+  assert.deepEqual(find(bar,"button").map(el=>el.textContent),["全部","等你处理 1","已收起 1"]);
+  assert.deepEqual(find(list,"h3").map(el=>el.textContent),["任务 c","任务 a"]);
+  assert.match(row(list,"任务 c").textContent,/等你验收/);assert.match(row(list,"任务 a").textContent,/进行中/);
+  await click(button(bar,"已收起 1"));
+  assert.deepEqual(find(list,"h3").map(el=>el.textContent),["任务 d"]);
+  assert.match(row(list,"任务 d").textContent,/已收起/);
+  assert.equal(button(bar,"已收起 1").className,"selected");assert.equal(button(bar,"已收起 1").getAttribute("aria-pressed"),"true");
+  await click(button(bar,"全部"));
+  assert.deepEqual(find(list,"h3").map(el=>el.textContent),["任务 c","任务 a"]);
+});
+
+test("a filter with nothing left in it goes back to the full list",async()=>{
+  const tasks=[threaded("a","running"),threaded("d","succeeded",{phase:"archived",archived:true})];
+  const {ui,get}=setup({respond:(path,options)=>path==="/api/v4/tasks" && options.method!=="POST" ? {tasks} : undefined});
+  await ui.loadTasks();await click(button(get("thread-filter"),"已收起 1"));
+  tasks[1].thread.archived=false;tasks[1].thread.phase="done";
+  await ui.loadTasks(true);
+  assert.deepEqual(find(get("collaboration-list"),"h3").map(el=>el.textContent),["任务 a","任务 d"]);
+  assert.deepEqual(find(get("thread-filter"),"button").map(el=>el.textContent),["全部"]);
+});
+
+test("when every task is put away the list says where they went and no tasks hides the bar",async()=>{
+  const tasks=[threaded("d","succeeded",{phase:"archived",archived:true})];
+  const {ui,get}=setup({respond:(path,options)=>path==="/api/v4/tasks" && options.method!=="POST" ? {tasks} : undefined});
+  await ui.loadTasks();
+  assert.match(get("collaboration-list").textContent,/已收起/);
+  tasks.length=0;await ui.loadTasks(true);
+  assert.equal(get("thread-filter").hidden,true);assert.match(get("collaboration-list").textContent,/还没有协作任务/);
+});
+
+test("a finished task can be put away and brought back from its detail",async()=>{
+  const done=threaded("a","succeeded",{phase:"done",label:"完成了"});done.actor_id="alice";
+  const {ui,get,calls,notices}=setup({task:done});
+  ui.renderTask(done);
+  assert.equal(button(get("collaboration-detail"),"先不提醒我"),undefined,"nothing is waiting on the owner");
+  await click(button(get("collaboration-detail"),"收起"));
+  assert.deepEqual(calls.find(call=>call.path==="/api/v4/tasks/a/archive").body,{});
+  assert.match(notices.at(-1)[0],/已收起/);
+  const away={...done,thread:{...done.thread,phase:"archived",archived:true}};
+  ui.renderTask(away);
+  assert.equal(button(get("collaboration-detail"),"收起"),undefined);
+  await click(button(get("collaboration-detail"),"放回列表"));
+  assert.ok(calls.some(call=>call.path==="/api/v4/tasks/a/unarchive"));
+});
+
+test("an open task that waits on you can be quieted for a day, once",async()=>{
+  const waiting=threaded("a","awaiting_acceptance",{phase:"needs_you",label:"等你验收",need:"accept"});waiting.actor_id="alice";
+  const {ui,get,calls,notices}=setup({task:waiting});
+  ui.renderTask(waiting);
+  assert.equal(button(get("collaboration-detail"),"收起"),undefined,"a running or waiting task is not put away");
+  await click(button(get("collaboration-detail"),"先不提醒我"));
+  assert.deepEqual(calls.find(call=>call.path==="/api/v4/tasks/a/snooze").body,{hours:24});
+  assert.match(notices.at(-1)[0],/24 小时/);
+  const quiet={...waiting,thread:{...waiting.thread,snoozed_until:Date.now()/1000+3600}};
+  ui.renderTask(quiet);
+  assert.equal(button(get("collaboration-detail"),"先不提醒我"),undefined);
+  assert.match(get("collaboration-detail").textContent,/提醒推迟到/);
+});
+
+test("the thread note opens in the knowledge base, and people who cannot manage the task cannot put it away",async()=>{
+  const done=threaded("a","succeeded",{phase:"done",label:"完成了",note:"threads/a.md"});done.actor_id="alice";
+  const {ui,get,opened}=setup({task:done});
+  ui.renderTask(done);
+  await click(button(get("collaboration-detail"),"在知识库里看这条线索"));
+  assert.deepEqual(opened,["threads/a.md"]);
+  const other=setup({task:done,principal:"bob"});
+  other.ui.renderTask(done);
+  assert.equal(button(other.get("collaboration-detail"),"收起"),undefined);
+  assert.ok(button(other.get("collaboration-detail"),"在知识库里看这条线索"),"reading is allowed");
+  const viewer=setup({task:done,role:"viewer"});
+  viewer.ui.renderTask(done);
+  assert.equal(button(viewer.get("collaboration-detail"),"收起"),undefined);
 });

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from websockets.asyncio.client import connect
 
+from personal_agent.channels import pacing
 from personal_agent.channels.base import ChannelCapabilities, ChannelError
 from personal_agent.channels.dingtalk.api import (
     MESSAGE_TOPIC,
@@ -228,11 +229,25 @@ class DingTalkChannel:
             ids = [i for i in ids if isinstance(i, int) and not isinstance(i, bool) and i > 0]
             if ids:
                 text += f"\n\nReply `/approve {ids[0]}` or `/deny {ids[0]}`. `/approvals` lists all pending actions."
-        for index, piece in enumerate(chunks(text)):
+        chat_cfg = self.app.config.chat
+        texts = (
+            pacing.bubbles(text, chat_cfg.max_bubbles)
+            if pacing.chatty(message, chat_cfg)
+            else [text]
+        )
+        pieces: list[str] = []
+        opens: set[int] = set()  # where a new chat message starts
+        for each in texts:
+            if pieces:
+                opens.add(len(pieces))
+            pieces.extend(chunks(each))
+        for index, piece in enumerate(pieces):
             try:
                 # Recheck revocation between chunks, not just once before a long response.
                 if self._staff_for(message) != staff:
                     raise ChannelError("The DingTalk recipient changed", permanent=True)
+                if index in opens:
+                    await self._sleep(pacing.pause(piece))
                 await self.api.send_message(self.robot_code, staff, piece)
             except ChannelError:
                 if index:

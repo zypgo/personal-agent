@@ -5,7 +5,7 @@ import { AGENT_KINDS, statusLabel, wakeDescription, secretReferences, currentAtt
 import { createAgentMark, createProductIcon } from "./product-shell.js";
 
 const CLOSED = new Set(["completed", "dismissed", "stale", "executing", "uncertain", "succeeded", "failed", "expired", "revoked", "cancelled", "cancel_requested", "cancelling", "accepted", "rejected", "stopped"]);
-const ROLES = [["member", "成员 · 交办任务、编辑资料"], ["viewer", "访客 · 查看项目内容"], ["owner", "负责人 · 管理项目与成员"]];
+const ROLES = [["member", "成员 · 交办任务、编辑笔记"], ["viewer", "访客 · 查看项目内容"], ["owner", "负责人 · 管理项目与成员"]];
 const txt = value => typeof value === "string" ? value : "";
 const lines = value => Array.isArray(value) ? value.join("\n") : txt(value);
 const splitLines = value => txt(value).split(/\r?\n/).map(item => item.trim()).filter(Boolean);
@@ -113,12 +113,12 @@ export function createAssistantWelcome({ document: doc, onPrompt, now = () => ne
   scene.append(createAgentMark(doc, "", "idle"), makeNode(doc, "span", "", "assistant-orbit"), makeNode(doc, "span", "", "assistant-spark"));
   const title = makeNode(doc, "h2");
   title.append(makeNode(doc, "span", "想让我做点什么，"), makeNode(doc, "span", "直接说就行。", "assistant-title-finish"));
-  welcome.append(scene, makeNode(doc, "p", greeting(now().getHours()), "assistant-eyebrow"), title, makeNode(doc, "p", "可以是一个想法、一份资料，或者一件还没办的事。", "assistant-muted"));
+  welcome.append(scene, makeNode(doc, "p", greeting(now().getHours()), "assistant-eyebrow"), title, makeNode(doc, "p", "可以是一个想法、一篇笔记，或者一件还没办的事。", "assistant-muted"));
   const prompts = makeNode(doc, "div", "", "assistant-shortcuts");
   for (const [kind, label, detail, prompt, symbol] of [
     ["organize", "看看待办", "有哪些事等你处理", "帮我看看现在有哪些需要我处理的事情。", "tasks"],
     ["remind", "设个提醒", "到点给你发消息", "帮我安排一个提醒：", "remind"],
-    ["collect", "整理资料", "把零散的想法记下来", "帮我整理一份资料：", "collect"],
+    ["collect", "记笔记", "把零散的想法记下来", "帮我记一篇笔记：", "collect"],
     ["begin", "交办任务", "先拟计划，你确认后再做", "我想交办一项任务，请先帮我拟好计划：", "begin"],
   ]) {
     const button = makeNode(doc, "button", "", "assistant-shortcut");
@@ -591,9 +591,9 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
         label = action === "rotate_agent_token" ? "更换凭据" : "撤销"; break;
       }
       case "write_knowledge": {
-        const path = field("path", "资料文件名", draft.path || target || "", { ...required, maxLength: 100, placeholder: "例如：项目笔记.md" });
-        const body = field("text", "资料内容", draft.text || "", { ...required, multiline: true, rows: 8, maxLength: 30000 });
-        read = () => ({ path: path.read().trim(), text: body.read(), ...(draft.revision == null ? {} : { revision: draft.revision }) }); label = "保存资料"; break;
+        const path = field("path", "笔记名称", draft.path || target || "", { ...required, maxLength: 100, placeholder: "例如：项目笔记.md" });
+        const body = field("text", "笔记内容", draft.text || "", { ...required, multiline: true, rows: 8, maxLength: 30000 });
+        read = () => ({ path: path.read().trim(), text: body.read(), ...(draft.revision == null ? {} : { revision: draft.revision }) }); label = "保存笔记"; break;
       }
       case "create_execution_task": case "add_execution_step": {
         const title = action === "create_execution_task" ? field("title", "任务名称", draft.title, { ...required, maxLength: 200 }) : null;

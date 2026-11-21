@@ -33,6 +33,21 @@ export interface TaskWrite { title: string; command: string; input_paths: string
 export interface Device { id: number; label: string; last_seen_at: number; agent?: string; }
 export interface ChannelBinding { channel: string; account_id: string; sender_id: string; recipient_id: string; bound_at: number; version: number; active: boolean; }
 export interface Node { id: string; label: string; last_seen_at: number | null; revoked_at: number | null; online?: boolean; }
+export interface VaultStatus {
+  enabled: boolean; exists?: boolean; root?: string | null; notes?: number; areas?: Record<string, number>;
+  other?: number; skipped?: number; backlog?: number; issues?: Record<string, number>; max_note_bytes?: number;
+}
+export interface VaultFolder { name: string; count: number; }
+export interface VaultEntry { path: string; title: string; summary?: string; type?: string; status?: string; updated?: number; outside?: boolean; private?: boolean; tags?: string[]; }
+export interface VaultLink { path: string; title: string; }
+export interface VaultNote {
+  path: string; title: string; text: string; rev: string; type: string; status: string; origin: string; outside: boolean;
+  generated: boolean; tags: string[]; aliases: string[]; outgoing: VaultLink[]; missing: string[]; backlinks: VaultLink[];
+  updated: number; size: number; obsidian: string | null;
+}
+export interface VaultNoteWrite { path: string; text: string; mode: "create" | "replace" | "append"; rev?: string; }
+export interface VaultVersion { id: number; action: string; actor: string; created_at: number; restorable: boolean; text: string; truncated: boolean; }
+export interface VaultIssue { kind: string; path: string; detail: string; }
 export interface ApiOptions { method?: "GET" | "POST"; body?: object; }
 
 export interface ApiResponses {
@@ -46,4 +61,9 @@ export interface ApiResponses {
   "/api/v3/nodes": { nodes: Node[] };
   "/api/v3/diagnostics": Diagnostics;
   "/api/v3/knowledge/history": { versions: DocumentVersion[] };
+  "/api/v3/vault": VaultStatus;
+  "/api/v3/vault/notes": { folder: string; query: string; folders: VaultFolder[]; notes: VaultEntry[] };
+  "/api/v3/vault/note": { note: VaultNote; notice: string };
+  "/api/v3/vault/history": { path: string; versions: VaultVersion[] };
+  "/api/v3/vault/lint": { issues: VaultIssue[]; counts: Record<string, number> };
 }

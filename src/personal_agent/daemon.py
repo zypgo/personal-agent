@@ -310,6 +310,8 @@ class Daemon:
                         self.wake()
                     if self.app.jobs is not None:
                         self.app.jobs.reconcile()
+                    if self.app.threads is not None and self.app.threads.tick():
+                        self.wake()
                     self._beat()
                 except Exception:
                     self.stats.errors += 1

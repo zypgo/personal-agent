@@ -137,6 +137,17 @@ class WriteKnowledge(RequestModel):
     revision: Annotated[int, Field(ge=0)] = 0
 
 
+class WriteNote(RequestModel):
+    path: Annotated[str, Field(min_length=1, max_length=300)]
+    text: Annotated[str, Field(max_length=400_000)]
+    mode: Literal["create", "replace", "append"] = "replace"
+    rev: Annotated[str, Field(max_length=64)] = ""
+
+
+class RestoreNote(RequestModel):
+    version_id: Annotated[int, Field(ge=1)]
+
+
 class InviteNode(RequestModel):
     space_ids: Grants = Field(default_factory=list)
     label: Label = ""
@@ -324,6 +335,65 @@ class HistoryResponse(ResponseModel):
     versions: list[dict[str, Any]]
 
 
+class VaultStatus(ResponseModel):
+    enabled: bool
+    exists: bool = False
+    root: str | None = None
+    notes: int = 0
+    areas: dict[str, int] = Field(default_factory=dict)
+    other: int = 0
+    skipped: int = 0
+    backlog: int = 0
+    issues: dict[str, int] = Field(default_factory=dict)
+    max_note_bytes: int = 0
+
+
+class VaultNotes(ResponseModel):
+    folder: str
+    query: str
+    folders: list[dict[str, Any]]
+    notes: list[dict[str, Any]]
+
+
+class VaultNoteRecord(ResponseModel):
+    path: str
+    title: str
+    text: str
+    rev: str
+    type: str
+    status: str
+    origin: str
+    outside: bool
+    generated: bool
+    tags: list[str]
+    aliases: list[str]
+    outgoing: list[dict[str, str]]
+    missing: list[str]
+    backlinks: list[dict[str, str]]
+    updated: float
+    size: int
+    obsidian: str | None = None
+
+
+class VaultNoteResponse(ResponseModel):
+    note: VaultNoteRecord
+    notice: str = ""
+
+
+class VaultHistoryResponse(ResponseModel):
+    path: str
+    versions: list[dict[str, Any]]
+
+
+class VaultRestoreResponse(ResponseModel):
+    path: str
+
+
+class VaultIssues(ResponseModel):
+    issues: list[dict[str, str]]
+    counts: dict[str, int]
+
+
 class NodesResponse(ResponseModel):
     nodes: list[dict[str, Any]]
 
@@ -418,6 +488,13 @@ ROUTES = (
     RouteContract("/knowledge", "knowledge", response=KnowledgeResponse),
     RouteContract("/knowledge", "knowledge", "POST", WriteKnowledge, KnowledgeResponse),
     RouteContract("/knowledge/history", "knowledge_history", response=HistoryResponse),
+    RouteContract("/vault", "vault_status", response=VaultStatus),
+    RouteContract("/vault/notes", "vault_notes", response=VaultNotes),
+    RouteContract("/vault/note", "vault_note", response=VaultNoteResponse),
+    RouteContract("/vault/note", "vault_note", "POST", WriteNote, VaultNoteResponse),
+    RouteContract("/vault/history", "vault_history", response=VaultHistoryResponse),
+    RouteContract("/vault/restore", "vault_restore", "POST", RestoreNote, VaultRestoreResponse),
+    RouteContract("/vault/lint", "vault_lint", response=VaultIssues),
     RouteContract("/diagnostics", "diagnostics", response=DiagnosticsResponse),
     RouteContract("/nodes", "node_list", response=NodesResponse),
     RouteContract(

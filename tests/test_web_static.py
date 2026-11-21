@@ -305,6 +305,7 @@ def test_the_page_is_made_of_exactly_the_expected_files(assets):
         "style.css",
         "sw.js",
         "tokens.css",
+        "vault.js",
         "workbench.css",
         "workbench.html",
         "workbench.js",

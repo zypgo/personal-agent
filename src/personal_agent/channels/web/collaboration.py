@@ -16,11 +16,14 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from personal_agent.channels.ingress import Ingress
 from personal_agent.channels.web import contracts as dto
+from personal_agent.channels.web import vault_views as views
 from personal_agent.channels.web.openapi import Endpoint, document, router
 from personal_agent.collaboration.models import AccessDenied, IdentityError
 from personal_agent.execution.models import ExecutionConflict, ExecutionError, ExecutionNotFound
 from personal_agent.execution.workspaces import snapshot
 from personal_agent.memory.store import Actor
+from personal_agent.vault.legacy import mirror
+from personal_agent.vault.store import Vault, VaultConflict, VaultMissing, clean_path
 
 if TYPE_CHECKING:
     from personal_agent.app import App
@@ -40,9 +43,9 @@ async def error_response(_request: Request, exc: Exception) -> Response:
         return answer({"error": exc.detail}, exc.status_code)
     if isinstance(exc, AccessDenied):
         return answer({"error": str(exc)}, 403)
-    if isinstance(exc, ExecutionNotFound):
+    if isinstance(exc, ExecutionNotFound | VaultMissing):
         return answer({"error": str(exc)}, 404)
-    if isinstance(exc, ExecutionConflict):
+    if isinstance(exc, ExecutionConflict | VaultConflict):
         return answer({"error": str(exc)}, 409)
     if isinstance(exc, IdentityError | ExecutionError | ValueError):
         return answer({"error": str(exc)}, 400)
@@ -570,6 +573,8 @@ class V3Api:
                     app.memory.write_text(path, content, actor=Actor.USER)
                 except PathError as exc:
                     raise HTTPException(400, str(exc)) from exc
+            if app.vault is not None:
+                mirror(app.vault, name, content)
         documents = []
         for row in app.db.query(
             "SELECT path,revision,content FROM memory_documents WHERE path LIKE ? AND content IS NOT NULL ORDER BY path",
@@ -591,6 +596,77 @@ class V3Api:
                 if query in doc["path"].casefold() or query in doc["text"].casefold()
             ]
         return answer({"documents": documents})
+
+    # ---- the knowledge base ----------------------------------------------------------
+    def vault_for(self, request: Request, *, write: bool = False) -> tuple[App, Vault]:
+        app, _ = self.selected(request, write=write)
+        if app.vault is None:
+            raise HTTPException(404, "知识库没有打开。")
+        return app, app.vault
+
+    async def vault_status(self, request: Request) -> Response:
+        app, _ = self.selected(request)
+        if app.vault is None:
+            return answer({"enabled": False})
+        return answer(
+            views.status_view(
+                app.vault, max_note_bytes=app.config.vault.max_note_bytes, local=app is self.root
+            )
+        )
+
+    async def vault_notes(self, request: Request) -> Response:
+        _, vault = self.vault_for(request)
+        query = request.query_params
+
+        def param(name: str) -> str:
+            return query.get(name, "")[:300].strip()
+
+        return answer(
+            views.notes_view(
+                vault,
+                folder=param("folder").strip("/"),
+                query=param("q"),
+                tag=param("tag").lstrip("#"),
+                kind=param("kind"),
+                status=param("status"),
+            )
+        )
+
+    async def vault_note(self, request: Request) -> Response:
+        app, vault = self.vault_for(request, write=request.method == "POST")
+        local = app is self.root
+        if request.method == "GET":
+            note = vault.read(request.query_params.get("path", ""), actor=Actor.USER)
+            return answer({"note": views.note_view(vault, note, local=local), "notice": ""})
+        data = await body(request, dto.WriteNote)
+        path = clean_path(data.path, strict=data.mode == "create")
+        if views.is_generated(vault, path):
+            raise ValueError("这个文件是系统自动生成的，写进去的内容会被覆盖。请写在别的笔记里。")
+        written = vault.write(
+            path,
+            data.text,
+            mode=data.mode,
+            actor=Actor.USER,
+            rev=data.rev or None,
+        )
+        note = vault.read(written.path, actor=Actor.USER)
+        app.live.publish({"type": "vault_changed", "path": written.path})
+        return answer({"note": views.note_view(vault, note, local=local), "notice": written.notice})
+
+    async def vault_history(self, request: Request) -> Response:
+        _, vault = self.vault_for(request)
+        return answer(views.history_view(vault, clean_path(request.query_params.get("path", ""))))
+
+    async def vault_restore(self, request: Request) -> Response:
+        app, vault = self.vault_for(request, write=True)
+        data = await body(request, dto.RestoreNote)
+        path = vault.restore(data.version_id, actor=Actor.USER)
+        app.live.publish({"type": "vault_changed", "path": path})
+        return answer({"path": path})
+
+    async def vault_lint(self, request: Request) -> Response:
+        _, vault = self.vault_for(request)
+        return answer(views.issues_view(vault))
 
     async def node_list(self, request: Request) -> Response:
         app, _ = self.selected(request)

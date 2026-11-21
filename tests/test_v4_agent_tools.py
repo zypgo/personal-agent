@@ -10,6 +10,7 @@ from agents.tool_context import ToolContext
 from personal_agent.harness.runctx import Origin, RunContext
 from personal_agent.tools.agents import (
     agent_task_status_tool,
+    answer_agent_question_tool,
     cancel_agent_task_tool,
     delegate_agents_tool,
     list_agents_tool,
@@ -302,3 +303,107 @@ async def test_invalid_proposals_create_no_plan(make_app, changes):
     )
     assert isinstance(result, ToolResult) and result.error
     assert app.db.scalar("SELECT COUNT(*) FROM orchestration_tasks") == 0
+
+
+def ask(app, agent, attempt, question_id="q1", text="Which quarter?", choices=None):
+    app.orchestration.ask_question(
+        attempt["id"],
+        agent["agent"]["id"],
+        generation=attempt["generation"],
+        lease_token=attempt["lease_token"],
+        question_id=question_id,
+        text=text,
+        choices=choices,
+    )
+
+
+def test_only_the_live_assistant_can_pass_an_answer_on(make_app):
+    app = make_app()
+    for profile, expected in ((FULL, True), (SCHEDULED, False), (UNTRUSTED, False), (DREAM, False)):
+        found = "answer_agent_question" in {t.name for t in app.tools.for_profile(profile)}
+        assert found is expected
+    tool = app.tools.get("answer_agent_question")
+    rc = context(app)
+    assert tool.category_of(rc, {}) is Category.MEMORY  # the owner's own words, just now
+    rc.tainted = True
+    assert tool.category_of(rc, {}) is Category.WRITE  # after reading outside text: ask first
+    background = RunContext(
+        app, rc.run_id, "main", FULL, Origin("cli", interactive=False), principal_id="owner"
+    )
+    assert tool.category_of(background, {}) is Category.WRITE
+    assert "owner" in tool.review_of({"task_id": "t", "question_id": "q", "answer": "owner"})
+
+
+async def test_the_owners_answer_reaches_the_agent_that_asked(make_app):
+    app = make_app()
+    rc, agent, task = await propose(app)
+    attempt = start(app, agent, task)
+    ask(app, agent, attempt, choices=["Q1", "Q2"])
+    result = await invoke(answer_agent_question_tool, rc, task_id=task["id"], answer="Q2")
+    assert not isinstance(result, ToolResult) or not result.error
+    assert "do not claim it has been read" in result
+    [question] = app.orchestration.get_task(task["id"], "owner")["questions"]
+    assert question["state"] == "answered" and question["answer"] == "Q2"
+    bad = await invoke(answer_agent_question_tool, rc, task_id=task["id"], answer="Q3")
+    assert isinstance(bad, ToolResult) and bad.error  # an answer already given stays as it was
+
+
+async def test_an_answer_needs_a_question_that_is_open_and_a_clear_choice_between_several(make_app):
+    app = make_app()
+    rc, agent, task = await propose(app)
+    attempt = start(app, agent, task)
+    none = await invoke(answer_agent_question_tool, rc, task_id=task["id"], answer="Q1")
+    assert isinstance(none, ToolResult) and none.error and "no open question" in none
+    ask(app, agent, attempt, "q1", "Which quarter?")
+    ask(app, agent, attempt, "q2", "Include tax?")
+    many = await invoke(answer_agent_question_tool, rc, task_id=task["id"], answer="Yes")
+    assert isinstance(many, ToolResult) and many.error and "q1, q2" in many
+    ok = await invoke(
+        answer_agent_question_tool, rc, task_id=task["id"], question_id="q2", answer="Yes"
+    )
+    assert not isinstance(ok, ToolResult) or not ok.error
+    states = {
+        q["id"]: q["state"] for q in app.orchestration.get_task(task["id"], "owner")["questions"]
+    }
+    assert states == {"q1": "open", "q2": "answered"}
+
+
+async def test_nobody_else_can_answer_for_the_one_who_asked(make_app):
+    root = make_app()
+    shared, member = shared_member(root)
+    agent = create_agent(shared, member)
+    rc = context(shared, member)
+    result = await invoke(delegate_agents_tool, rc, **plan(agent["agent"]["id"]))
+    task = shared.orchestration.get_task(json.loads(result)["task_id"], member)
+    shared.orchestration.approve_task(
+        task["id"], member, revision=task["revision"], plan_hash=task["plan_hash"]
+    )
+    attempt = shared.orchestration.claim(agent["agent"]["id"], "turn-1")["attempt"]
+    ask(shared, agent, attempt)
+    outsider = context(shared, "owner")  # the project owner may not see a private task
+    denied = await invoke(answer_agent_question_tool, outsider, task_id=task["id"], answer="Q1")
+    assert isinstance(denied, ToolResult) and denied.error
+    assert shared.orchestration.get_task(task["id"], member)["questions"][0]["state"] == "open"
+    untrusted = await invoke(
+        answer_agent_question_tool,
+        context(shared, member, profile=UNTRUSTED),
+        task_id=task["id"],
+        answer="Q1",
+    )
+    assert isinstance(untrusted, ToolResult) and untrusted.error
+
+
+async def test_a_proposal_remembers_where_it_was_handed_out_from(make_app):
+    app = make_app()
+    agent = create_agent(app)
+    run_id = app.runs.start(
+        session_key="tg:42", trigger="test", profile=FULL, model="offline", event_ids=[]
+    )
+    rc = RunContext(
+        app, run_id, "tg:42", FULL, Origin("telegram", "42"), principal_id="owner", work_id="w"
+    )
+    result = await invoke(delegate_agents_tool, rc, **plan(agent["agent"]["id"]))
+    task_id = json.loads(result)["task_id"]
+    row = app.db.one("SELECT * FROM threads WHERE task_id = ?", (task_id,))
+    assert (row["channel"], row["recipient"], row["session_key"]) == ("telegram", "42", "tg:42")
+    assert "Do not poll" in result and "one or two plain sentences" in result

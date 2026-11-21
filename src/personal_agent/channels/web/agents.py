@@ -220,7 +220,7 @@ class AgentApi:
         app, session = self.selected(request, write=request.method == "POST")
         store = store_for(app)
         if request.method == "GET":
-            return answer({"tasks": store.list_tasks(session.principal_id)})
+            return answer({"tasks": self.shown(app, store.list_tasks(session.principal_id))})
         data = await body(request, dto.TaskInput)
         steps = [step.model_dump() for step in data.steps]
         for step in steps:
@@ -237,10 +237,36 @@ class AgentApi:
         self.changed(app)
         return answer({"task": result}, 201)
 
+    @staticmethod
+    def shown(app: App, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Tasks as the pages show them: with where each one stands in its thread."""
+        return app.threads.decorate(tasks) if app.threads is not None else tasks
+
     async def task(self, request: Request) -> Response:
         app, session = self.selected(request)
         result = store_for(app).get_task(request.path_params["task_id"], session.principal_id)
-        return answer({"task": result})
+        return answer({"task": self.shown(app, [result])[0]})
+
+    async def thread(self, request: Request) -> Response:
+        """Put a finished task away, bring it back, or stop reminding about it for a while."""
+        app, session = self.selected(request, write=True)
+        store = store_for(app)
+        task_id = request.path_params["task_id"]
+        if not store.get_task(task_id, session.principal_id)["can_manage"]:
+            raise OrchestrationAccessDenied("Only whoever manages a task can change its thread.")
+        keeper = app.threads
+        if keeper is None:
+            raise HTTPException(503, "Task threads are unavailable.")
+        action = request.url.path.rsplit("/", 1)[-1]
+        if action == "snooze":
+            keeper.snooze(task_id, (await body(request, dto.SnoozeInput)).hours)
+        elif action == "archive":
+            if not keeper.archive(task_id):
+                raise OrchestrationConflict("这件事还没有结束，结束以后才能收起来。")
+        else:
+            keeper.unarchive(task_id)
+        self.changed(app)
+        return answer({"task": self.shown(app, [store.get_task(task_id, session.principal_id)])[0]})
 
     async def approve(self, request: Request) -> Response:
         app, session = self.selected(request, write=True)
@@ -550,6 +576,9 @@ class AgentApi:
             Route("/api/v4/tasks/{task_id}", self.task),
             Route("/api/v4/tasks/{task_id}/approve", self.approve, methods=["POST"]),
             Route("/api/v4/tasks/{task_id}/cancel", self.cancel, methods=["POST"]),
+            Route("/api/v4/tasks/{task_id}/archive", self.thread, methods=["POST"]),
+            Route("/api/v4/tasks/{task_id}/unarchive", self.thread, methods=["POST"]),
+            Route("/api/v4/tasks/{task_id}/snooze", self.thread, methods=["POST"]),
             Route("/api/v4/tasks/{task_id}/stopped", self.confirm_stopped, methods=["POST"]),
             Route(
                 "/api/v4/tasks/{task_id}/wakes/{wake_id}/stopped",

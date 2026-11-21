@@ -74,6 +74,11 @@ class Paths:
         return self.home / "artifacts"
 
     @property
+    def vault_dir(self) -> Path:
+        """The notes (Markdown files that Obsidian can open). Created when the first one is."""
+        return self.home / "vault"
+
+    @property
     def backups_dir(self) -> Path:
         """Copies of the database that `pa db backup` makes. Created when the first one is."""
         return self.home / "backups"

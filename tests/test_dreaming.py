@@ -348,7 +348,7 @@ async def night(app, clock: ManualClock | None = None):
     return await drain(app, session_key=DREAM_KEY)
 
 
-async def test_the_pass_has_the_memory_and_search_tools_and_nothing_else(make_app, clock):
+async def test_the_pass_has_the_memory_search_and_note_tools_and_nothing_else(make_app, clock):
     model = ScriptedModel([[assistant_message("Nothing needed changing.")]])
     app = make_app(model, config=config())
     chatter(app)
@@ -357,6 +357,9 @@ async def test_the_pass_has_the_memory_and_search_tools_and_nothing_else(make_ap
         "memory",
         "search_history",
         "search_tool_history",
+        "vault_search",
+        "vault_read",
+        "vault_write",
     }
 
 

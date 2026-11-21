@@ -22,8 +22,10 @@ from personal_agent.execution.schema import migrate as migrate_execution
 from personal_agent.nodes.schema import migrate as migrate_nodes
 from personal_agent.orchestration.artifact_schema import migrate as migrate_agent_artifacts
 from personal_agent.orchestration.schema import migrate as migrate_orchestration
+from personal_agent.orchestration.thread_schema import migrate as migrate_threads
 from personal_agent.parsing import loads_json
 from personal_agent.security.sanitize import scrub_tree
+from personal_agent.vault.schema import migrate as migrate_vault_versions
 
 log = logging.getLogger(__name__)
 
@@ -427,6 +429,12 @@ MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
 ]
 
 
+def migrate_notes_and_threads(conn: sqlite3.Connection) -> None:
+    """The change history of the knowledge notes, and the table of task threads."""
+    migrate_vault_versions(conn)
+    migrate_threads(conn)
+
+
 MIGRATIONS.extend(
     [
         migrate_collaboration,
@@ -434,6 +442,7 @@ MIGRATIONS.extend(
         migrate_nodes,
         migrate_orchestration,
         migrate_agent_artifacts,
+        migrate_notes_and_threads,
     ]
 )
 SCHEMA_VERSION = len(MIGRATIONS)

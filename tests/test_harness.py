@@ -207,6 +207,7 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
 
     assert tool_names(model) == [
         "agent_task_status",
+        "answer_agent_question",
         "ask_task_input",
         "cancel_agent_task",
         "cancel_job",
@@ -226,6 +227,9 @@ async def test_owner_runs_get_the_full_tool_set(make_app):
         "search_tool_history",
         "send_message",
         "submit_job",
+        "vault_read",
+        "vault_search",
+        "vault_write",
         "web_fetch",
         "web_search",
         "workspace_capabilities",

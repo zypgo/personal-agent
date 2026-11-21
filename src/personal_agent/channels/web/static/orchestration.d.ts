@@ -22,11 +22,17 @@ export interface Step {
 }
 export interface Question { id: string; step_id: string; attempt_id: string; text: string; choices: string[]; state: "open" | "answered" | "closed"; answer?: string; }
 export interface Wake { id: string; wake_id?: string; agent_id: string; step_id: string; state: string; claimed_at?: number | null; can_confirm_stopped?: boolean; }
+/** Where a task stands as a thread. `need` is what the owner has to do for it to move on, if anything. */
+export type ThreadPhase = "needs_you" | "running" | "done" | "closed" | "archived";
+export interface Thread {
+  phase: ThreadPhase; label: string; need: "approve" | "answer" | "accept" | "check" | null;
+  archived: boolean; snoozed_until: number | null; note: string | null;
+}
 export interface Task {
   id: string; title: string; actor_id: string; visibility: "private" | "space"; revision: number; plan_hash: string;
   state: string; steps: Step[]; questions: Question[]; created_at: number; updated_at: number;
   can_manage?: boolean; can_approve?: boolean; can_accept?: boolean;
-  wakes?: Wake[];
+  wakes?: Wake[]; thread?: Thread;
 }
 export interface TaskCreate {
   client_request_id: string; title: string; visibility: "private" | "space"; timeout_s: number;

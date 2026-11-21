@@ -167,6 +167,8 @@ class DreamingConfig(_Section):
     max_deleted_files: int = Field(10, ge=1)
     max_deleted_share: float = Field(0.5, gt=0, le=1)
     """A pass that deletes more notes than this, or this share of all of them, is undone entirely."""
+    max_new_notes: int = Field(6, ge=0)
+    """New notes one pass may start in the knowledge base. Adding to its own notes is not counted."""
 
     @field_validator("at")
     @classmethod
@@ -352,6 +354,70 @@ class SecretConfig(_Section):
     @classmethod
     def _env_is_a_name(cls, value: str) -> str:
         return _check_env_name(value, "env")
+
+
+class VaultConfig(_Section):
+    """The knowledge base: a folder of notes that Obsidian opens as it is."""
+
+    enabled: bool = True
+    path: str | None = None
+    """Where the notes live. By default the `vault/` folder in the agent's home. Set it to a folder
+    inside an Obsidian vault (for example "~/Documents/笔记/栖序") to read and edit the notes there.
+    Only your own space uses it; every other space keeps its notes in its own folder."""
+    exclude: list[str] = []
+    """Folders directly inside the vault that the assistant never opens or searches."""
+    max_note_bytes: int = Field(262_144, ge=4_096, le=4_000_000)
+    """The longest a note the assistant writes may be."""
+    max_files: int = Field(5_000, ge=100, le=50_000)
+    """How many notes are searched. When there are more, the newest ones are."""
+    view_max_chars: int = Field(12_000, ge=1_000, le=100_000)
+    """How much of one note the assistant is shown at a time."""
+    history_days: int = Field(180, ge=0, le=36_500)
+    """How long what the assistant changed can be undone. 0 keeps it for ever."""
+    capture_results: bool = True
+    """Keep what each connected assistant hands in, as a note under raw/agents/."""
+
+    @field_validator("path")
+    @classmethod
+    def _path_is_a_folder(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        expanded = Path(value.strip()).expanduser()
+        if not expanded.is_absolute():
+            raise ValueError("path is a full folder path such as ~/Documents/笔记/栖序")
+        return str(expanded)
+
+    @field_validator("exclude")
+    @classmethod
+    def _exclude_are_folder_names(cls, value: list[str]) -> list[str]:
+        for name in value:
+            if not name.strip() or ".." in name or name.startswith("/"):
+                raise ValueError("exclude lists folder names inside the vault, like 私人")
+        return [name.strip().strip("/") for name in value]
+
+
+class ThreadsConfig(_Section):
+    """Tasks handed to other assistants: followed like conversations, tidied up when done."""
+
+    notify: bool = True
+    """Tell you when an assistant asks a question, hands in a result, or gives up."""
+    stall_minutes: int = Field(30, ge=5, le=1_440)
+    """A running task with no sign of life for this long is mentioned once."""
+    remind_minutes: int = Field(45, ge=5, le=10_080)
+    """A question, a result or a plan waiting for you is mentioned again after this long."""
+    remind_again_hours: int = Field(24, ge=1, le=720)
+    """... and once more after this many hours. Never more than that."""
+    archive_after_hours: int = Field(24, ge=0, le=8_760)
+    """A finished task is put away this long after it ended. 0 keeps everything in view."""
+
+
+class ChatConfig(_Section):
+    """How a reply is delivered in a chat app."""
+
+    bubbles: bool = True
+    """A short reply of a few paragraphs goes out as separate messages a moment apart, the way a
+    person types, instead of one block. Long or formatted replies are always one piece."""
+    max_bubbles: int = Field(3, ge=1, le=6)
 
 
 class ToolsConfig(_Section):
@@ -802,6 +868,9 @@ class Config(_Section):
     agent: AgentConfig = AgentConfig()
     model: ModelConfig = ModelConfig()
     memory: MemoryConfig = MemoryConfig()
+    vault: VaultConfig = VaultConfig()
+    threads: ThreadsConfig = ThreadsConfig()
+    chat: ChatConfig = ChatConfig()
     context: ContextConfig = ContextConfig()
     dreaming: DreamingConfig = DreamingConfig()
     runtime: RuntimeConfig = RuntimeConfig()
@@ -871,6 +940,21 @@ index_max_bytes = 25000
 recent_messages = 5              # your last messages to the owner, shown to a background run so it does not repeat itself
 recent_message_chars = 400
 task_index_lines = 20            # unfinished task files (memory/state/tasks/) listed at the start of every run
+
+[vault]
+enabled = true                   # a folder of notes that Obsidian opens as it is (see docs/KNOWLEDGE_BASE.md)
+# path = "~/Documents/笔记/栖序"  # default: the vault/ folder in this home; point it into your Obsidian vault
+# exclude = ["私人"]             # folders inside it the assistant never opens
+capture_results = true           # what connected assistants hand in is kept as a note under raw/agents/
+
+[threads]
+notify = true                    # tell you when an assistant asks something, hands in a result or gives up
+stall_minutes = 30               # a running task silent for this long is mentioned once
+remind_minutes = 45              # something waiting for you is mentioned again after this long (and once more a day later)
+archive_after_hours = 24         # finished tasks are put away this long after they end; 0 keeps them in view
+
+[chat]
+bubbles = true                   # a short reply of a few paragraphs goes out as separate messages, a moment apart
 
 [context]
 compact = true                   # summarise the old part of a long conversation instead of dropping it

@@ -136,9 +136,16 @@ M = [
     (
         "ru recent: never given",
         RU,
-        "            recent=self._recently_sent(batch),",
-        "            recent=[],",
+        "            recent=[*self._recently_sent(batch), *self._threads_block(ctx)],",
+        "            recent=[*self._threads_block(ctx)],",
         TF,
+    ),
+    (
+        "ru threads: never listed",
+        RU,
+        "            recent=[*self._recently_sent(batch), *self._threads_block(ctx)],",
+        "            recent=[*self._recently_sent(batch)],",
+        ["tests/test_threads.py"],
     ),
     ("ru tasks: never listed", RU, "tasks=app.memory.load_task_index(),", 'tasks="",', TF),
     (

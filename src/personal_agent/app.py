@@ -55,6 +55,8 @@ if TYPE_CHECKING:
     from personal_agent.execution.store import ExecutionStore
     from personal_agent.nodes.registry import NodeRegistry
     from personal_agent.orchestration.store import OrchestrationStore
+    from personal_agent.orchestration.threads import ThreadKeeper
+    from personal_agent.vault.store import Vault
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +112,8 @@ class App:
     jobs: ExecutionStore | None = None
     nodes: NodeRegistry | None = None
     orchestration: OrchestrationStore | None = None
+    threads: ThreadKeeper | None = None
+    vault: Vault | None = None
 
     def require_actor(
         self,
@@ -375,6 +379,26 @@ def build_app(
         space_id=app.space_id,
         space_owner_id=app.space_owner_id,
     )
+    if cfg.vault.enabled:
+        from personal_agent.vault.store import Vault
+
+        app.vault = Vault(
+            Path(cfg.vault.path) if cfg.vault.path else paths.vault_dir,
+            database,
+            cfg.vault,
+            clock,
+            lock_path=paths.run_dir / "vault.lock",
+            tz=tz,
+        )
+        from personal_agent.vault.legacy import bring_over
+
+        try:
+            bring_over(database, app.vault, clock)
+        except Exception:
+            log.warning("could not bring the old documents into the knowledge base", exc_info=True)
+    from personal_agent.orchestration.threads import ThreadKeeper
+
+    app.threads = ThreadKeeper(app)
     if collaboration:
         from personal_agent.collaboration.runtime import SpaceManager
 

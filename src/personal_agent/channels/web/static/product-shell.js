@@ -3,7 +3,7 @@
 export const PRODUCT_PAGES = Object.freeze([
   { id: "chat", label: "对话", path: "/", icon: "chat" },
   { id: "tasks", label: "任务", path: "/workspace?tab=tasks", icon: "tasks" },
-  { id: "knowledge", label: "资料", path: "/workspace?tab=knowledge", icon: "knowledge" },
+  { id: "knowledge", label: "知识库", path: "/workspace?tab=knowledge", icon: "knowledge" },
   { id: "agents", label: "助手与连接", path: "/workspace?tab=agents", icon: "agents" },
   { id: "spaces", label: "项目与成员", path: "/workspace?tab=spaces", icon: "spaces" },
   { id: "devices", label: "设备与账号", path: "/workspace?tab=devices", icon: "devices" },

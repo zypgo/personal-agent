@@ -61,6 +61,8 @@ def derive_space_config(root: Config) -> Config:
     data["dingtalk"] = {"enabled": False}
     data["webhooks"] = {"enabled": False, "routes": {}}
     data["web"]["enabled"] = False
+    data["vault"]["path"] = None  # a space keeps its notes in its own folder
+    data["vault"]["exclude"] = []
     data["notify"]["channel"] = "web"
     data["runtime"]["concurrency"] = 1
     return Config.model_validate(data)

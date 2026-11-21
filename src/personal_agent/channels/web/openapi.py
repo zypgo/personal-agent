@@ -20,6 +20,12 @@ from starlette.responses import JSONResponse, Response
 from personal_agent import __version__
 from personal_agent.channels.web.contracts import ROUTES, ErrorResponse, RouteContract
 
+VAULT_QUERIES = {
+    "vault_notes": ("folder", "q", "tag", "kind", "status"),
+    "vault_note": ("path",),
+    "vault_history": ("path",),
+}
+
 Endpoint = Callable[[Request], Awaitable[Response]]
 Resolver = Callable[[str], Endpoint]
 
@@ -57,6 +63,16 @@ def _extra(contract: RouteContract) -> dict[str, Any]:
         parameters.append(
             {"name": "path", "in": "query", "required": True, "schema": {"type": "string"}}
         )
+    if contract.method == "GET":
+        for name in VAULT_QUERIES.get(contract.handler, ()):
+            parameters.append(
+                {
+                    "name": name,
+                    "in": "query",
+                    "required": name == "path",
+                    "schema": {"type": "string", "maxLength": 300},
+                }
+            )
     if contract.method == "POST" and contract.authority != "node":
         parameters.append(
             {

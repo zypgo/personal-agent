@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from personal_agent.channels import pacing
 from personal_agent.channels.base import ChannelCapabilities, ChannelError
 from personal_agent.channels.ingress import Accepted, Ingress, Upload
 from personal_agent.channels.pairing import PAIRING_TTL_S
@@ -205,7 +206,18 @@ class TelegramChannel:
         if message.kind == "artifact" or message.payload.get("artifacts"):
             await self._send_document(chat, message)
             return
-        pieces = render(message.text)
+        chat_cfg = self.app.config.chat
+        texts = (
+            pacing.bubbles(message.text, chat_cfg.max_bubbles)
+            if pacing.chatty(message, chat_cfg)
+            else [message.text]
+        )
+        pieces: list[Piece] = []
+        opens: dict[int, str] = {}  # where a new chat message starts, and what it says
+        for text in texts:
+            if pieces:
+                opens[len(pieces)] = text
+            pieces.extend(render(text))
         ids = [int(i) for i in message.payload.get("approval_ids") or []]
         markup = None
         if message.kind == "approval_request" and ids:
@@ -224,6 +236,8 @@ class TelegramChannel:
             try:
                 if self._chat_for(message) != chat:
                     raise ChannelError("The Telegram recipient changed", permanent=True)
+                if index in opens:
+                    await self._beat(chat, opens[index])
                 await self._send_piece(
                     chat,
                     piece,
@@ -237,6 +251,12 @@ class TelegramChannel:
                         f"{index} of {len(pieces)} parts were delivered before: {exc}"
                     ) from exc
                 raise
+
+    async def _beat(self, chat: str, text: str) -> None:
+        """The pause between two chat messages of one reply: "typing…", then a moment."""
+        with contextlib.suppress(TelegramApiError, NotSent, httpx.HTTPError):
+            await self.api.send_chat_action(chat)
+        await self._sleep(pacing.pause(text))
 
     async def _send_document(self, chat: str, message: OutMessage) -> None:
         """A file and its caption are one operation, so no text is sent ahead of the upload."""

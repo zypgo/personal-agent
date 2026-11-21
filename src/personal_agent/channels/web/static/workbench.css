@@ -735,6 +735,31 @@ pre {
   margin-bottom: 0;
 }
 
+/* ---- the tasks list: which of them need you ---------------------------------------------------------- */
+.thread-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 1rem;
+}
+
+.thread-filter[hidden] {
+  display: none;
+}
+
+.thread-filter button {
+  min-height: 2rem;
+  padding: 0.15rem 0.9rem;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--fs-footnote);
+}
+
+.thread-filter button.selected {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 /* ---- knowledge ---------------------------------------------------------------------------------------- */
 .knowledge-search {
   display: flex;
@@ -857,19 +882,229 @@ pre {
   margin: 0;
 }
 
-.knowledge-editor {
+.vault-note {
+  min-width: 0;
   scroll-margin-top: calc(var(--safe-top) + 4.5rem);
 }
 
-.knowledge-editor textarea {
-  min-height: 20rem;
-  line-height: 1.8;
+.vault-title {
+  min-width: 0;
 }
 
-.knowledge-editor > .editor-heading button {
-  min-height: 2.25rem;
+.vault-title h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.vault-where {
+  margin: 0.15rem 0 0;
+  font-size: var(--fs-footnote);
+  overflow-wrap: anywhere;
+}
+
+.vault-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.vault-actions > button,
+.vault-actions > .button {
+  min-height: var(--control-h-small);
   padding: 0.3rem 0.85rem;
   font-size: var(--fs-footnote);
+}
+
+.vault-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1.1rem;
+}
+
+.vault-badges:empty {
+  display: none;
+}
+
+.vault-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vault-body > :first-child {
+  margin-top: 0;
+}
+
+.vault-body > :last-child {
+  margin-bottom: 0;
+}
+
+.vault-body table {
+  font-size: var(--fs-footnote);
+}
+
+.vault-links {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 0.5px solid var(--hairline);
+}
+
+.vault-links h3 {
+  margin: 0 0 0.5rem;
+  color: var(--ink-3);
+  font-size: var(--fs-footnote);
+  font-weight: var(--w-medium);
+}
+
+.vault-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.vault-chip {
+  min-height: 2rem;
+  padding: 0.2rem 0.8rem;
+  background: var(--accent-soft);
+  font-size: var(--fs-footnote);
+}
+
+.vault-form textarea {
+  min-height: 20rem;
+  font-family: var(--mono);
+  font-size: var(--fs-subhead);
+  line-height: 1.75;
+}
+
+.vault-conflict {
+  margin: 0;
+  color: var(--warn);
+}
+
+.vault-status {
+  margin: -0.75rem 0 1.1rem;
+  color: var(--ink-3);
+  font-size: var(--fs-footnote);
+}
+
+.vault-status:empty {
+  display: none;
+}
+
+.vault-trail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0 0.35rem 0.6rem;
+  font-size: var(--fs-footnote);
+}
+
+.vault-trail:empty {
+  display: none;
+}
+
+.vault-step {
+  min-height: 1.9rem;
+  padding: 0.1rem 0.6rem;
+  font-size: var(--fs-footnote);
+}
+
+.vault-here {
+  padding: 0.1rem 0.6rem;
+  color: var(--ink);
+  font-weight: var(--w-medium);
+}
+
+.vault-pinned {
+  display: inline-flex;
+  margin-left: auto;
+}
+
+.vault-row,
+.vault-issue {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+}
+
+.vault-folder {
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.vault-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.5rem;
+  min-width: 0;
+}
+
+.vault-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vault-count {
+  color: var(--ink-3);
+  font-size: var(--fs-footnote);
+  font-weight: var(--w-regular);
+}
+
+.vault-summary {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: var(--fs-footnote);
+  font-weight: var(--w-regular);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.vault-more {
+  margin: 0.6rem 0.35rem 0;
+  padding-top: 0.6rem;
+  border-top: 0.5px solid var(--hairline);
+}
+
+.vault-more > summary {
+  padding: 0.35rem 0.25rem;
+  color: var(--ink-2);
+  font-size: var(--fs-footnote);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.vault-more .stack {
+  gap: 0.1rem;
+  margin-top: 0.4rem;
+}
+
+.vault-howto {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.4rem 0.25rem 0;
+}
+
+.vault-howto p {
+  margin: 0;
+  font-size: var(--fs-footnote);
+}
+
+.vault-path {
+  max-width: 100%;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--r-s);
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: var(--fs-caption);
+  overflow-wrap: anywhere;
+  user-select: all;
 }
 
 .history-dialog {
@@ -1160,6 +1395,16 @@ dialog textarea {
     position: static;
   }
 
+  .vault-note .editor-heading {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.6rem;
+  }
+
+  .vault-note .vault-actions {
+    justify-content: flex-start;
+  }
+
   .card {
     padding: 1.1rem;
   }
@@ -1191,7 +1436,7 @@ dialog textarea {
     padding: 1.25rem 0.75rem;
   }
 
-  .knowledge-editor textarea {
+  .vault-form textarea {
     min-height: 16rem;
   }
 

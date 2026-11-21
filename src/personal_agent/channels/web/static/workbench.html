@@ -60,6 +60,7 @@
           <div class="task-switch" role="group" aria-label="任务类型"><button id="task-view-collaboration" type="button" class="selected" aria-pressed="true">助手协作</button><button id="task-view-computer" type="button" aria-pressed="false">电脑任务</button></div>
           <div id="collaboration-tasks">
             <details class="card compose" id="collaboration-compose"><summary><span>交办新任务</span><span class="compose-description">选择助手，说明目标与验收标准</span><span class="compose-plus" aria-hidden="true">＋</span></summary><div id="collaboration-compose-content"></div></details>
+            <div id="thread-filter" class="thread-filter" role="group" aria-label="任务筛选" hidden></div>
             <div class="task-layout"><div id="collaboration-list" class="stack"></div><section id="collaboration-detail" class="card task-detail" hidden aria-live="polite"></section></div>
           </div>
           <div id="computer-tasks" hidden>
@@ -90,21 +91,27 @@
         </section>
 
         <section id="panel-spaces" class="panel" hidden>
-          <div class="section-title"><div><h1 tabindex="-1">项目与成员</h1><p class="muted">按项目整理资料、共享任务。</p></div></div>
+          <div class="section-title"><div><h1 tabindex="-1">项目与成员</h1><p class="muted">按项目整理笔记、共享任务。</p></div></div>
           <div class="two-columns">
             <details class="card compose"><summary><span>创建新项目</span><span class="compose-description">为共同目标留一个独立空间</span><span class="compose-plus" aria-hidden="true">＋</span></summary><form id="space-form"><label>项目名称<input name="name" required maxlength="60" placeholder="例如：每周研究"></label><button class="primary" type="submit">创建项目</button></form></details>
-            <details class="card compose" id="member-invite-card"><summary><span>邀请成员</span><span class="compose-description">选择他们在当前项目中的权限</span><span class="compose-plus" aria-hidden="true">＋</span></summary><form id="invite-form"><label>邀请备注<input name="label" maxlength="60" placeholder="可选"></label><label>项目角色<select name="role"><option value="member">成员 · 发起任务、编辑资料</option><option value="viewer">访客 · 查看项目内容</option><option value="owner">负责人 · 同时管理成员与规则</option></select></label><button type="submit">生成一次性邀请</button></form></details>
+            <details class="card compose" id="member-invite-card"><summary><span>邀请成员</span><span class="compose-description">选择他们在当前项目中的权限</span><span class="compose-plus" aria-hidden="true">＋</span></summary><form id="invite-form"><label>邀请备注<input name="label" maxlength="60" placeholder="可选"></label><label>项目角色<select name="role"><option value="member">成员 · 发起任务、编辑笔记</option><option value="viewer">访客 · 查看项目内容</option><option value="owner">负责人 · 同时管理成员与规则</option></select></label><button type="submit">生成一次性邀请</button></form></details>
           </div>
           <section class="card"><h2>当前成员</h2><div id="members-list" class="stack"></div></section>
         </section>
 
         <section id="panel-knowledge" class="panel" hidden>
-          <div class="section-title"><div><h1 tabindex="-1">资料</h1><p class="muted">保存背景、想法和笔记，让下一次对话接着往下走。</p></div><div class="actions"><button id="refresh-knowledge" class="ghost refresh-button" type="button">刷新</button><button id="knowledge-new" class="primary" type="button">新建资料</button></div></div>
-          <form id="knowledge-search-form" class="knowledge-search"><label class="sr-only" for="knowledge-search">搜索资料标题或内容</label><input id="knowledge-search" name="q" type="search" maxlength="200" placeholder="搜索资料名称或正文"><button type="submit">搜索资料</button></form>
+          <div class="section-title"><div><h1 tabindex="-1">知识库</h1><p class="muted">你和各个助手攒下的笔记，放在同一个文件夹里，Obsidian 能直接打开。</p></div><div class="actions"><button id="refresh-knowledge" class="ghost refresh-button" type="button">刷新</button><button id="knowledge-new" class="primary" type="button">新建笔记</button></div></div>
+          <p id="vault-status" class="vault-status" role="status"></p>
+          <form id="knowledge-search-form" class="knowledge-search"><label class="sr-only" for="knowledge-search">搜索笔记</label><input id="knowledge-search" name="q" type="search" maxlength="200" placeholder="搜标题、正文，或者 #标签"><button type="submit">搜索</button></form>
           <div class="two-columns knowledge-layout">
-            <section class="card knowledge-directory"><h2>全部资料</h2><div id="knowledge-list" class="stack"></div></section>
-            <section id="knowledge-editor-panel" class="card knowledge-editor" hidden><div class="editor-heading"><h2 id="knowledge-editor-title">新建资料</h2><button id="knowledge-close" class="ghost" type="button" aria-label="关闭资料编辑">关闭</button></div><form id="knowledge-form"><label>资料文件名<input name="path" required maxlength="94" pattern="[A-Za-z0-9_\-][A-Za-z0-9_.\-]*\.md" placeholder="project-notes.md"></label><label>正文<textarea name="text" rows="14" required maxlength="30000" placeholder="项目背景、资料来源或需要共同记住的结论"></textarea></label><div class="actions"><button class="primary" type="submit">保存到当前空间</button><button id="knowledge-history" type="button" class="ghost" disabled>查看历史版本</button></div></form></section>
-            <div id="knowledge-empty-editor" class="knowledge-placeholder"><svg class="knowledge-illustration" viewBox="0 0 112 106" aria-hidden="true" focusable="false"><path class="page accent-page" d="m18 15 54-7 9 75-54 7Z"/><path class="page" d="m36 18 56 5-7 73-56-5Z"/><path class="writing" d="m48 40 30 3M46 50l30 3M45 60l19 2"/><path class="spark" d="m91 4 3 8 9 4-9 3-3 9-4-9-8-3 8-4Z"/><circle class="spark" cx="18" cy="76" r="3"/></svg><h2>想留住什么？</h2><p class="muted">从目录打开一份资料，或新建一份笔记。</p><a id="knowledge-chat-link" href="/" class="text-link">也可以让助理帮你整理 <span aria-hidden="true">↗</span></a></div>
+            <section class="card knowledge-directory">
+              <nav id="vault-trail" class="vault-trail" aria-label="所在的文件夹"></nav>
+              <div id="knowledge-list" class="stack"></div>
+              <details id="vault-care" class="vault-more" hidden><summary id="vault-care-summary">整理建议</summary><div id="vault-care-list" class="stack"></div></details>
+              <details id="vault-howto" class="vault-more" hidden><summary>在 Obsidian 里打开</summary><div id="vault-howto-body" class="vault-howto"></div></details>
+            </section>
+            <section id="vault-note" class="card vault-note" hidden aria-live="polite"></section>
+            <div id="knowledge-empty-editor" class="knowledge-placeholder"><svg class="knowledge-illustration" viewBox="0 0 112 106" aria-hidden="true" focusable="false"><path class="page accent-page" d="m18 15 54-7 9 75-54 7Z"/><path class="page" d="m36 18 56 5-7 73-56-5Z"/><path class="writing" d="m48 40 30 3M46 50l30 3M45 60l19 2"/><path class="spark" d="m91 4 3 8 9 4-9 3-3 9-4-9-8-3 8-4Z"/><circle class="spark" cx="18" cy="76" r="3"/></svg><h2>想留住什么？</h2><p class="muted">从左边打开一篇笔记，或者新写一篇。</p><a id="knowledge-chat-link" href="/" class="text-link">也可以让栖序帮你整理 <span aria-hidden="true">↗</span></a></div>
           </div>
         </section>
 
@@ -128,7 +135,7 @@
       <p id="secret-extra" class="hint"></p><div class="actions"><button id="secret-copy" class="primary" type="button">复制</button><button id="secret-close" type="button">完成</button></div>
     </dialog>
     <dialog id="knowledge-history-dialog" class="history-dialog" aria-labelledby="knowledge-history-title">
-      <h2 id="knowledge-history-title">资料历史</h2><p class="muted">最近二十个历史版本，可查看并复制需要的内容。</p>
+      <h2 id="knowledge-history-title">笔记的历史</h2><p class="muted">最近的二十次改动。每一次都能恢复到改之前的样子。</p>
       <div id="knowledge-history-list" class="stack"></div><div class="actions"><button id="knowledge-history-close" type="button">关闭</button></div>
     </dialog>
   </body>

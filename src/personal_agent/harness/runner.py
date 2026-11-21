@@ -61,6 +61,7 @@ from personal_agent.harness.pricing import cost_usd
 from personal_agent.harness.runctx import Origin, RunContext
 from personal_agent.harness.streaming import consume_stream
 from personal_agent.memory.store import PreferencesUnavailable
+from personal_agent.tools.base import FULL, SCHEDULED
 from personal_agent.tools.guard import ToolGuard, parse_args, summarize
 from personal_agent.tools.skills import shell_dir
 from personal_agent.tools.urls import find_urls
@@ -442,6 +443,7 @@ class Harness:
             index=app.memory.load_index(),
             skills=self._skills_block(profile),
             tasks=app.memory.load_task_index(),
+            knowledge=self._offers("vault_search", profile),
         )
 
     async def _prepare_plugins(self) -> None:
@@ -451,12 +453,25 @@ class Harness:
         except Exception:
             log.warning("could not prepare the MCP servers", exc_info=True)
 
+    def _offers(self, name: str, profile: str) -> bool:
+        tool = self.app.tools.get(name)
+        return tool is not None and self.guard.offered(tool, profile)
+
     def _skills_block(self, profile: str) -> str:
         """The list of installed skills, only for runs that can load one."""
-        tool = self.app.tools.get("skill")
-        if tool is None or not self.guard.offered(tool, profile):
-            return ""
-        return self.app.skills.catalog()
+        return self.app.skills.catalog() if self._offers("skill", profile) else ""
+
+    def _threads_block(self, ctx: RunContext) -> list[str]:
+        """The tasks handed to other agents that are still open, for the runs that can act on them:
+        the owner's own conversations and the timers they set."""
+        keeper = self.app.threads
+        if keeper is None or ctx.profile not in (FULL, SCHEDULED) or ctx.trust is not Trust.OWNER:
+            return []
+        try:
+            return keeper.context_lines(ctx.principal_id)
+        except Exception:
+            log.warning("could not list the open tasks for the context", exc_info=True)
+            return []
 
     def _requested_skills(self, event: Event) -> str:
         """Skills the owner asked for by name (`$name`) in a message: their instructions are put
@@ -545,7 +560,7 @@ class Harness:
             trigger=describe_trigger(batch.events),
             session_key=key,
             notes=[*self._outbox_notes(), *app.mcp.notes()],
-            recent=self._recently_sent(batch),
+            recent=[*self._recently_sent(batch), *self._threads_block(ctx)],
         )
         if fresh:
             for position, event in enumerate(fresh):

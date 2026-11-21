@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { FakeElement, elements, find, toHtml } from "./fake_dom.mjs";
 import { RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest } from "../../src/personal_agent/channels/web/static/query.js";
+import * as vaultModule from "../../src/personal_agent/channels/web/static/vault.js";
 
 // Execute the real renderer and form handlers without browser startup/network or a new dependency.
 // The same fake DOM used by the Markdown tests rejects turning untrusted text into HTML.
@@ -56,7 +57,9 @@ const source = readFileSync(new URL("../../src/personal_agent/channels/web/stati
 // import is removed, so these tests exercise the same networking implementation as the browser.
 const requestImport = 'import { RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest } from "./query.js";\n';
 assert.ok(source.startsWith(requestImport));
-const definitions = source.slice(0, source.indexOf('bindForm("enroll-form"')).replace(requestImport, "").replace('import { createProductShell } from "./product-shell.js";\n', "");
+// The knowledge page is loaded the first time it is opened; here the same module is handed over directly.
+const definitions = source.slice(0, source.indexOf('bindForm("enroll-form"')).replace(requestImport, "").replace('import { createProductShell } from "./product-shell.js";\n', "").replace('import("./vault.js")', "Promise.resolve(vaultModule)");
+assert.ok(definitions.includes("Promise.resolve(vaultModule)"));
 const taskFixture = () => ({
   id: "task-a", actor_id: "alice", title: "Report", state: "awaiting_approval", revision: 2,
   jobs: [{id: "job-a", task_id: "task-a", task_revision: 2, step_id: "1", state: "awaiting_approval",
@@ -77,7 +80,7 @@ function setup(task = taskFixture(), {principal = "alice", role = "member", resp
   const setLocation = value => {const url=new URL(value,"https://example.invalid");Object.assign(location,{href:url.href,origin:url.origin,pathname:url.pathname,search:url.search,hash:url.hash});};
   setLocation(href);
   const historyCalls=[];
-  const context = {document, URL, URLSearchParams, AbortController, DOMException, RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest, crypto: webcrypto,
+  const context = {document, URL, URLSearchParams, AbortController, DOMException, RequestScope, buildTaskRequest, buildStepRequest, buildAnswerRequest, vaultModule, crypto: webcrypto,
     location, history: {replaceState(_a,_b,path) {historyCalls.push(["replace",path]);setLocation(path);},pushState(_a,_b,path) {historyCalls.push(["push",path]);setLocation(path);}}, confirm, fetch: async (url, options) => {
       const path = new URL(url, "https://example.invalid").pathname;
       const body = options.body ? JSON.parse(options.body) : null;
@@ -93,7 +96,7 @@ function setup(task = taskFixture(), {principal = "alice", role = "member", resp
     },
     ...globals,
   };
-  runInNewContext(definitions + "\nglobalThis.ui={state,renderTask,loadTasks,loadMembers,editingTask,showLogin,routeFromLocation,workspaceUrl,selectTab,selectTaskView,followLocation,showPanel,loadMe,openKnowledge,closeKnowledge,loadKnowledge,bindButton,notice};", context);
+  runInNewContext(definitions + "\nglobalThis.ui={state,renderTask,loadTasks,loadMembers,editingTask,showLogin,routeFromLocation,workspaceUrl,selectTab,selectTaskView,followLocation,showPanel,loadMe,vaultUI,bindButton,notice};", context);
   context.ui.state.me = {principal: {id: principal, is_admin: false}, role, spaces: []};
   context.ui.state.space = "space-a"; context.ui.state.taskId = task.id; context.ui.state.taskView="computer";
   context.ui.renderTask(task);
@@ -248,7 +251,7 @@ test("drawer destinations survive reload and invalid URL values fall back to rea
 test("panel changes and browser history preserve unsent forms in the same space", async () => {
   const {ui,get,setLocation,location,historyCalls}=setup();
   ui.state.me=null; // This exercises navigation independently of the data loaders.
-  const draft=get("knowledge-form");draft.dataset.dirty="1";
+  const draft=get("task-form");draft.dataset.dirty="1";
   const content=new Element("textarea");content.name="text";content.value="unsent private note";draft.append(content);
   await ui.selectTab("knowledge");
   assert.equal(get("panel-knowledge").hidden,false);assert.equal(get("panel-tasks").hidden,true);
@@ -295,57 +298,6 @@ test("accepting an invitation pins the existing session and concurrent clicks ma
   assert.equal(ui.state.me,null);assert.equal(calls.filter(call=>call.path==="/api/v3/enroll").length,1);
 });
 
-test("a knowledge draft is kept when closing or switching documents is declined", () => {
-  const {ui,get}=setup(taskFixture(),{confirm:()=>false});
-  const editor=get("knowledge-form");
-  for(const [name,value] of [["path","draft.md"],["text","unsaved text"]]) {const input=new Element("input");input.name=name;input.value=value;editor.append(input);}
-  editor.dataset.dirty="1";get("knowledge-editor-panel").hidden=false;
-  ui.openKnowledge({path:"other.md",text:"other text",revision:3});
-  ui.closeKnowledge();
-  assert.equal(editor.elements.namedItem("text").value,"unsaved text");
-  assert.equal(editor.elements.namedItem("path").value,"draft.md");
-  assert.equal(get("knowledge-editor-panel").hidden,false);
-});
-
-
-test("an in-flight knowledge save pins the editor until its revision and dirty state settle", async () => {
-  let release,confirmations=0;
-  const saved=new Promise(resolve=>{release=resolve;});
-  const {ui,get,context,calls}=setup(taskFixture(),{confirm:()=>{confirmations++;return true;},respond:(url,options)=>{
-    if(url.pathname!=="/api/v3/knowledge") return;
-    if(options.method==="POST") return saved;
-    return {ok:true,status:200,json:async()=>({documents:[{path:"a.md",text:"saved A",revision:8}]})};
-  }});
-  const editor=get("knowledge-form");
-  for(const [name,value] of [["path","a.md"],["text","saved A"]]) {const input=new Element("input");input.name=name;input.value=value;editor.append(input);}
-  editor.dataset.dirty="1";ui.state.knowledgeRevision=7;
-  get("knowledge-editor-panel").hidden=false;get("knowledge-empty-editor").hidden=true;
-  const start=source.indexOf('bindForm("knowledge-form",');
-  const end=source.indexOf('bindForm("knowledge-search-form"',start);
-  runInNewContext(source.slice(start,end),context);
-  editor.listeners.get("submit")({preventDefault(){}});
-  await settled();
-  assert.equal(editor.dataset.busy,"1");
-  ui.openKnowledge({path:"b.md",text:"draft B",revision:30});
-  ui.openKnowledge();
-  ui.closeKnowledge();
-  assert.equal(editor.elements.namedItem("path").value,"a.md");
-  assert.equal(editor.elements.namedItem("text").value,"saved A");
-  assert.equal(ui.state.knowledgeRevision,7);assert.equal(editor.dataset.dirty,"1");
-  assert.equal(get("knowledge-editor-panel").hidden,false);
-  assert.equal(get("knowledge-empty-editor").hidden,true);
-  assert.equal(confirmations,0);assert.match(get("notice").textContent,/正在保存/);
-  assert.deepEqual(calls.find(call=>call.body?.path==="a.md").body,{path:"a.md",text:"saved A",revision:7});
-  release({ok:true,status:200,json:async()=>({revision:8})});
-  await settled();
-  assert.equal(editor.elements.namedItem("path").value,"a.md");
-  assert.equal(ui.state.knowledgeRevision,8);
-  assert.equal(editor.dataset.busy,undefined);assert.equal(editor.dataset.dirty,undefined);
-  ui.openKnowledge({path:"b.md",text:"draft B",revision:30});
-  assert.equal(editor.elements.namedItem("path").value,"b.md");
-  assert.equal(ui.state.knowledgeRevision,30);
-});
-
 test("reselecting the current computer task preserves its unfinished editor", async () => {
   const {ui,detail,get,calls}=setup();
   const editor=find(detail,"form").find(item=>item.elements.namedItem("command"));
@@ -361,25 +313,29 @@ test("reselecting the current computer task preserves its unfinished editor", as
   assert.equal(calls.filter(call=>call.path.endsWith("/task-a")).length,reads);
 });
 
-for(const succeeds of [true,false])test(`first knowledge save ${succeeds ? "enables history for the new revision" : "keeps history unavailable after failure"}`,async()=>{
-  const {ui,get,context}=setup(taskFixture(),{respond:(url,options)=>{
-    if(url.pathname!=="/api/v3/knowledge")return;
-    if(options.method==="POST")return {ok:succeeds,status:succeeds ? 200 : 422,json:async()=>succeeds ? {revision:1} : {error:"Invalid document"}};
-    return {ok:true,status:200,json:async()=>({documents:[{path:"new.md",text:"New note",revision:1}]})};
+test("opening the knowledge page loads it once and reads the knowledge base", async () => {
+  const {ui,get,calls}=setup(taskFixture(),{respond:url=>{
+    if(url.pathname==="/api/v3/vault") return {ok:true,status:200,json:async()=>({enabled:true,exists:true,root:null,notes:1,areas:{},backlog:0,issues:{}})};
+    if(url.pathname==="/api/v3/vault/notes") return {ok:true,status:200,json:async()=>({folder:"",query:"",folders:[],notes:[{path:"a.md",title:"甲",summary:"",outside:false}]})};
   }});
-  const editor=get("knowledge-form");
-  for(const [name,value] of [["path","new.md"],["text","New note"]]) {const input=new Element("input");input.name=name;input.value=value;editor.append(input);}
-  const history=get("knowledge-history");history.tagName="BUTTON";history.disabled=true;editor.append(history);
-  editor.dataset.dirty="1";ui.state.knowledgeRevision=null;
-  const start=source.indexOf('bindForm("knowledge-form",');
-  const end=source.indexOf('bindForm("knowledge-search-form"',start);
-  runInNewContext(source.slice(start,end),context);
-  editor.listeners.get("submit")({preventDefault(){}});await settled();
-  assert.equal(history.disabled,!succeeds);
-  assert.equal(ui.state.knowledgeRevision,succeeds ? 1 : null);
-  assert.equal(editor.dataset.dirty,succeeds ? undefined : "1");
-  assert.equal(editor.dataset.busy,undefined);
-  assert.equal(editor.elements.namedItem("text").value,"New note");
+  await ui.selectTab("knowledge");
+  assert.deepEqual(calls.filter(call=>call.path.startsWith("/api/v3/vault")).map(call=>call.path),["/api/v3/vault","/api/v3/vault/notes"]);
+  assert.equal(get("vault-status").textContent,"1 篇笔记");
+  assert.equal(find(get("knowledge-list"),"button")[0].textContent,"甲");
+  await ui.selectTab("knowledge");
+  assert.equal(await ui.vaultUI(),await ui.vaultUI(),"one page object, not one per visit");
+});
+
+test("a failed first load of the knowledge page can be tried again", async () => {
+  let fail=true;
+  const {ui,get,calls}=setup(taskFixture(),{respond:url=>{
+    if(url.pathname==="/api/v3/vault") return fail ? {ok:false,status:500,json:async()=>({error:"断了"})} : {ok:true,status:200,json:async()=>({enabled:false})};
+  }});
+  await assert.rejects(()=>ui.selectTab("knowledge"));
+  fail=false;
+  await ui.selectTab("knowledge");
+  assert.equal(get("vault-status").textContent,"知识库没有打开。");
+  assert.equal(calls.filter(call=>call.path==="/api/v3/vault").length,2);
 });
 
 test("changing page cross-fades only where the browser can, and only when motion is welcome", () => {
@@ -400,7 +356,7 @@ test("changing page cross-fades only where the browser can, and only when motion
   assert.deepEqual([welcome.get("panel-tasks").hidden, welcome.get("panel-knowledge").hidden], [false, true], "the swap happens inside the transition, not before it");
   updates[0]();
   assert.equal(welcome.get("panel-knowledge").hidden, false); assert.equal(welcome.get("panel-tasks").hidden, true);
-  assert.equal(welcome.context.document.title, "资料 · 栖序"); assert.equal(welcome.get("masthead-title").textContent, "资料");
+  assert.equal(welcome.context.document.title, "知识库 · 栖序"); assert.equal(welcome.get("masthead-title").textContent, "知识库");
 
   const still = setup(taskFixture(), {documentExtras: {startViewTransition}, globals: {matchMedia: query => ({matches: query.includes("reduce")})}});
   still.ui.state.tab = "tasks"; still.ui.showPanel();
@@ -417,8 +373,8 @@ test("a notice that reports good news leaves by itself and one that reports a pr
   const timers = [], cleared = [];
   const globals = {setTimeout: (callback, delay) => {timers.push({callback, delay});return timers.length;}, clearTimeout: id => cleared.push(id)};
   const {ui, get} = setup(taskFixture(), {globals});
-  ui.notice("资料已保存到当前空间。");
-  assert.equal(get("notice").textContent, "资料已保存到当前空间。"); assert.equal(get("notice").hidden, false);
+  ui.notice("保存好了。");
+  assert.equal(get("notice").textContent, "保存好了。"); assert.equal(get("notice").hidden, false);
   assert.equal(timers.length, 1); assert.equal(timers[0].delay, 6000);
   timers[0].callback();
   assert.equal(get("notice").hidden, true, "good news goes after a moment");
