@@ -31,6 +31,9 @@ class Element extends FakeElement {
   }
   removeAttribute(name) { this.attrs.delete(name); }
   focus() {}
+  // A dialog opens, and closing it tells the page afterwards, as a browser does.
+  showModal() { this.open = true; }
+  close() { this.open = false; Promise.resolve().then(() => this.listeners.get("close")?.()); }
   contains(value) { return this === value || elements(this).includes(value); }
   closest(tag) {
     for (let item = this; item; item = item.parentElement) if (item.tagName === tag.toUpperCase()) return item;
@@ -76,7 +79,8 @@ function setup(task = taskFixture(), {principal = "alice", role = "member", resp
   };
   const document = {createElement: tag => new Element(tag), getElementById: get, activeElement: null, ...documentExtras};
   const calls = [];
-  const location = {};
+  const assigned = [];
+  const location = {assign: path => { assigned.push(path); }};
   const setLocation = value => {const url=new URL(value,"https://example.invalid");Object.assign(location,{href:url.href,origin:url.origin,pathname:url.pathname,search:url.search,hash:url.hash});};
   setLocation(href);
   const historyCalls=[];
@@ -96,11 +100,11 @@ function setup(task = taskFixture(), {principal = "alice", role = "member", resp
     },
     ...globals,
   };
-  runInNewContext(definitions + "\nglobalThis.ui={state,renderTask,loadTasks,loadMembers,editingTask,showLogin,routeFromLocation,workspaceUrl,selectTab,selectTaskView,followLocation,showPanel,loadMe,vaultUI,bindButton,notice};", context);
+  runInNewContext(definitions + "\nglobalThis.ui={state,renderTask,loadTasks,loadMembers,editingTask,showLogin,routeFromLocation,workspaceUrl,selectTab,selectTaskView,followLocation,showPanel,loadMe,vaultUI,bindButton,notice,renderInvite,loadInvite,readable,reachable,inviteLink,showSecret,finishSecret,closeSecret};", context);
   context.ui.state.me = {principal: {id: principal, is_admin: false}, role, spaces: []};
   context.ui.state.space = "space-a"; context.ui.state.taskId = task.id; context.ui.state.taskView="computer";
   context.ui.renderTask(task);
-  return {ui: context.ui, detail: get("task-detail"), get, calls, task, context, location, historyCalls, setLocation};
+  return {ui: context.ui, detail: get("task-detail"), get, calls, task, context, location, historyCalls, setLocation, assigned};
 }
 
 async function settled() { for (let index = 0; index < 5; index++) await new Promise(setImmediate); }
@@ -384,4 +388,268 @@ test("a notice that reports good news leaves by itself and one that reports a pr
   ui.notice("第一条"); ui.notice("第二条");
   assert.deepEqual(cleared.length, 2, "a newer notice cancels the older one's timer so it cannot hide the new text early");
   assert.equal(get("notice").textContent, "第二条");
+});
+
+// ---- inviting people into a project, and joining one ----------------------------------------------
+
+const answer = (data, status = 200) => ({ok: status < 400, status, json: async () => data});
+const PROJECT = {id: "space-p", name: "产品研究", kind: "project"};
+const joinedAs = (role, extra = {}) => answer({ok: true, recovery_code: null, created: false, joined: true, space: PROJECT, role, ...extra});
+const preview = (extra = {}) => answer({space_name: "产品研究", role: "member", invited_by: "小明", expires_at: 4102444800, already_member: false, ...extra});
+const dead = () => answer({error: "Invitation is unavailable."}, 400);
+
+/** Run the part of the page that wires up the forms and buttons between two markers. */
+function wire(context, from, to) {
+  const start = source.indexOf(from), end = source.indexOf(to, start);
+  assert.ok(start >= 0 && end > start, `${from} … ${to}`);
+  runInNewContext(source.slice(start, end), context);
+}
+
+function fill(form, values) {
+  for (const [name, value] of Object.entries(values)) {
+    const control = new Element("input"); control.name = name; control.value = value; form.append(control);
+  }
+  return form;
+}
+
+test("an invitation link tells the sign-in page which project it is for and who sent it", async () => {
+  const {ui, get, calls} = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/invites/preview" ? preview() : undefined});
+  ui.state.me = null; ui.state.pendingInvite = "one-time-code-123456";
+  ui.showLogin(); await settled();
+  assert.equal(get("login-title").textContent, "加入「产品研究」");
+  assert.match(get("login-intro").textContent, /小明 邀请你以成员加入/);
+  assert.equal(get("enroll-code-field").hidden, true, "the code came with the link, there is nothing to type");
+  assert.equal(get("enroll-submit").textContent, "加入并开始对话");
+  assert.deepEqual(calls.filter(call => call.path === "/api/v3/invites/preview").map(call => call.body), [{code: "one-time-code-123456"}], "asked once, with the code in the body and never in the address");
+});
+
+test("an invitation from the instance owner, who has not given themselves a name, says 负责人 and not Owner", async () => {
+  const {ui, get} = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/invites/preview" ? preview({invited_by: "Owner"}) : undefined});
+  ui.state.me = null; ui.state.pendingInvite = "one-time-code-123456";
+  ui.showLogin(); await settled();
+  assert.match(get("login-intro").textContent, /^负责人 邀请你以成员加入/);
+});
+
+test("a visitor invitation says up front that it is for reading", async () => {
+  const {ui, get} = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/invites/preview" ? preview({role: "viewer"}) : undefined});
+  ui.state.me = null; ui.state.pendingInvite = "one-time-code-123456";
+  ui.showLogin(); await settled();
+  assert.match(get("login-intro").textContent, /以访客加入：能看，不能发言/);
+});
+
+test("a used or expired invitation says so and gives the code box back", async () => {
+  const {ui, get} = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/invites/preview" ? dead() : undefined});
+  ui.state.me = null; ui.state.pendingInvite = "used-code-0123456789";
+  ui.showLogin(); await settled();
+  assert.match(get("login-intro").textContent, /这条邀请已经失效：用过了，或者超过 24 小时/);
+  assert.equal(get("enroll-code-field").hidden, false, "they can type another code");
+  assert.equal(get("enroll-code").value, "", "the dead code is not left in the box");
+});
+
+test("when the invitation cannot be looked up, joining is still offered", async () => {
+  const {ui, get} = setup(taskFixture(), {respond: url => { if (url.pathname === "/api/v3/invites/preview") throw new TypeError("offline"); }});
+  ui.state.me = null; ui.state.pendingInvite = "one-time-code-123456";
+  ui.showLogin(); await settled();
+  assert.equal(ui.state.invite, null, "no answer is not a no");
+  assert.equal(get("login-title").textContent, "进入你的空间");
+  assert.equal(get("enroll-code-field").hidden, true);
+  assert.equal(get("enroll-submit").textContent, "创建账号并加入");
+});
+
+test("the sign-in page without an invitation is the ordinary one and asks nothing", async () => {
+  const {ui, get, calls} = setup();
+  ui.state.me = null; ui.state.pendingInvite = "";
+  ui.showLogin(); await settled();
+  assert.equal(get("login-title").textContent, "进入你的空间");
+  assert.equal(get("enroll-code-field").hidden, false);
+  assert.equal(get("join-banner").hidden, true);
+  assert.equal(calls.some(call => call.path === "/api/v3/invites/preview"), false);
+});
+
+test("someone who is already in the project is told so, and the invitation stays unspent", async () => {
+  const {ui, get} = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/invites/preview" ? preview({already_member: true}) : undefined});
+  ui.state.pendingInvite = "one-time-code-123456";
+  ui.renderInvite(); await ui.loadInvite();
+  assert.equal(get("join-banner").hidden, false);
+  assert.equal(get("join-title").textContent, "你已经在「产品研究」里了");
+  assert.match(get("join-lead").textContent, /没有被用掉/);
+  assert.equal(get("accept-invite").textContent, "进入对话");
+});
+
+test("a signed-in person who accepts an invitation goes straight to the project's chat", async () => {
+  const s = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/enroll" ? joinedAs("member") : undefined});
+  s.ui.state.pendingInvite = "one-time-code-123456";
+  wire(s.context, 'bindButton("accept-invite"', 'bindForm("space-form"');
+  s.get("accept-invite").listeners.get("click")(); await settled();
+  assert.deepEqual(s.assigned, ["/?space=space-p&joined=member"]);
+  assert.equal(s.ui.state.pendingInvite, "", "the code is forgotten once it has been used");
+});
+
+test("a signed-in person who was already in the project is taken there without a welcome", async () => {
+  const s = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/enroll" ? joinedAs("owner", {joined: false}) : undefined});
+  s.ui.state.pendingInvite = "one-time-code-123456";
+  wire(s.context, 'bindButton("accept-invite"', 'bindForm("space-form"');
+  s.get("accept-invite").listeners.get("click")(); await settled();
+  assert.deepEqual(s.assigned, ["/?space=space-p"], "nothing was joined, so there is nothing to welcome them to");
+});
+
+test("the button on a dead invitation only dismisses it", async () => {
+  const s = setup();
+  s.ui.state.pendingInvite = "used-code-0123456789"; s.ui.state.invite = {unavailable: true};
+  wire(s.context, 'bindButton("accept-invite"', 'bindForm("space-form"');
+  s.get("accept-invite").listeners.get("click")(); await settled();
+  assert.equal(s.ui.state.pendingInvite, ""); assert.equal(s.get("join-banner").hidden, true);
+  assert.equal(s.calls.some(call => call.path === "/api/v3/enroll"), false, "a code that is known to be dead is not sent");
+  assert.deepEqual(s.assigned, []);
+});
+
+test("a new person is shown their recovery code once, then goes on into the project", async () => {
+  const s = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/enroll" ? joinedAs("member", {created: true, recovery_code: "RECOVERY-ONE-TIME"}) : undefined});
+  s.ui.state.me = null; s.ui.state.pendingInvite = "one-time-code-123456";
+  wire(s.context, 'bindForm("enroll-form"', 'bindForm("recover-form"');
+  wire(s.context, '$("secret-close").addEventListener', '$("secret-copy").addEventListener');
+  const enroll = fill(s.get("enroll-form"), {code: "one-time-code-123456", display_name: "小红"});
+  enroll.listeners.get("submit")({preventDefault() {}}); await settled();
+  assert.deepEqual(s.calls.find(call => call.path === "/api/v3/enroll").body, {code: "one-time-code-123456", display_name: "小红"});
+  assert.equal(s.get("secret-dialog").open, true);
+  assert.equal(s.get("secret-value").value, "RECOVERY-ONE-TIME");
+  assert.equal(s.get("secret-close").textContent, "我已保存，进入对话");
+  assert.deepEqual(s.assigned, [], "not before they have had the chance to copy it");
+  s.get("secret-close").listeners.get("click")(); await settled();
+  assert.deepEqual(s.assigned, ["/?space=space-p&joined=member"]);
+  assert.equal(s.get("secret-value").value, "", "and the code is wiped from the page");
+});
+
+test("closing the recovery dialog any way at all still goes on into the project, once", async () => {
+  const s = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/enroll" ? joinedAs("viewer", {created: true, recovery_code: "RECOVERY-ONE-TIME"}) : undefined});
+  s.ui.state.pendingInvite = "one-time-code-123456";
+  wire(s.context, 'bindForm("enroll-form"', 'bindForm("recover-form"');
+  wire(s.context, '$("secret-close").addEventListener', '$("secret-copy").addEventListener');
+  fill(s.get("enroll-form"), {code: "one-time-code-123456", display_name: "小红"}).listeners.get("submit")({preventDefault() {}}); await settled();
+  s.get("secret-dialog").listeners.get("close")(); // Escape, or the browser closing it
+  s.get("secret-close").listeners.get("click")(); await settled();
+  assert.deepEqual(s.assigned, ["/?space=space-p&joined=viewer"]);
+});
+
+test("a person with no recovery code to show goes straight into the project", async () => {
+  const s = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/enroll" ? joinedAs("member") : undefined});
+  wire(s.context, 'bindForm("enroll-form"', 'bindForm("recover-form"');
+  fill(s.get("enroll-form"), {code: "one-time-code-123456", display_name: "小红"}).listeners.get("submit")({preventDefault() {}}); await settled();
+  assert.deepEqual(s.assigned, ["/?space=space-p&joined=member"]);
+  assert.equal(s.get("secret-dialog").open, undefined);
+});
+
+test("a dialog closed by the program never moves the page", async () => {
+  const s = setup();
+  wire(s.context, '$("secret-close").addEventListener', '$("secret-copy").addEventListener');
+  let moved = 0;
+  s.ui.showSecret("保存", "SECRET", "说明", "", {then: () => { moved += 1; }});
+  s.ui.closeSecret(); await settled();
+  assert.equal(moved, 0);
+  s.ui.showSecret("保存", "SECRET", "说明", "", {then: () => { moved += 1; }});
+  s.ui.finishSecret(); await settled();
+  assert.equal(moved, 1, "only the person closing it goes on");
+});
+
+test("someone who restores access with an invitation in hand goes on into the project", async () => {
+  const me = {principal: {id: "bob", display_name: "小红", is_admin: false}, role: "member", space_id: "space-p", spaces: [PROJECT]};
+  const s = setup(taskFixture(), {respond: url => {
+    if (url.pathname === "/api/v3/recover") return answer({ok: true});
+    if (url.pathname === "/api/v3/enroll") return joinedAs("member");
+    if (url.pathname === "/api/v3/me") return answer(me);
+  }});
+  s.ui.state.me = null; s.ui.state.pendingInvite = "one-time-code-123456";
+  wire(s.context, 'bindForm("recover-form"', 'bindButton("accept-invite"');
+  fill(s.get("recover-form"), {code: "RECOVERY-CODE-0123"}).listeners.get("submit")({preventDefault() {}}); await settled();
+  const enrol = s.calls.find(call => call.path === "/api/v3/enroll");
+  assert.equal(enrol.body.require_existing_session, true, "joins as the person who just showed who they are");
+  assert.deepEqual(s.assigned, ["/?space=space-p&joined=member"]);
+});
+
+test("restoring access still works when the invitation turns out to be dead, and says so", async () => {
+  const me = {principal: {id: "bob", display_name: "小红", is_admin: false}, role: "owner", space_id: "personal", spaces: [{id: "personal", name: "Personal", kind: "personal"}]};
+  const s = setup(taskFixture(), {respond: url => {
+    if (url.pathname === "/api/v3/recover") return answer({ok: true});
+    if (url.pathname === "/api/v3/enroll") return dead();
+    if (url.pathname === "/api/v3/me") return answer(me);
+  }});
+  s.ui.state.me = null; s.ui.state.pendingInvite = "used-code-0123456789";
+  wire(s.context, 'bindForm("recover-form"', 'bindButton("accept-invite"');
+  fill(s.get("recover-form"), {code: "RECOVERY-CODE-0123"}).listeners.get("submit")({preventDefault() {}}); await settled();
+  assert.deepEqual(s.assigned, []);
+  assert.match(s.get("notice").textContent, /已恢复访问，但没能加入项目：这条邀请已经失效/);
+  assert.equal(s.ui.state.pendingInvite, "");
+  assert.notEqual(s.ui.state.me, null, "they are signed in to their own space");
+});
+
+test("a recovery code that does not work is told apart from an invitation that does not work", async () => {
+  const s = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/recover" ? dead() : undefined});
+  s.ui.state.me = null;
+  wire(s.context, 'bindForm("recover-form"', 'bindButton("accept-invite"');
+  fill(s.get("recover-form"), {code: "WRONG-CODE-0123456"}).listeners.get("submit")({preventDefault() {}}); await settled();
+  assert.equal(s.get("notice").textContent, "恢复码不对，或者已经用过了。");
+  assert.equal(s.get("notice").className, "notice error");
+});
+
+test("the plain answers a person can act on", () => {
+  const {ui, context} = setup();
+  const VMError = runInNewContext("Error", context); // an error made where the page runs, as the page's own are
+  const failed = (status, message, about) => Object.assign(new VMError(message), {status, about});
+  assert.match(ui.readable(failed(400, "Invitation is unavailable.")), /^这条邀请已经失效/);
+  assert.equal(ui.readable(failed(400, "Invitation is unavailable.", "recovery")), "恢复码不对，或者已经用过了。");
+  assert.equal(ui.readable(failed(429, "Too many attempts. Try again later.")), "试得有点频繁了，过一分钟再试。");
+  assert.equal(ui.readable(failed(400, "Name is too long.")), "Name is too long.", "any other 400 keeps the server's own words");
+  assert.match(ui.readable(failed(400, "Too many unused invitations; use or revoke an existing invitation.")), /撤销还没用的邀请/, "a day-long invitation makes this reachable: it must say what to do");
+});
+
+test("the project's own spaces are named in Chinese, and a personal space is never called Personal", async () => {
+  const me = {principal: {id: "alice", display_name: "小明", is_admin: false}, role: "owner", space_id: "personal", spaces: [{id: "personal", name: "Personal", kind: "personal"}, PROJECT]};
+  const s = setup(taskFixture(), {respond: url => url.pathname === "/api/v3/me" ? answer(me) : undefined});
+  s.ui.state.space = "personal";
+  await s.ui.loadMe();
+  assert.deepEqual(s.get("space-select").children.map(option => option.textContent), ["个人空间", "产品研究"]);
+  assert.equal(s.get("workspace-context").textContent, "个人空间");
+});
+
+test("an invitation link made on this computer says that only this computer can open it", async () => {
+  const s = setup(taskFixture(), {href: "http://127.0.0.1:18765/workspace?space=space-a", respond: url => {
+    if (url.pathname === "/api/v3/invites") return answer({code: "abc123", expires_at: 4102444800});
+    if (url.pathname === "/api/session") return answer({connection: {via: "local", address: "http://127.0.0.1:18765/", secure: false}});
+  }});
+  wire(s.context, 'bindForm("invite-form"', 'bindButton("revoke-invites"');
+  fill(s.get("invite-form"), {role: "member", label: ""}).listeners.get("submit")({preventDefault() {}}); await settled();
+  assert.equal(s.get("secret-value").value, "http://127.0.0.1:18765/workspace#invite=abc123");
+  assert.match(s.get("secret-extra").textContent, /只有这台电脑打得开/);
+  assert.match(s.get("secret-extra").textContent, /只能用一次/);
+});
+
+test("an invitation link made behind a public address uses that address and carries no warning", async () => {
+  const s = setup(taskFixture(), {href: "http://127.0.0.1:18765/workspace?space=space-a", respond: url => {
+    if (url.pathname === "/api/v3/invites") return answer({code: "abc123", expires_at: 4102444800});
+    if (url.pathname === "/api/session") return answer({connection: {via: "tailscale", address: "https://qixu.example.ts.net/", secure: true}});
+  }});
+  wire(s.context, 'bindForm("invite-form"', 'bindButton("revoke-invites"');
+  fill(s.get("invite-form"), {role: "member", label: ""}).listeners.get("submit")({preventDefault() {}}); await settled();
+  assert.equal(s.get("secret-value").value, "https://qixu.example.ts.net/workspace#invite=abc123");
+  assert.doesNotMatch(s.get("secret-extra").textContent, /这台电脑/);
+});
+
+test("a link made from an address other devices can already reach is left as it is", async () => {
+  const {ui, calls} = setup(taskFixture());
+  const made = await ui.inviteLink("abc123", "invite");
+  assert.equal(made.link, "https://example.invalid/workspace#invite=abc123");
+  assert.equal(made.local, false);
+  assert.equal(calls.some(call => call.path === "/api/session"), false, "nothing to ask");
+});
+
+test("the owner can take back the invitations nobody has used yet", async () => {
+  const s = setup(taskFixture(), {role: "owner", respond: url => url.pathname === "/api/v3/invites/revoke" ? answer({ok: true, revoked: 2}) : undefined});
+  wire(s.context, 'bindButton("revoke-invites"', 'bindForm("task-form"');
+  s.get("revoke-invites").listeners.get("click")(); await settled();
+  assert.deepEqual(s.calls.find(call => call.path === "/api/v3/invites/revoke").body, {});
+  assert.equal(s.get("notice").textContent, "已收回 2 条还没用的邀请。");
+  const none = setup(taskFixture(), {role: "owner", respond: url => url.pathname === "/api/v3/invites/revoke" ? answer({ok: true, revoked: 0}) : undefined});
+  wire(none.context, 'bindButton("revoke-invites"', 'bindForm("task-form"');
+  none.get("revoke-invites").listeners.get("click")(); await settled();
+  assert.equal(none.get("notice").textContent, "没有还没用的邀请。");
 });

@@ -557,6 +557,25 @@ select:focus {
   padding: 1.35rem;
 }
 
+/* Under the invitation form: how long a link lasts, and the way to take back the unused ones. */
+.compose > .compose-foot {
+  display: grid;
+  justify-items: start;
+  gap: 0.4rem;
+  padding-top: 1rem;
+  border-top: 0.5px solid var(--hairline);
+}
+
+.compose-foot .hint {
+  margin: 0;
+}
+
+/* Someone who has not signed in is here to get in, for instance with an invitation. The pages they
+   cannot open yet, and the way back to a chat they do not have, stay out of the way. */
+.product-layout:has(#login:not([hidden])) :is(.product-nav, .product-menu-toggle, .chat-return) {
+  display: none;
+}
+
 .inline-compose {
   margin-top: 1.1rem;
   padding-top: 0.5rem;

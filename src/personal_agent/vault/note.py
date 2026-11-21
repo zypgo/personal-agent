@@ -169,9 +169,11 @@ def _blank(match: re.Match[str]) -> str:
     return re.sub(r"[^\n]", " ", match.group(0))
 
 
-def mask_code(body: str) -> str:
+def mask_code(body: str, *, spans: bool = True) -> str:
     """The text with code blocks, code spans and `%%comments%%` replaced by spaces, so that what
-    is looked for (links, tags) is not found inside them. Positions and line numbers stay."""
+    is looked for (links, tags) is not found inside them. Positions and line numbers stay.
+
+    `spans=False` leaves the code spans in place: a heading's own words can hold one."""
     out: list[str] = []
     fence: str | None = None
     for line in body.split("\n"):
@@ -188,7 +190,7 @@ def mask_code(body: str) -> str:
                 fence = None
     text = "\n".join(out)
     text = _COMMENT.sub(_blank, text)
-    return _INLINE_CODE.sub(_blank, text)
+    return _INLINE_CODE.sub(_blank, text) if spans else text
 
 
 @dataclass(frozen=True)
@@ -220,7 +222,9 @@ def _atx(line: str) -> tuple[int, str] | None:
 
 def headings(body: str) -> list[Heading]:
     found = []
-    for number, line in enumerate(mask_code(body).split("\n")):
+    # Code blocks and comments hide headings, but a code span does not: it is part of the heading's
+    # text, and a heading made of nothing else (`## `config.toml``) is still a heading.
+    for number, line in enumerate(mask_code(body, spans=False).split("\n")):
         parts = _atx(line)
         if parts:
             found.append(Heading(parts[0], parts[1], number))

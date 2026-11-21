@@ -383,6 +383,24 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Someone else in the project: on the left, where the others are, in a quieter bubble than mine. */
+.turn.other {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.turn.other .body {
+  max-width: min(84%, 34rem);
+  padding: 0.6rem 0.95rem;
+  border-radius: 1.3rem 1.3rem 1.3rem 0.4rem;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: var(--fs-chat);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .words {
   margin: 0;
   white-space: pre-wrap;
@@ -1025,6 +1043,22 @@ body {
 
 .row:focus-within {
   box-shadow: var(--shadow-2), 0 0 0 1.5px color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+/* A visitor to a project reads it. The box rests, and its words say why. */
+.row.readonly {
+  box-shadow: none;
+  background: transparent;
+  border: 1px solid var(--hairline-strong);
+}
+
+.row.readonly .input,
+.row.readonly .icon-button {
+  cursor: default;
+}
+
+.row.readonly .icon-button {
+  opacity: 0.4;
 }
 
 .input {
@@ -1793,7 +1827,8 @@ dialog.closing::backdrop {
 
 /* ---- a narrow screen: the same page with less air ----------------------------------------------------- */
 @media (max-width: 600px) {
-  .turn.mine .body {
+  .turn.mine .body,
+  .turn.other .body {
     max-width: 88%;
   }
 }

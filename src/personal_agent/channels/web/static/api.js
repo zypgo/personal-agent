@@ -20,6 +20,21 @@ export function scopedURL(path) {
 /** GET requests share in-flight work. Writes are sent once and never enter a cache. */
 export function api(path, options = {}) { return requests.request(path, options); }
 
+/**
+ * Who is this browser signed in as, and where? The answer is the account (`/api/v3/me`), or the
+ * status that came back instead (0: nothing did). It is asked for the account on its own, or for
+ * one `space`, and never through the request scope: the page asks it *because* some request was
+ * refused (401 or 403), and that must not start the same alarm again.
+ */
+export async function whoAmI(space = "") {
+  try {
+    const response = await fetch(`/api/v3/me${space ? `?space=${encodeURIComponent(space)}` : ""}`, {
+      credentials: "same-origin", cache: "no-store", headers: { "X-PA": "1", Accept: "application/json" },
+    });
+    return response.ok ? await response.json() : response.status;
+  } catch { return 0; }
+}
+
 /** Immutable downloads are authenticated, cancellable and kept outside the query cache. */
 export async function artifactBlob(id) {
   if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) throw new ApiError(400, "文件引用无效，请刷新后重试。");

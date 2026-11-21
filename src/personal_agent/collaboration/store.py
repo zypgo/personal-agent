@@ -23,6 +23,7 @@ from personal_agent.collaboration.models import (
     IdentityError,
     InvalidInvite,
     Invitation,
+    InvitePreview,
     Membership,
     Principal,
     ResourceGrant,
@@ -37,6 +38,10 @@ MAX_PRINCIPALS = 100
 MAX_SPACES = 100
 MAX_TOKEN_CHARS = 200
 INVITE_SECONDS = 600.0
+"""Pairing a device, a chat account or a computer: done at the same desk, within minutes."""
+MEMBER_INVITE_SECONDS = 24 * 3600.0
+"""A link sent to another person is opened when they get to it. It works once, and the owner can
+take back whatever is still unused."""
 RECOVERY_SECONDS = 365 * 86400.0
 ROLES = frozenset(("owner", "member", "viewer"))
 
@@ -296,6 +301,7 @@ class IdentityStore:
                 role=selected_role,
                 label=label,
                 membership_version=membership.version,
+                lifetime_s=MEMBER_INVITE_SECONDS,
             )
 
     def create_device_invite(self, actor_id: str, label: str = "") -> Invitation:
@@ -355,14 +361,43 @@ class IdentityStore:
         if changed.rowcount != 1:
             raise InvalidInvite("Invitation is unavailable.")
 
+    def _invited_project(self, row: sqlite3.Row) -> Space:
+        try:
+            space = self.space(row["space_id"])
+        except AccessDenied as exc:
+            raise InvalidInvite("Invitation is unavailable.") from exc
+        if space.kind != "project":
+            raise InvalidInvite("Invitation is unavailable.")
+        return space
+
+    def preview_member_invite(self, code: str, *, principal_id: str | None = None) -> InvitePreview:
+        """What a project invitation is for. Reads only: nothing is used up or recorded.
+
+        `principal_id` is whoever is looking, so the page can say they are already in."""
+        row = self._live_invite(code, "member")
+        space = self._invited_project(row)
+        inside = (
+            principal_id is not None
+            and self.db.one(
+                "SELECT 1 FROM memberships WHERE space_id = ? AND principal_id = ? AND revoked_at IS NULL",
+                (space.id, principal_id),
+            )
+            is not None
+        )
+        return InvitePreview(
+            space.name,
+            _role(row["role"]),
+            self.principal(row["issued_by"]).display_name,
+            float(row["expires_at"]),
+            inside,
+        )
+
     def redeem_member(
         self, code: str, *, existing_principal_id: str | None = None, label: str = ""
     ) -> Enrollment:
         with self.db.tx():
             row = self._live_invite(code, "member")
-            space = self.space(row["space_id"])
-            if space.kind != "project":
-                raise InvalidInvite("Invitation is unavailable.")
+            space = self._invited_project(row)
             created = existing_principal_id is None
             principal = (
                 self._create_principal(label or row["label"])
@@ -373,22 +408,26 @@ class IdentityStore:
                 "SELECT * FROM memberships WHERE space_id = ? AND principal_id = ?",
                 (space.id, principal.id),
             )
-            # A generic invitation never silently upgrades or demotes an already active member.
-            # Owners use set_role for explicit, audited privilege changes.
+            if existing is not None and existing["revoked_at"] is None:
+                # Already in. A generic invitation never silently upgrades or demotes an active
+                # member (owners use set_role for that), and joining nothing spends nothing: the
+                # link stays good for the person it was sent to, and no joining is recorded.
+                return Enrollment(principal, space, False, None, _role(existing["role"]), False)
+            role = _role(row["role"])
             if existing is None:
                 self.db.execute(
                     "INSERT INTO memberships(space_id, principal_id, role, joined_at) VALUES (?, ?, ?, ?)",
-                    (space.id, principal.id, row["role"], self.clock.now()),
+                    (space.id, principal.id, role, self.clock.now()),
                 )
-            elif existing["revoked_at"] is not None:
+            else:
                 self.db.execute(
                     "UPDATE memberships SET role = ?, version = version + 1, revoked_at = NULL, joined_at = ? WHERE space_id = ? AND principal_id = ?",
-                    (row["role"], self.clock.now(), space.id, principal.id),
+                    (role, self.clock.now(), space.id, principal.id),
                 )
             self._consume(row)
             recovery = self.issue_recovery(principal.id) if created else None
             self._audit(principal.id, "member_joined", space_id=space.id)
-            return Enrollment(principal, space, created, recovery)
+            return Enrollment(principal, space, created, recovery, role)
 
     def redeem_device(self, code: str) -> str:
         with self.db.tx():
@@ -443,19 +482,27 @@ class IdentityStore:
             self._audit(principal.id, "identity_recovered")
             return principal.id
 
-    def revoke_invites(self, actor_id: str, *, space_id: str | None = None) -> int:
+    def revoke_invites(
+        self, actor_id: str, *, space_id: str | None = None, kind: str | None = None
+    ) -> int:
+        """Take back the invitations that could still be used: all of a project's (optionally
+        only one `kind`), or, without a project, everything the actor has issued except the
+        recovery code. Returns how many there were."""
         with self.db.tx():
             self.principal(actor_id)
+            now = self.clock.now()
             if space_id is not None:
                 self.require_access(actor_id, space_id, manage=True)
                 cur = self.db.execute(
-                    "UPDATE collaboration_invites SET revoked_at = ? WHERE space_id = ? AND used_at IS NULL AND revoked_at IS NULL",
-                    (self.clock.now(), space_id),
+                    "UPDATE collaboration_invites SET revoked_at = ? WHERE space_id = ? AND (? IS NULL OR kind = ?) "
+                    "AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
+                    (now, space_id, kind, kind, now),
                 )
             else:
                 cur = self.db.execute(
-                    "UPDATE collaboration_invites SET revoked_at = ? WHERE issued_by = ? AND kind != 'recovery' AND used_at IS NULL AND revoked_at IS NULL",
-                    (self.clock.now(), actor_id),
+                    "UPDATE collaboration_invites SET revoked_at = ? WHERE issued_by = ? AND kind != 'recovery' "
+                    "AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
+                    (now, actor_id, now),
                 )
             return cur.rowcount
 

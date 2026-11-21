@@ -14,7 +14,7 @@ from personal_agent.collaboration.models import (
     InvalidInvite,
 )
 from personal_agent.collaboration.scopes import derive_space_config, space_paths
-from personal_agent.collaboration.store import INVITE_SECONDS, IdentityStore
+from personal_agent.collaboration.store import INVITE_SECONDS, MEMBER_INVITE_SECONDS, IdentityStore
 from personal_agent.config import Config
 
 
@@ -55,9 +55,24 @@ def test_member_invite_is_single_use_hashed_and_has_expiry(identities, db, clock
     with pytest.raises(InvalidInvite):
         identities.redeem_member(invite.code)
     second = identities.create_member_invite("owner", project.id)
-    clock.advance(INVITE_SECONDS)
+    clock.advance(MEMBER_INVITE_SECONDS)
     with pytest.raises(InvalidInvite):
         identities.redeem_member(second.code)
+
+
+def test_a_project_invite_lasts_a_day_while_pairing_codes_stay_short(identities, clock):
+    # A link sent to another person is opened when they get to it, not within ten minutes.
+    project = identities.create_project("owner", "Research")
+    invite = identities.create_member_invite("owner", project.id)
+    pairing = identities.create_device_invite("owner")
+    clock.advance(INVITE_SECONDS + 1)
+    with pytest.raises(InvalidInvite):
+        identities.redeem_device(pairing.code)
+    clock.advance(6 * 3600)
+    assert identities.preview_member_invite(invite.code).space_name == "Research"
+    clock.advance(MEMBER_INVITE_SECONDS)
+    with pytest.raises(InvalidInvite):
+        identities.preview_member_invite(invite.code)
 
 
 def test_existing_user_join_does_not_duplicate_identity_or_private_space(identities, db):
@@ -85,6 +100,105 @@ def test_accepting_an_invite_does_not_silently_change_existing_role(identities):
     invitation = identities.create_member_invite("owner", member.space.id, "owner")
     identities.redeem_member(invitation.code, existing_principal_id=member.principal.id)
     assert identities.require_access(member.principal.id, member.space.id).role == "viewer"
+
+
+def test_joining_says_which_project_was_joined_and_with_which_role(identities):
+    project = identities.create_project("owner", "Research")
+    invite = identities.create_member_invite("owner", project.id, "viewer")
+    joined = identities.redeem_member(invite.code, label="Mira")
+    assert (joined.space.id, joined.role, joined.created, joined.joined) == (
+        project.id,
+        "viewer",
+        True,
+        True,
+    )
+    other = identities.create_project("owner", "Reading")
+    again = identities.redeem_member(
+        identities.create_member_invite("owner", other.id, "owner").code,
+        existing_principal_id=joined.principal.id,
+    )
+    assert (again.space.id, again.role, again.created, again.joined) == (
+        other.id,
+        "owner",
+        False,
+        True,
+    )
+
+
+def test_someone_already_in_the_project_does_not_use_up_the_invite(identities, db):
+    member = enroll(identities)
+    invite = identities.create_member_invite("owner", member.space.id, "viewer")
+    already = identities.redeem_member(invite.code, existing_principal_id=member.principal.id)
+    assert (already.joined, already.created, already.role) == (False, False, "member")
+    assert already.recovery_code is None and already.space.id == member.space.id
+    # Nothing happened, so nothing is recorded as a joining; the link still works for the person
+    # it was sent to.
+    assert (
+        db.scalar(
+            "SELECT COUNT(*) FROM collaboration_audit WHERE action = 'member_joined' AND actor_id = ?",
+            (member.principal.id,),
+        )
+        == 1
+    )
+    stranger = identities.redeem_member(invite.code, label="Stranger")
+    assert (stranger.joined, stranger.created, stranger.role) == (True, True, "viewer")
+    with pytest.raises(InvalidInvite):
+        identities.redeem_member(invite.code)
+
+
+def test_previewing_an_invite_names_the_project_and_uses_nothing_up(identities):
+    project = identities.create_project("owner", "Research")
+    invite = identities.create_member_invite("owner", project.id, "viewer", label="Mira")
+    seen = identities.preview_member_invite(invite.code)
+    assert (seen.space_name, seen.role, seen.already_member) == ("Research", "viewer", False)
+    assert seen.invited_by == identities.principal("owner").display_name
+    assert seen.expires_at == invite.expires_at
+    assert identities.preview_member_invite(invite.code).space_name == "Research"
+    assert identities.redeem_member(invite.code).created
+
+
+def test_a_preview_tells_a_member_they_are_already_in(identities):
+    member = enroll(identities)
+    invite = identities.create_member_invite("owner", member.space.id)
+    outsider = enroll(identities, name="Outsider")
+    assert identities.preview_member_invite(
+        invite.code, principal_id=member.principal.id
+    ).already_member
+    assert not identities.preview_member_invite(
+        invite.code, principal_id=outsider.principal.id
+    ).already_member
+
+
+def test_only_a_live_project_invite_can_be_previewed(identities):
+    project = identities.create_project("owner", "Research")
+    invite = identities.create_member_invite("owner", project.id)
+    identities.redeem_member(invite.code)
+    pairing = identities.create_device_invite("owner")
+    for code in (invite.code, "nonsense", "", pairing.code):
+        with pytest.raises(InvalidInvite):
+            identities.preview_member_invite(code)
+
+
+def test_unused_project_invites_can_be_taken_back(identities, clock):
+    project = identities.create_project("owner", "Research")
+    identities.create_member_invite("owner", project.id)  # expired by the time anyone looks
+    clock.advance(MEMBER_INVITE_SECONDS + 1)
+    unused = identities.create_member_invite("owner", project.id)
+    used = identities.create_member_invite("owner", project.id)
+    identities.redeem_member(used.code)
+    channel = identities.create_channel_binding("owner", project.id)
+    elsewhere = identities.create_project("owner", "Elsewhere")
+    untouched = identities.create_member_invite("owner", elsewhere.id)
+    # Only what could still be used, and only people-invitations: a chat-account code is not one.
+    assert identities.revoke_invites("owner", space_id=project.id, kind="member") == 1
+    with pytest.raises(InvalidInvite):
+        identities.redeem_member(unused.code)
+    assert identities.redeem_member(untouched.code).created
+    assert identities.revoke_invites("owner", space_id=project.id) == 1
+    assert channel.kind == "channel"
+    member = enroll(identities)
+    with pytest.raises(AccessDenied):
+        identities.revoke_invites(member.principal.id, space_id=project.id, kind="member")
 
 
 def test_viewer_cannot_write_and_member_cannot_invite(identities):

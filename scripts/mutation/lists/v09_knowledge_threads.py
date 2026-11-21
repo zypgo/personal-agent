@@ -611,6 +611,13 @@ M = [
         TI,
     ),
     (
+        "note: a code span in a heading is part of what the heading says, not blanked out",
+        VN,
+        "mask_code(body, spans=False).split",
+        "mask_code(body).split",
+        ["tests/test_vault_note.py"],
+    ),
+    (
         "sr hints: a system line that is indented or spaced out is not noticed",
         SR,
         '|\\[/?INST\\]|^[ \\t]*system[ \\t]*:"',

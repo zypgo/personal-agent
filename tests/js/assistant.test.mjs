@@ -227,6 +227,42 @@ test("existing-account invite codes reach only enrollment, never begin, complete
   assert.doesNotMatch(JSON.stringify(s.calls.filter(item => item.path !== "/api/v3/enroll")), /invitation_code_for_my_account/);
 });
 
+const PROJECT_JOINED = { id: "space-p", name: "产品研究", kind: "project" };
+const enrolled = (extra = {}) => ({ ok: true, recovery_code: null, created: false, joined: true, role: "member", space: PROJECT_JOINED, ...extra });
+
+test("taking an invitation through the assistant says which project it joined and goes on into it", async () => {
+  const s = setup({ cards: [proposal("accept_project_invite", {})], respond: path => path === "/api/v3/enroll" ? enrolled() : undefined });
+  await s.ui.refresh(); await click(button(s.ui.element, "填写"));
+  field(s.ui.element, "invite_code").value = "invitation_code_for_my_account";
+  await submit(find(s.ui.element, "form")[0]);
+  assert.deepEqual(s.contextChanges, [{ joinedSpace: PROJECT_JOINED, role: "member", joined: true }]);
+  assert.deepEqual(s.notices.map(([text]) => text), ["已加入「产品研究」。"]);
+});
+
+test("an invitation to a project the person is already in says so, and still takes them there", async () => {
+  const s = setup({ cards: [proposal("accept_project_invite", {})], respond: path => path === "/api/v3/enroll" ? enrolled({ joined: false, role: "owner" }) : undefined });
+  await s.ui.refresh(); await click(button(s.ui.element, "填写"));
+  field(s.ui.element, "invite_code").value = "invitation_code_for_my_account";
+  await submit(find(s.ui.element, "form")[0]);
+  assert.deepEqual(s.contextChanges, [{ joinedSpace: PROJECT_JOINED, role: "owner", joined: false }]);
+  assert.deepEqual(s.notices.map(([text]) => text), ["你已经在「产品研究」里了。"]);
+});
+
+test("other actions still report only that they are done and do not move the page", async () => {
+  const s = setup({ cards: [proposal("create_space", { name: "读书项目" })], respond: path => path === "/api/v3/spaces" ? { space: PROJECT_JOINED } : undefined });
+  await s.ui.refresh(); await click(button(s.ui.element, "填写"));
+  await submit(find(s.ui.element, "form")[0]);
+  assert.deepEqual(s.contextChanges, [undefined]);
+  assert.deepEqual(s.notices.map(([text]) => text), ["操作已完成。"]);
+});
+
+test("the node invitation form names a personal space 个人空间 whatever it is stored as", async () => {
+  const s = setup({ cards: [proposal("invite_node", { label: "我的电脑" })], respond: path => path === "/api/v3/me" ? { principal: { id: "alice", display_name: "我", is_admin: false }, role: "owner", space_id: "space-a", spaces: [{ id: "space-a", name: "Personal", kind: "personal" }, PROJECT_JOINED] } : undefined });
+  await s.ui.refresh(); await click(button(s.ui.element, "填写"));
+  const labels = find(s.ui.element, "label").map(item => item.textContent);
+  assert.ok(labels.includes("个人空间")); assert.ok(labels.includes("产品研究")); assert.ok(!labels.includes("Personal"));
+});
+
 test("revoked or destroyed invite cards clear unsubmitted private input", async () => {
   for (const destroy of [false, true]) {
     const s = setup({ cards: [proposal("accept_project_invite", {})] }); await s.ui.refresh(); await click(button(s.ui.element, "填写"));

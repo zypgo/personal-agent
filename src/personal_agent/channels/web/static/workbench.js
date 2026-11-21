@@ -6,14 +6,16 @@ import { createProductShell } from "./product-shell.js";
 /** @typedef {{principal:Principal,spaces:Space[],space_id:string,role:string}} Me */
 /** @typedef {import('./workbench').Task} Task */
 
-/** @type {{me:Me|null,space:string,tab:string,taskView:string,epoch:number,pendingInvite:string,taskId:string|null}} */
+/** @typedef {{space_name:string,role:string,invited_by:string,expires_at:number,already_member:boolean}} InvitePreview */
+/** @typedef {{ok:boolean,recovery_code:string|null,created:boolean,joined:boolean,space:Space,role:string}} Enrollment */
 const WORKSPACE_TABS = {tasks:"任务",knowledge:"知识库",agents:"助手与连接",spaces:"项目与成员",devices:"设备与账号"};
 function routeFromLocation(href = location.href) {
   const params = new URL(href).searchParams;
   const requested = params.get("tab");
   return {space:params.get("space") || "",tab:Object.hasOwn(WORKSPACE_TABS,requested) ? requested : "tasks",taskView:params.get("view") === "computer" ? "computer" : "collaboration"};
 }
-const state = {me:null,...routeFromLocation(),epoch:0,pendingInvite:"",taskId:null};
+/** @type {{me:Me|null,space:string,tab:string,taskView:string,epoch:number,pendingInvite:string,invite:InvitePreview|{unavailable:true}|null,taskId:string|null}} */
+const state = {me:null,...routeFromLocation(),epoch:0,pendingInvite:"",invite:null,taskId:null};
 const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 const input = (id) => /** @type {HTMLInputElement} */ (document.getElementById(id));
 const form = (id) => /** @type {HTMLFormElement} */ (document.getElementById(id));
@@ -52,10 +54,17 @@ function notice(text, error = false) {
   // Good news says its piece and leaves; anything that went wrong stays until it is dealt with.
   if(text && !error && typeof setTimeout === "function") noticeTimer = setTimeout(() => notice(""), 6000);
 }
+// The server answers a dead invitation or recovery code with one plain sentence, whatever the
+// reason (it must not tell a guesser which part was wrong). Here it is put in the person's words.
+const DEAD_CODE = "Invitation is unavailable.";
+const TOO_MANY_INVITES = "Too many unused invitations; use or revoke an existing invitation.";
 function readable(error) {
   if(error?.status === 0 || error instanceof TypeError) return "没收到服务器的回复，操作可能已经生效，请刷新看看。";
   if(error?.status === 409) return "内容已经变化，请刷新后再试。填写的内容还在。";
   if(error?.status === 422) return "请检查填写的内容后再提交。";
+  if(error?.status === 429) return "试得有点频繁了，过一分钟再试。";
+  if(error?.status === 400 && error.message === DEAD_CODE) return error.about === "recovery" ? "恢复码不对，或者已经用过了。" : "这条邀请已经失效：用过了，或者超过 24 小时。请让邀请你的人重新发一条。";
+  if(error?.status === 400 && error.message === TOO_MANY_INVITES) return "还没用的邀请太多了。等对方用掉，或者到“项目与成员”页点“撤销还没用的邀请”，再生成新的。";
   if(error?.status === 401 || error?.status === 403) return "没有权限，请重新登录或换个空间。";
   return error instanceof Error ? error.message : "操作未完成，请重试。";
 }
@@ -179,6 +188,60 @@ function showLogin() {
   $("space-role").textContent="";
   $("space-select").replaceChildren();
   productShell?.setContext({name:"",space:"",role:""});
+  renderInvite();void loadInvite();
+}
+const spaceLabel = space => space?.kind === "personal" ? "个人空间" : space?.name || "项目空间";
+const ROLE_WORDS = {owner:"负责人",member:"成员",viewer:"访客"};
+// The instance owner is stored as "Owner" until they are given another name; to other people that
+// reads better as what it is.
+const personName = name => name === "Owner" ? "负责人" : name || "成员";
+const DEAD_INVITE = "用过了，或者超过 24 小时。请让邀请你的人重新发一条。";
+let inviteLoading = "";
+/** Ask what the link is for, so the page can name the project and the person who sent it. */
+async function loadInvite() {
+  const code = state.pendingInvite;
+  if (!code || state.invite || inviteLoading === code) return;
+  inviteLoading = code;
+  try {
+    const seen = await api("/api/v3/invites/preview",{method:"POST",body:{code}});
+    if (code === state.pendingInvite) state.invite = seen;
+  } catch (error) {
+    // Only a plain "no" is worth saying; when the answer did not arrive, accepting still works.
+    if (error?.status === 400 && code === state.pendingInvite) state.invite = {unavailable:true};
+  } finally { if (inviteLoading === code) inviteLoading = ""; }
+  if (code === state.pendingInvite) renderInvite();
+}
+/** What the invitation says, on the sign-in page and on the banner for someone already in. */
+function renderInvite() {
+  const code = state.pendingInvite, seen = state.invite;
+  const dead = Boolean(code && seen?.unavailable), known = Boolean(code && seen && !seen.unavailable);
+  const inside = known && seen.already_member;
+  const lead = known ? `${personName(seen.invited_by)} 邀请你以${ROLE_WORDS[seen.role] || "成员"}加入${seen.role === "viewer" ? "：能看，不能发言" : ""}。` : "";
+  $("login-title").textContent = known ? `加入「${seen.space_name}」` : "进入你的空间";
+  $("login-intro").textContent = known ? `${lead}起个昵称就能进去。` : dead ? `这条邀请已经失效：${DEAD_INVITE}` : "新成员用项目邀请加入。以前加入过的，用恢复码登录，或者配对这台设备。";
+  $("enroll-title").textContent = known ? "起个昵称" : "接受项目邀请";
+  // The code came with the link and is already filled in: there is nothing to type.
+  $("enroll-code-field").hidden = Boolean(code) && !dead;
+  $("enroll-submit").textContent = known ? "加入并开始对话" : "创建账号并加入";
+  $("recover-hint").textContent = known ? "也可以在已登录的设备上生成配对链接，在这台设备打开它，再回来打开这条邀请。" : "还有已登录的设备？在那台设备的「设备与账号」页面生成配对链接，在这里打开。";
+  if (dead) input("enroll-code").value = "";
+  $("join-banner").hidden = !code;
+  $("join-title").textContent = dead ? "这条邀请已经失效" : inside ? `你已经在「${seen.space_name}」里了` : known ? `加入「${seen.space_name}」` : "加入新的项目";
+  $("join-lead").textContent = dead ? DEAD_INVITE : inside ? "这条邀请没有被用掉，还可以发给别人。" : known ? lead : "用当前账号接受邀请。";
+  $("accept-invite").textContent = dead ? "知道了" : inside ? "进入对话" : known ? "加入并进入对话" : "接受邀请";
+}
+/** The shared project's conversation: where an invitation is for. */
+function enterProject(joined) {
+  const url = new URL("/",location.origin);
+  url.searchParams.set("space",joined.space.id);
+  if (joined.joined) url.searchParams.set("joined",joined.role);
+  location.assign(url.pathname + url.search);
+}
+/** Accept the invitation in memory as the person who is signed in, and go to the project. */
+async function acceptInvite() {
+  const joined = await api("/api/v3/enroll",{method:"POST",body:{code:state.pendingInvite,display_name:state.me?.principal.display_name || "",require_existing_session:true}});
+  state.pendingInvite = "";state.invite = null;
+  enterProject(joined);
 }
 async function loadMe() {
   const previous = state.me;
@@ -202,15 +265,15 @@ async function loadMe() {
   for (const space of me.spaces) {
     const option = document.createElement("option");
     option.value = space.id;
-    option.textContent = `${space.name}${space.kind === "personal" ? " · 私人" : ""}`;
+    option.textContent = spaceLabel(space);
     select.append(option);
   }
   select.value = state.space;
   const space=me.spaces.find(item=>item.id===state.space);
-  const role={owner:"负责人",member:"成员",viewer:"只读访问"}[me.role] || "";
-  $("workspace-context").textContent=space?.name || "个人空间";
+  const role={owner:"负责人",member:"成员",viewer:"访客"}[me.role] || "";
+  $("workspace-context").textContent=spaceLabel(space);
   $("space-role").textContent=space?.kind==="personal" ? "仅自己" : role;
-  productShell?.setContext({name:me.principal.display_name,space:space?.name || "个人空间",role:space?.kind==="personal" ? "个人空间" : role});
+  productShell?.setContext({name:me.principal.display_name,space:spaceLabel(space),role:space?.kind==="personal" ? "个人空间" : role});
   for(const id of ["header-chat-link","device-chat-link","knowledge-chat-link"]) $(id).setAttribute("href",scopedUrl("/"));
   const isProject = me.spaces.find(s => s.id === state.space)?.kind === "project";
   $("member-invite-card").hidden = !isProject || me.role !== "owner";
@@ -220,7 +283,7 @@ async function loadMe() {
   $("review-card").hidden = !me.principal.is_admin;
   $("channel-pair-button").hidden = me.role === "viewer";
   $("task-compose").hidden = me.role === "viewer";
-  $("join-banner").hidden = !state.pendingInvite;
+  renderInvite();void loadInvite();
   $("login").hidden = true;
   $("workspace").hidden = false;
   $("workspace-loading").hidden=true;
@@ -670,18 +733,39 @@ async function loadDevices() {
   }
   if (!bindings.childElementCount) empty(bindings,"你在当前空间还没有绑定聊天账号。");
 }
-function showSecret(title,value,description,extra="") {
+// What is to happen once the person has read and closed the dialog (`then`), e.g. going on into
+// a project after saving the recovery code. Closing it from the program never runs it.
+let afterSecret = null;
+function showSecret(title,value,description,extra="",{done="完成",then=null}={}) {
   $("secret-title").textContent=title;$("secret-description").textContent=description;
   input("secret-value").value=value;$("secret-extra").textContent=extra;
-  $("secret-copy").textContent="复制";
+  $("secret-copy").textContent="复制";$("secret-close").textContent=done;
+  afterSecret=then;
   /** @type {HTMLDialogElement} */ ($("secret-dialog")).showModal();
 }
 function closeSecret() {
+  afterSecret=null;
   const dialog=/** @type {HTMLDialogElement} */ ($("secret-dialog"));
   if (dialog.open) dialog.close();
   input("secret-value").value="";$("secret-extra").textContent="";
 }
-function inviteLink(code,kind) { const url=new URL(kind === "pair" ? "/" : "/workspace",location.origin);url.hash=`${kind}=${encodeURIComponent(code)}`;return url.toString(); }
+function finishSecret() { const next=afterSecret;closeSecret();next?.(); }
+/** Where this page can be reached from another device, and whether only this computer can open it. */
+async function reachable() {
+  const here = new URL(location.origin);
+  if (!["127.0.0.1","localhost","[::1]"].includes(here.hostname)) return {origin:here.origin,local:false};
+  try {
+    const { connection } = await api("/api/session");
+    if (connection?.address && connection.via !== "local") return {origin:new URL(connection.address).origin,local:false};
+  } catch (error) { if (error?.name === "AbortError") throw error; }
+  return {origin:here.origin,local:true};
+}
+const LOCAL_ONLY = "这个地址只有这台电脑打得开。要让别人用，先设置对外访问地址，见「手机连接」文档。";
+async function inviteLink(code,kind) {
+  const { origin, local } = await reachable();
+  const url=new URL(kind === "pair" ? "/" : "/workspace",origin);url.hash=`${kind}=${encodeURIComponent(code)}`;
+  return {link:url.toString(),local};
+}
 function bindFormElement(f,handler) {
   f.addEventListener("submit",event => {
     event.preventDefault();
@@ -707,32 +791,52 @@ function bindButton(id,handler) {
 }
 
 bindForm("enroll-form",async f => {
-  const data=await api("/api/v3/enroll",{method:"POST",body:{code:field(f,"code").value.trim(),display_name:field(f,"display_name").value.trim()}});
-  state.pendingInvite="";f.reset();state.space="";
-  if(await loadMe()) await refresh();
-  if(data.recovery_code) showSecret("保存你的恢复码",data.recovery_code,"只显示这一次。所有设备都登不进去时，用它恢复账号。");
+  const joined=await api("/api/v3/enroll",{method:"POST",body:{code:field(f,"code").value.trim(),display_name:field(f,"display_name").value.trim()}});
+  state.pendingInvite="";state.invite=null;f.reset();state.space="";
+  // The recovery code is shown once. Whoever has read it goes on into the project they came for.
+  if(joined.recovery_code) showSecret("保存你的恢复码",joined.recovery_code,"只显示这一次。所有设备都登不进去时，用它恢复账号。","",{done:"我已保存，进入对话",then:()=>enterProject(joined)});
+  else enterProject(joined);
 });
 bindForm("recover-form",async f => {
-  await api("/api/v3/recover",{method:"POST",body:{code:field(f,"code").value.trim()}});f.reset();state.space="";
+  try {await api("/api/v3/recover",{method:"POST",body:{code:field(f,"code").value.trim()}});}
+  catch(error) {error.about="recovery";throw error;}
+  f.reset();state.space="";
+  // They came with an invitation and have just shown who they are: go on into the project.
+  if(state.pendingInvite) {
+    try {await acceptInvite();return;}
+    catch(error) {state.pendingInvite="";state.invite=null;if(await loadMe()) await refresh();notice(`已恢复访问，但没能加入项目：${readable(error)}`,true);return;}
+  }
   if(await loadMe()) await refresh();notice("已恢复访问。请在设备页撤销丢失设备，并生成新的恢复码。");
 });
 bindButton("accept-invite",async () => {
-  await api("/api/v3/enroll",{method:"POST",body:{code:state.pendingInvite,display_name:state.me?.principal.display_name || "",require_existing_session:true}});
-  state.pendingInvite="";if(await loadMe()) await selectTab("spaces");notice("已加入项目，可从菜单中切换空间。");
+  if(state.invite?.unavailable) {state.pendingInvite="";state.invite=null;renderInvite();return;}
+  await acceptInvite();
 });
 bindForm("space-form",async f => {
   if(hasDrafts(f) && !confirm("创建后会进入新项目，其他页面尚未提交的内容会清除。继续吗？")) return false;
   const data=await api("/api/v3/spaces",{method:"POST",body:{name:field(f,"name").value.trim()}});
   f.reset();await switchSpace(data.space?.id || data.id,{discard:true});await selectTab("spaces");
 });
-bindForm("invite-form",async f => {const data=await api("/api/v3/invites",{method:"POST",body:{role:field(f,"role").value,label:field(f,"label").value.trim()}});showSecret("项目邀请",inviteLink(data.code,"invite"),"将此链接交给想邀请的人。链接只能使用一次。",`有效期至 ${date(data.expires_at)}`);});
+bindForm("invite-form",async f => {
+  const data=await api("/api/v3/invites",{method:"POST",body:{role:field(f,"role").value,label:field(f,"label").value.trim()}});
+  const {link,local}=await inviteLink(data.code,"invite");
+  showSecret("项目邀请",link,"把这条链接发给你想邀请的人。对方打开后起个昵称，就会直接进入这个项目的对话。",`${local ? LOCAL_ONLY + " " : ""}只能用一次，有效期至 ${date(data.expires_at)}。`);
+});
+bindButton("revoke-invites",async () => {
+  const { revoked } = await api("/api/v3/invites/revoke",{method:"POST",body:{}});
+  notice(revoked ? `已收回 ${revoked} 条还没用的邀请。` : "没有还没用的邀请。");
+});
 bindForm("task-form",async f => {
   if (!f.dataset.requestId) f.dataset.requestId=crypto.randomUUID();
   const data=await api("/api/v3/tasks",{method:"POST",body:buildTaskRequest({...planFields(f),title:field(f,"title").value},f.dataset.requestId)});
   state.taskId=data.task?.id || data.id;delete f.dataset.requestId;f.reset();/** @type {HTMLDetailsElement} */ ($("task-compose")).open=false;notice("任务已保存。审批和执行进度会显示在这里。");await loadTasks();
 });
 form("task-form").addEventListener("input",()=>{if(!form("task-form").dataset.busy) delete form("task-form").dataset.requestId;});
-bindForm("device-pair-form",async f => {const data=await api("/api/v3/devices/pair",{method:"POST",body:{label:field(f,"label").value.trim()}});f.reset();showSecret("本人设备配对",inviteLink(data.code,"pair"),"在你的新设备上打开，登录同一个账号。",`有效期至 ${date(data.expires_at)}`);});
+bindForm("device-pair-form",async f => {
+  const data=await api("/api/v3/devices/pair",{method:"POST",body:{label:field(f,"label").value.trim()}});f.reset();
+  const {link,local}=await inviteLink(data.code,"pair");
+  showSecret("本人设备配对",link,"在你的新设备上打开，登录同一个账号。",`${local ? LOCAL_ONLY + " " : ""}有效期至 ${date(data.expires_at)}`);
+});
 bindForm("node-invite-form",async f => {const data=await api("/api/v3/node-invites",{method:"POST",body:{label:field(f,"label").value.trim(),space_ids:[state.space]}});f.reset();showSecret("连接执行电脑",data.code,"在要连接的电脑上使用这个代码。",`在电脑终端运行 pa node pair --url ${location.origin}，按提示粘贴代码，然后运行 pa node run。有效期至 ${date(data.expires_at)}。`);});
 bindButton("channel-pair-button",async()=>{const data=await api("/api/v3/channel-binding",{method:"POST",body:{}});showSecret("绑定聊天账号",`/bind ${data.code}`,"复制命令，在 Telegram 或钉钉里私聊机器人发送。",`仅能使用一次，有效期至 ${date(data.expires_at)}。`);});
 bindButton("recovery-button",async()=>{const data=await api("/api/v3/recovery-code",{method:"POST",body:{}});showSecret("保存新的恢复码",data.code,"旧的恢复码已失效。");});
@@ -742,11 +846,13 @@ $("space-select").addEventListener("change",event=>run(()=>switchSpace(event.tar
 
 for (const id of ["refresh-tasks","refresh-agents","refresh-knowledge","refresh-devices"]) $(id).addEventListener("click",()=>run(()=>refresh(true)));
 for (const view of ["collaboration","computer"]) $("task-view-"+view).addEventListener("click",()=>run(()=>selectTaskView(view)));
-$("secret-close").addEventListener("click",closeSecret);
-$("secret-dialog").addEventListener("close",()=>{input("secret-value").value="";$("secret-extra").textContent="";});
+$("secret-close").addEventListener("click",finishSecret);
+$("secret-dialog").addEventListener("close",()=>{input("secret-value").value="";$("secret-extra").textContent="";const next=afterSecret;afterSecret=null;next?.();});
 $("secret-copy").addEventListener("click",()=>run(async()=>{if(navigator.clipboard) {await navigator.clipboard.writeText(input("secret-value").value);$("secret-copy").textContent="已复制";} else {input("secret-value").focus();input("secret-value").select();}}));
 document.addEventListener("visibilitychange",()=>{if(!document.hidden) run(refresh);});
-setInterval(()=>{if(!state.me || document.hidden || refreshing || !["tasks","agents","knowledge","devices"].includes(state.tab)) return;refreshing=true;run(async()=>{try{await refresh();}finally{refreshing=false;}});},8000);
+// The project page is kept fresh too, so someone who has just joined shows up in the list;
+// it is left alone while a member's role menu is open, which a redraw would close.
+setInterval(()=>{if(!state.me || document.hidden || refreshing || !["tasks","agents","knowledge","devices","spaces"].includes(state.tab)) return;if(state.tab==="spaces" && $("members-list").contains(document.activeElement)) return;refreshing=true;run(async()=>{try{await refresh();}finally{refreshing=false;}});},8000);
 productShell=createProductShell({document,content:document.querySelector(".shell"),current:state.tab,resolve:scopedUrl,onNavigate:tab=>run(()=>selectTab(tab)),spaceControl:$("space-select")});
 document.querySelector(".masthead").prepend(productShell.toggle);
 $("space-control-source").remove();

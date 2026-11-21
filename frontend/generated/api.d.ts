@@ -174,6 +174,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/invites/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Schema Only Endpoint */
+        post: operations["v3_invite_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/invites/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Schema Only Endpoint */
+        post: operations["v3_invites_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/jobs/{job_id}/approve": {
         parameters: {
             query?: never;
@@ -894,12 +928,28 @@ export interface components {
              */
             require_existing_session: boolean;
         };
-        /** EnrollmentResponse */
+        /**
+         * EnrollmentResponse
+         * @description Where accepting the invitation landed the person.
+         *
+         *     `created`: a new identity was made. `joined`: the project gained a member; False when they
+         *     were already in it (the invitation is then left unused). `role` is the one they hold now.
+         */
         EnrollmentResponse: {
+            /** Created */
+            created: boolean;
+            /** Joined */
+            joined: boolean;
             /** Ok */
             ok: boolean;
             /** Recovery Code */
             recovery_code: string | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "member" | "viewer";
+            space: components["schemas"]["Space"];
         } & {
             [key: string]: unknown;
         };
@@ -964,6 +1014,24 @@ export interface components {
             label: string;
             /** Space Ids */
             space_ids?: string[];
+        };
+        /** InvitePreviewResponse */
+        InvitePreviewResponse: {
+            /** Already Member */
+            already_member: boolean;
+            /** Expires At */
+            expires_at: number;
+            /** Invited By */
+            invited_by: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "owner" | "member" | "viewer";
+            /** Space Name */
+            space_name: string;
+        } & {
+            [key: string]: unknown;
         };
         /** JobResponse */
         JobResponse: {
@@ -1165,6 +1233,13 @@ export interface components {
             channel: string;
             /** Sender Id */
             sender_id: string;
+        };
+        /** RevokedResponse */
+        RevokedResponse: {
+            /** Revoked */
+            revoked: number;
+        } & {
+            [key: string]: unknown;
         };
         /** Space */
         Space: {
@@ -2334,6 +2409,201 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InvitationResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    v3_invite_preview_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-PA": "1";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemCode"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePreviewResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    v3_invites_revoke_post: {
+        parameters: {
+            query?: {
+                /** @description An accessible space ID. Defaults to the caller's personal space. */
+                space?: string;
+            };
+            header: {
+                "X-PA": "1";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokedResponse"];
                 };
             };
             /** @description Bad Request */

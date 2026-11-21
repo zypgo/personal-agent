@@ -179,17 +179,24 @@ def test_join_card_accepts_invite_as_current_account_without_persisting_code(gro
     begun = user.client.post(base + "/begin", headers=user.write, json={"payload": {}})
     assert begun.status_code == 200, begun.text
     assert begun.json()["payload"] == {}
+    token, sessions = user.token(), root.db.scalar("SELECT COUNT(*) FROM web_sessions")
     joined = user.client.post(
         "/api/v3/enroll",
         headers=user.write,
         json={"code": invite.code, "require_existing_session": True},
     )
     assert joined.status_code == 200, joined.text
-    assert joined.json() == {"ok": True, "recovery_code": None}
-    # TestClient can retain a hostless fixture cookie alongside the response cookie.
-    token = joined.cookies["pa_session"]
-    user.client.cookies.clear()
-    user.client.cookies.set("pa_session", token)
+    landed = joined.json()
+    assert (landed["ok"], landed["recovery_code"], landed["created"], landed["joined"]) == (
+        True,
+        None,
+        False,
+        True,
+    )
+    assert (landed["role"], landed["space"]["id"]) == ("member", project.id)
+    # They are already signed in: the same session carries on, and no second one is made.
+    assert "set-cookie" not in joined.headers and user.token() == token
+    assert root.db.scalar("SELECT COUNT(*) FROM web_sessions") == sessions
     assert user.client.get("/api/v3/me").json()["principal"]["id"] == member.principal.id
     assert root.db.scalar("SELECT COUNT(*) FROM principals") == before
     assert root.identities.require_access(member.principal.id, project.id).role == "member"

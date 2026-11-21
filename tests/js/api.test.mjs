@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ApiError, artifactBlob, scopedArtifactBlob, agentSetupBlob, Live } from "../../src/personal_agent/channels/web/static/api.js";
+import { ApiError, artifactBlob, scopedArtifactBlob, agentSetupBlob, Live, whoAmI } from "../../src/personal_agent/channels/web/static/api.js";
 
 test("artifact downloads use the authenticated same-origin route and never cache private files", async (t) => {
   const id = "a".repeat(32);
@@ -135,4 +135,28 @@ test("a delayed authentication check cannot reopen a stream after logout", async
   assert.equal(live.source, null);
   assert.equal(live.retryTimer, null);
   assert.equal(live.state, "closed");
+});
+
+test("asking who is signed in answers with the account, or with the status that came back instead", async (t) => {
+  const previous = globalThis.location;
+  globalThis.location = { origin: "https://assistant.example", search: "?space=project-a" };
+  t.after(() => { if (previous === undefined) delete globalThis.location; else globalThis.location = previous; });
+  const seen = [];
+  let answer = () => new Response(JSON.stringify({ principal: { id: "me" }, spaces: [] }), { status: 200 });
+  t.mock.method(globalThis, "fetch", async (path, options) => {
+    seen.push(path);
+    assert.equal(options.credentials, "same-origin");
+    assert.equal(options.cache, "no-store");
+    assert.equal(options.headers["X-PA"], "1");
+    return answer();
+  });
+  assert.deepEqual(await whoAmI(), { principal: { id: "me" }, spaces: [] });
+  assert.equal(seen[0], "/api/v3/me", "the account on its own: the page is not asking about the project it was told to leave");
+  await whoAmI("project-a"); assert.equal(seen[1], "/api/v3/me?space=project-a");
+  answer = () => new Response("{}", { status: 401 });
+  assert.equal(await whoAmI(), 401);
+  answer = () => new Response("{}", { status: 403 });
+  assert.equal(await whoAmI("project-a"), 403);
+  answer = () => { throw new TypeError("offline"); };
+  assert.equal(await whoAmI(), 0, "no answer is not a no");
 });

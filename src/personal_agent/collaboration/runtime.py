@@ -47,9 +47,12 @@ class SpaceManager:
 
             paths = space_paths(self.root.paths, space.id)
             cfg = derive_space_config(self.root.config)
-            cfg = cfg.model_copy(
-                update={"agent": cfg.agent.model_copy(update={"name": space.name})}
-            )
+            if space.kind == "project":
+                # A project's assistant carries the project's name; a personal space keeps the
+                # product's own (its stored name, "Personal", is only a label for the space).
+                cfg = cfg.model_copy(
+                    update={"agent": cfg.agent.model_copy(update={"name": space.name})}
+                )
             child = build_app(
                 home=paths.home,
                 config=cfg,

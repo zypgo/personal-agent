@@ -3,7 +3,7 @@
   "info": {
     "title": "Qixu V3 API",
     "description": "Authenticated collaboration and durable execution. Browser writes also require an allowed Origin and X-PA: 1. Bodies are strictly validated only after authentication; the session and membership are checked again after the body is read. All responses are private and must not be cached persistently.",
-    "version": "0.9.1"
+    "version": "0.9.2"
   },
   "paths": {
     "/api/v3/me": {
@@ -616,6 +616,249 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/InviteMember"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v3/invites/revoke": {
+      "post": {
+        "summary": " Schema Only Endpoint",
+        "operationId": "v3_invites_revoke_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "space",
+            "in": "query",
+            "required": false,
+            "description": "An accessible space ID. Defaults to the caller's personal space.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-PA",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "security": [
+          {
+            "browserSession": []
+          }
+        ]
+      }
+    },
+    "/api/v3/invites/preview": {
+      "post": {
+        "summary": " Schema Only Endpoint",
+        "operationId": "v3_invite_preview_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitePreviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-PA",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemCode"
               }
             }
           }
@@ -5570,15 +5813,40 @@
               }
             ],
             "title": "Recovery Code"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          },
+          "joined": {
+            "type": "boolean",
+            "title": "Joined"
+          },
+          "space": {
+            "$ref": "#/components/schemas/Space"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "member",
+              "viewer"
+            ],
+            "title": "Role"
           }
         },
         "additionalProperties": true,
         "type": "object",
         "required": [
           "ok",
-          "recovery_code"
+          "recovery_code",
+          "created",
+          "joined",
+          "space",
+          "role"
         ],
-        "title": "EnrollmentResponse"
+        "title": "EnrollmentResponse",
+        "description": "Where accepting the invitation landed the person.\n\n`created`: a new identity was made. `joined`: the project gained a member; False when they\nwere already in it (the invitation is then left unused). `role` is the one they hold now."
       },
       "ErrorResponse": {
         "properties": {
@@ -5665,6 +5933,45 @@
           "expires_at"
         ],
         "title": "InvitationResponse"
+      },
+      "InvitePreviewResponse": {
+        "properties": {
+          "space_name": {
+            "type": "string",
+            "title": "Space Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "member",
+              "viewer"
+            ],
+            "title": "Role"
+          },
+          "invited_by": {
+            "type": "string",
+            "title": "Invited By"
+          },
+          "expires_at": {
+            "type": "number",
+            "title": "Expires At"
+          },
+          "already_member": {
+            "type": "boolean",
+            "title": "Already Member"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "space_name",
+          "role",
+          "invited_by",
+          "expires_at",
+          "already_member"
+        ],
+        "title": "InvitePreviewResponse"
       },
       "JobResponse": {
         "properties": {
@@ -5892,6 +6199,20 @@
           "pending"
         ],
         "title": "ReviewsResponse"
+      },
+      "RevokedResponse": {
+        "properties": {
+          "revoked": {
+            "type": "integer",
+            "title": "Revoked"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "revoked"
+        ],
+        "title": "RevokedResponse"
       },
       "Space": {
         "properties": {

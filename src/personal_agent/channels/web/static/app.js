@@ -6,7 +6,7 @@
 // file, and none may be added: the page's policy forbids inline code, and the answers it shows can
 // repeat text that someone else wrote.
 
-import { Live, api, artifactBlob, scopedArtifactBlob, agentSetupBlob, scopedURL, invalidateRequests, setRequestContext, onAccessLost } from "./api.js";
+import { Live, api, artifactBlob, scopedArtifactBlob, agentSetupBlob, scopedURL, invalidateRequests, setRequestContext, onAccessLost, whoAmI } from "./api.js";
 import { createAssistantCards, createAssistantWelcome } from "./assistant.js";
 import { createAgentMark, createProductShell } from "./product-shell.js";
 import { activityLabel, connectionLabel, toolLabel, toolProgress } from "./activity.js";
@@ -44,7 +44,14 @@ let settled = false; // the first screenful of history is on the page: from here
 const entered = new Set(); // keys of nodes that have already made their entrance
 const rendered = new Map(); // key -> { node, signature }
 const nowSeconds = () => Date.now() / 1000;
-onAccessLost(() => { if (ui) signedOut(); });
+onAccessLost(status => { if (ui) lostAccess(status); });
+const people = new Map(); // principal id -> name, for the people in the project being shown
+let peopleSeen = 0; // moves when `people` does, so the messages that name someone are drawn again
+const ROLE_WORDS = { owner: "负责人", member: "成员", viewer: "访客" };
+const spaceLabel = space => (space?.kind === "personal" ? "个人空间" : space?.name || "项目空间");
+// The instance owner is stored as "Owner" until they are given another name; to other people that
+// reads better as what it is.
+const personName = name => (name === "Owner" ? "负责人" : name || "成员");
 
 // ---- small helpers --------------------------------------------------------------------------
 function h(tag, props = {}, ...kids) {
@@ -161,6 +168,9 @@ async function start(notice = "", { paired = false } = {}) {
   try {
     session = await api("/api/session");
   } catch (error) {
+    // Signed in, but the project in the address is not theirs (or no longer is): say so, rather
+    // than asking them to pair again.
+    if (error.status === 403 && new URLSearchParams(location.search).get("space")) return showLeft("");
     if (error.status !== 401) return showOffline(error.message);
     return showPairing(paired ? KEPT_NOTHING : problem);
   }
@@ -254,6 +264,44 @@ function signedOut() {
   showPairing("当前设备已退出，请重新配对后继续。");
 }
 
+/** A project this person is not in (any more). Their own space is a click away. */
+function showLeft(name) {
+  teardownChat();
+  root.replaceChildren(
+    h(
+      "main",
+      { class: "pair" },
+      createAgentMark(document, "pair-brand-mark tile", "offline"),
+      h("h1", { text: name ? `你已不在「${name}」里了` : "你不在这个项目里" }),
+      h("p", { class: "lede", text: "负责人把你移出了项目，或者项目已经关闭。你自己的对话不受影响。" }),
+      h("button", { type: "button", class: "primary", text: "回到我的对话", onclick: () => location.assign("/") }),
+    ),
+  );
+}
+
+// A 401 and a 403 are not the same news. 401: this browser is no longer signed in. 403: it is, but
+// not for *this* project: the owner took them out, or changed what they may do here. Only the first
+// is a sign-out.
+let rechecking = null;
+function lostAccess(status) {
+  if (!ui) return;
+  if (status === 401) return signedOut();
+  rechecking ??= recheckAccess().finally(() => { rechecking = null; });
+}
+
+async function recheckAccess() {
+  const view = ui, here = new URLSearchParams(location.search).get("space") || "";
+  const account = await whoAmI();
+  if (!ui || ui !== view) return;
+  if (account === 401 || account === 403) return signedOut();
+  if (typeof account !== "object") toast("暂时连不上，稍后再试。", { error: true });
+  else if (here && !account.spaces?.some(space => space.id === here)) return showLeft(session?.agent || "");
+  // Still in: what they may do here may have changed, so read it again.
+  else await loadAssistantSpaces();
+  // A stream the server ended (it does that when a role changes) opens again with what they are allowed now.
+  if (ui === view && live?.state === "closed") live.start();
+}
+
 // ---- the chat -------------------------------------------------------------------------------
 function teardownChat() {
   invalidateRequests();
@@ -286,6 +334,8 @@ function teardownChat() {
   store.completedRuns.clear();
   store.more = false;
   store.setWorking(false);
+  people.clear();
+  peopleSeen = 0;
   setBadge(0);
   unread = 0;
 }
@@ -295,13 +345,14 @@ async function showChat(notice) {
   setRequestContext(session.principal_id);
   buildChat();
   if (notice) toast(notice, { error: true });
+  else welcomeJoin();
   try {
     const page = await api("/api/history?limit=40");
     store.addTurns(page.turns);
     store.more = page.more;
   } catch (error) {
     if (error?.name === "AbortError") return;
-    if ([401, 403].includes(error.status)) return signedOut();
+    if ([401, 403].includes(error.status)) return lostAccess(error.status);
     toast(error.message, { error: true });
   }
   renderLog();
@@ -332,11 +383,22 @@ async function showChat(notice) {
       if (stick) scrollToBottom(false);
     },
     onAssistantChanged: () => ui?.cards?.refresh(),
-    onSignout: signedOut,
+    onSignout: () => lostAccess(403), // signed out, or no longer in this project: the check tells which
     onState: onStreamState,
   });
   live.start();
   if (PAGE_VERSION && session.version !== PAGE_VERSION) showUpdate();
+}
+
+/** Arriving from an invitation (`?joined=<role>`): say where you are once, then clean the address. */
+function welcomeJoin() {
+  const params = new URLSearchParams(location.search), role = params.get("joined");
+  if (role === null) return;
+  params.delete("joined");
+  const rest = params.toString();
+  history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : ""));
+  const name = session.agent;
+  toast(role === "viewer" ? `已加入「${name}」。你是访客：能看对话，不能发言。` : `已加入「${name}」。这里说的话，项目里的人都看得到。`);
 }
 
 function buildChat() {
@@ -358,7 +420,17 @@ function buildChat() {
   ui.cardCount = 0;
   ui.cards = createAssistantCards({
     document, api, onPrompt: setAssistantPrompt,
-    onContextChanged: change => { if (change?.leftSpace) location.assign("/"); else void loadAssistantSpaces(); },
+    onContextChanged: change => {
+      if (change?.leftSpace) return location.assign("/");
+      // Took an invitation: carry on in that project, the way the invitation page does.
+      if (change?.joinedSpace) {
+        const url = new URL("/", location.origin);
+        url.searchParams.set("space", change.joinedSpace.id);
+        if (change.joined !== false) url.searchParams.set("joined", change.role || "member");
+        return location.assign(url.pathname + url.search);
+      }
+      void loadAssistantSpaces();
+    },
     onChange: (count, detail) => { if (ui) { ui.cardCount = count; ui.cardTotal = detail?.total || 0; renderChatLayout(); renderStatus(); } },
     onNotice: (message, error = false) => toast(message, { error }),
     downloadConnection: async (agentId, kind) => {
@@ -430,12 +502,40 @@ async function loadAssistantSpaces() {
   try {
     const context = await api("/api/v3/me");
     if (!ui || ui !== view) return;
-    const choices = (context.spaces || []).map(space => h("option", { value: space.id, text: space.name || (space.kind === "personal" ? "个人空间" : "项目空间") }));
+    const choices = (context.spaces || []).map(space => h("option", { value: space.id, text: spaceLabel(space) }));
     ui.spaceSelect.replaceChildren(...choices); ui.spaceSelect.value = context.space_id;
     ui.spaceSelect.hidden = choices.length === 0;
     const space = (context.spaces || []).find(item => item.id === context.space_id);
-    ui.shell.setContext({ name: context.principal?.display_name, space: space?.name, role: space?.kind === "personal" ? "仅自己可见" : { owner: "负责人", member: "成员", viewer: "访客" }[context.role] });
+    ui.shell.setContext({ name: context.principal?.display_name, space: spaceLabel(space), role: space?.kind === "personal" ? "仅自己可见" : ROLE_WORDS[context.role] });
+    applyRole(context.role);
+    if (space?.kind === "project") void loadPeople();
   } catch (error) { if (error?.name !== "AbortError" && ui === view) ui.spaceSelect.hidden = true; }
+}
+
+/** What this person may do here: the composer follows it. A change they did not make is said once. */
+function applyRole(role) {
+  if (!ui) return;
+  const before = ui.role;
+  ui.role = role;
+  ui.composer.setReadOnly(role === "viewer");
+  if (before && before !== role) toast(`你在这个项目里的权限变了：现在是${ROLE_WORDS[role] || "成员"}${role === "viewer" ? "，能看，不能发言" : ""}。`);
+}
+
+/** The names of the people in this project, for the messages that are not mine. */
+let loadingPeople = false;
+async function loadPeople() {
+  const view = ui;
+  if (loadingPeople) return;
+  loadingPeople = true;
+  try {
+    const { members } = await api("/api/v3/members");
+    if (!ui || ui !== view) return;
+    people.clear();
+    for (const member of members || []) people.set(member.principal_id, personName(member.display_name));
+    peopleSeen += 1;
+    renderLog();
+  } catch { /* the names are a courtesy: without them a message says 项目成员 */ }
+  finally { loadingPeople = false; }
 }
 
 // ---- the stream's events ----------------------------------------------------------------------
@@ -453,12 +553,14 @@ function onTurn(turn) {
   if (delivered) releasePreviews(delivered.files);
   const fresh = store.addTurns([turn]);
   if (!fresh.length) return;
-  const mine = turn.direction === "in" && turn.channel === "web";
+  const other = fromOther(turn);
+  const mine = turn.direction === "in" && turn.channel === "web" && !other;
   const stick = mine || nearBottom();
+  if (other && !people.has(saidBy(turn))) void loadPeople(); // someone who joined after this page opened
   renderLog();
   if (stick) scrollToBottom(!document.hidden);
   else bumpJump();
-  if (turn.direction === "out" && document.hidden) {
+  if ((turn.direction === "out" || other) && document.hidden) {
     unread += 1;
     setBadge(unread);
   }
@@ -558,7 +660,7 @@ async function loadEarlier() {
     ui.log.scrollTop = top + (ui.log.scrollHeight - before); // keep what the owner was reading in place
   } catch (error) {
     if (error?.name === "AbortError") return;
-    if ([401, 403].includes(error.status)) return signedOut();
+    if ([401, 403].includes(error.status)) return lostAccess(error.status);
     toast(error.message, { error: true });
   } finally {
     if (ui) ui.loadMore.disabled = false;
@@ -649,26 +751,33 @@ function draftNode(fresh) {
 }
 
 const approvalState = (turn) => (turn.approvals ?? []).map((a) => `${a.id}:${store.approval(a).status}`).join(",");
-const turnSignature = (turn, previous) => `${turn.id}|${previous?.direction ?? "-"}|${approvalState(turn)}`;
+// In a shared project the log holds what several people said. The server records who said each
+// message; one with nobody recorded is, as it always was, the person looking.
+const saidBy = (turn) => (turn.direction === "in" ? turn.meta?.principal_id || "" : "");
+const fromOther = (turn) => { const who = saidBy(turn); return Boolean(who) && who !== session?.principal_id; };
+const turnSignature = (turn, previous) =>
+  `${turn.id}|${previous?.direction ?? "-"}|${previous ? saidBy(previous) : ""}|${approvalState(turn)}|${fromOther(turn) ? peopleSeen : ""}`;
 const pendingSignature = (p) => `${p.state}|${p.error ?? ""}`;
 
 function turnNode(turn, previous) {
-  const mine = turn.direction === "in";
+  const inbound = turn.direction === "in", other = fromOther(turn), mine = inbound && !other;
   // What I send already made its entrance as a pending bubble; only the answer arrives anew.
   const fresh = !mine && entrance(`t${turn.id}`);
-  const node = h("article", { class: `turn ${mine ? "mine" : "agent"}${fresh ? " fresh" : ""}`, dataset: { id: String(turn.id), kind: turn.kind } });
-  if (!mine && (!previous || previous.direction === "in")) node.append(h("div", { class: "speaker" }, createAgentMark(document), session.agent));
+  const node = h("article", { class: `turn ${mine ? "mine" : other ? "other" : "agent"}${fresh ? " fresh" : ""}`, dataset: { id: String(turn.id), kind: turn.kind } });
+  if (!inbound && (!previous || previous.direction === "in")) node.append(h("div", { class: "speaker" }, createAgentMark(document), session.agent));
+  // A person other than me is named when they start to speak, and again after someone else did.
+  if (other && (!previous || saidBy(previous) !== saidBy(turn))) node.append(h("div", { class: "speaker" }, people.get(saidBy(turn)) || "项目成员"));
   const body = h("div", { class: "body" });
   const pictures = (turn.meta?.attachments ?? []).filter((a) => a.kind === "image" && /^[0-9a-f]{64}$/.test(a.id));
   if (pictures.length) body.append(h("div", { class: `pictures n${Math.min(pictures.length, 4)}` }, pictures.map((a) => pictureNode(a.id))));
-  if (mine) {
+  if (inbound) {
     if (turn.text) body.append(h("p", { class: turn.text.startsWith("/") ? "words command" : "words", text: turn.text }));
   } else if (!(turn.kind === "approval_request" && (turn.approvals ?? []).length)) {
     // An approval's text is the fallback for chat apps that cannot show buttons ("Reply /approve 1").
     // Here the card below carries the same request with the buttons themselves.
     body.append(renderMarkdown(document, turn.text));
   }
-  if (!mine && Array.isArray(turn.meta?.artifacts)) {
+  if (!inbound && Array.isArray(turn.meta?.artifacts)) {
     for (const file of turn.meta.artifacts.slice(0, 10)) {
       if (file && /^[0-9a-f]{32}$/.test(file.id) && typeof file.name === "string") body.append(artifactNode(file));
     }
@@ -705,7 +814,7 @@ function artifactNode(file) {
       } catch (error) {
         if (ui !== view || error?.name === "AbortError") return;
         status.textContent = error.message;
-        if ([401, 403].includes(error.status)) signedOut();
+        if ([401, 403].includes(error.status)) lostAccess(error.status);
       } finally {
         button.disabled = false;
         // Safari needs the blob to survive the click's task before its download starts.
@@ -817,9 +926,11 @@ async function decide(approval, decision, card, note = "") {
     if (!result.ok) toast(result.message, { error: false });
   } catch (error) {
     if (error?.name === "AbortError") return;
-    if ([401, 403].includes(error.status)) return signedOut();
-    toast(error.message, { error: true });
+    if (error.status === 401) return lostAccess(401);
+    // A 403 is the server saying this person may not decide that, not that they are signed out.
+    toast(error.status === 403 ? "你在这个项目里不能处理这条请求。" : error.message, { error: true });
     for (const button of card.querySelectorAll("button")) button.disabled = false;
+    if (error.status === 403) lostAccess(403);
     return;
   }
   renderLog();
@@ -901,8 +1012,19 @@ function buildComposer() {
   const row = h("div", { class: "row" }, attach, input, actions);
   const recording = h("div", { class: "recording", hidden: true });
   const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker, voicePicker, h("p", { class: "composer-note" }, h("span", { class: "keys", text: "按 Enter 发送，Shift + Enter 换行。" })));
-  const composer = { element, input, files, chips, hints, send, mic, row, recording, picker, voice: null, voiceStarting: false, pendingImages: 0, pendingAudio: 0, disposed: false };
+  const composer = { element, input, files, chips, hints, send, mic, row, recording, picker, voice: null, voiceStarting: false, pendingImages: 0, pendingAudio: 0, disposed: false, readOnly: false };
   const current = () => !composer.disposed && ui?.composer === composer;
+  const writing = input.getAttribute("placeholder");
+  // A visitor to a project can read it, and cannot add to it: the field says so, instead of
+  // letting them write something that would only be refused.
+  composer.setReadOnly = (on) => {
+    composer.readOnly = on;
+    input.disabled = on;
+    input.setAttribute("placeholder", on ? "你是访客：能看对话，不能发言" : writing);
+    for (const control of [attach, audio]) if (control) control.disabled = on;
+    row.className = on ? "row readonly" : "row";
+    refresh();
+  };
 
   const refresh = () => {
     input.style.height = "auto";
@@ -913,9 +1035,9 @@ function buildComposer() {
       input.style.height = `${Math.min(input.scrollHeight + border, 168)}px`;
     }
     const ready = input.value.trim() !== "" || files.length > 0;
-    send.disabled = !ready || composer.pendingImages > 0 || composer.voiceStarting;
+    send.disabled = composer.readOnly || !ready || composer.pendingImages > 0 || composer.voiceStarting;
     send.hidden = !ready && Boolean(mic);
-    if (mic) { mic.hidden = ready; mic.disabled = composer.voiceStarting || composer.pendingImages > 0; }
+    if (mic) { mic.hidden = ready; mic.disabled = composer.readOnly || composer.voiceStarting || composer.pendingImages > 0; }
     const suggestions = commandHints(input.value);
     hints.hidden = suggestions.length === 0;
     hints.replaceChildren(
@@ -948,7 +1070,7 @@ function buildComposer() {
   voicePicker.addEventListener("change", async () => {
     const file = voicePicker.files[0];
     voicePicker.value = "";
-    if (!file || !current()) return;
+    if (!file || !current() || composer.readOnly) return;
     if (file.size > features.max_voice_bytes) return toast("语音文件太大，请选择更短的录音。", { error: true });
     composer.pendingAudio += 1;
     let seconds;
@@ -1004,7 +1126,7 @@ async function addFiles(list) {
   const view = ui;
   if (!view) return;
   const composer = view.composer, features = session.features;
-  if (composer.disposed) return;
+  if (composer.disposed || composer.readOnly) return;
   const room = features.max_images - composer.files.length - composer.pendingImages;
   if (list.length > room) toast(`每条消息最多添加 ${features.max_images} 张图片。`, { error: true });
   const selected = list.slice(0, Math.max(room, 0));
@@ -1059,7 +1181,7 @@ function clearComposer() {
 async function submit() {
   if (!ui) return;
   const composer = ui.composer;
-  if (composer.disposed || composer.pendingImages || composer.voiceStarting || composer.voice) return;
+  if (composer.disposed || composer.readOnly || composer.pendingImages || composer.voiceStarting || composer.voice) return;
   const text = composer.input.value.trim();
   const files = composer.files.slice();
   if (!text && files.length === 0) return;
@@ -1097,10 +1219,11 @@ async function deliver(entry) {
     if (ui !== view) return;
     if (!store.findPending(entry.clientId)) return; // the stream already showed it as delivered
     if (error?.name === "AbortError") return;
-    if ([401, 403].includes(error.status)) return signedOut();
+    if (error.status === 401) return lostAccess(401);
     entry.state = error.status === 422 ? "rejected" : "failed";
-    entry.error = error.status === 0 ? "网络未连接，消息尚未发送。" : error.message;
+    entry.error = error.status === 0 ? "网络未连接，消息尚未发送。" : error.status === 403 ? "你现在不能在这个项目里发言，消息没有发出。" : error.message;
     renderLog();
+    if (error.status === 403) lostAccess(403);
   }
 }
 
@@ -1135,7 +1258,7 @@ async function startVoice() {
   const view = ui;
   if (!view) return;
   const composer = view.composer;
-  if (composer.disposed || composer.voice || composer.voiceStarting || composer.pendingImages) return;
+  if (composer.disposed || composer.readOnly || composer.voice || composer.voiceStarting || composer.pendingImages) return;
   const startedFromMic = document.activeElement === composer.mic;
   composer.voiceStarting = true;
   composer.refresh();

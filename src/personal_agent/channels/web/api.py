@@ -216,6 +216,7 @@ class WebApi:
         stop: asyncio.Event,
         secure: bool,
         wake: Callable[[], None] = lambda: None,
+        assets: tuple[dict[str, Asset], str] | None = None,
     ) -> None:
         self.app = app
         self.ingress = ingress
@@ -223,7 +224,9 @@ class WebApi:
         self.secure = secure
         self.wake = wake
         self.auth = app.web_auth
-        self.assets, self.version = load_assets(agent=app.config.agent.name)
+        # A project's chat belongs to the page the browser already has, so it is handed that
+        # page's files and version: its own assistant name must not make them differ.
+        self.assets, self.version = assets or load_assets(agent=app.config.agent.name)
         self._pairing = Strikes(*PAIR_ATTEMPTS)
 
     # ---- who is asking -----------------------------------------------------------------

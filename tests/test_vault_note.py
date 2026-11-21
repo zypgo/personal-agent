@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 import pytest
-from hypothesis import given
+from hypothesis import example, given
 from hypothesis import strategies as st
 
 from personal_agent.vault import note as md
@@ -138,6 +138,7 @@ def test_masking_code_keeps_every_line_and_length(text):
     st.text(alphabet=st.characters(blacklist_characters="#\r"), max_size=200),
     st.text(min_size=1, max_size=30).filter(lambda s: s.strip()),
 )
+@example(content="", heading="`0`")  # a heading that is only a code span was not found again
 def test_replacing_a_section_twice_equals_once(content, heading):
     heading = " ".join(heading.replace("#", "").split()) or "x"
     body = "# T\n\n正文\n"
@@ -210,6 +211,22 @@ def test_a_hostile_line_cannot_make_reading_a_note_take_minutes(line):
 def test_what_is_a_heading_and_what_it_says(line, found):
     heads = md.headings(line)
     assert [(h.level, h.text) for h in heads] == ([found] if found else [])
+
+
+def test_a_heading_may_be_only_code_or_have_code_in_it():
+    body = "# T\n\n## `config.toml`\n\n旧的\n\n## 运行 `pa doctor`\n\n内容\n"
+    assert [h.text for h in md.headings(body)] == ["T", "`config.toml`", "运行 `pa doctor`"]
+    assert md.read_section(body, "`config.toml`") == "旧的"
+    assert md.read_section(body, "运行 pa doctor") == "内容", "found by its words, backticks aside"
+    after = md.replace_section(body, "`config.toml`", "新的")
+    assert after.count("## `config.toml`") == 1
+    assert md.read_section(after, "`config.toml`") == "新的"
+    assert md.title_of(md.parse("# 用 `pa` 起步\n"), "x") == "用 pa 起步"
+
+
+def test_code_that_looks_like_a_heading_is_still_not_one():
+    body = "```\n## 不是标题\n```\n\n`## 也不是`\n\n%% ## 注释 %%\n"
+    assert md.headings(body) == []
 
 
 def test_a_code_span_closes_with_a_run_of_the_same_length():

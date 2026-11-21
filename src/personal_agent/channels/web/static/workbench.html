@@ -27,31 +27,31 @@
       <section id="workspace-error" class="workspace-error" hidden><h1>暂时连不上助理</h1><p class="muted">请检查网络，再试一次。</p><button id="retry-workspace" class="primary" type="button">重新连接</button></section>
 
       <main id="login" class="login" hidden>
-        <h1>进入你的空间</h1>
-        <p class="muted">新成员用项目邀请加入。已有账号的，配对这台设备，或者用恢复码登录。</p>
+        <h1 id="login-title">进入你的空间</h1>
+        <p id="login-intro" class="muted">新成员用项目邀请加入。以前加入过的，用恢复码登录，或者配对这台设备。</p>
         <div class="two-columns">
           <section class="card">
-            <h2>接受项目邀请</h2>
+            <h2 id="enroll-title">接受项目邀请</h2>
             <form id="enroll-form">
-              <label>邀请代码<input id="enroll-code" name="code" type="password" autocomplete="off" required maxlength="200"></label>
+              <label id="enroll-code-field">邀请代码<input id="enroll-code" name="code" type="password" autocomplete="off" required maxlength="200"></label>
               <label>你的昵称<input name="display_name" autocomplete="nickname" maxlength="60" placeholder="在项目中显示的名字" required></label>
-              <button class="primary" type="submit">创建账号并加入</button>
+              <button id="enroll-submit" class="primary" type="submit">创建账号并加入</button>
             </form>
           </section>
           <section class="card">
-            <h2>恢复已有账号</h2>
+            <h2>以前加入过？</h2>
             <form id="recover-form">
               <label>一次性恢复码<input name="code" type="password" autocomplete="off" required maxlength="200"></label>
               <button type="submit">恢复访问</button>
             </form>
-            <p class="hint">还有已登录的设备？在那台设备的「设备与账号」页面生成配对链接，在这里打开。</p>
+            <p id="recover-hint" class="hint">还有已登录的设备？在那台设备的「设备与账号」页面生成配对链接，在这里打开。</p>
           </section>
         </div>
       </main>
 
       <main id="workspace" hidden>
         <section id="join-banner" class="card invite-banner" hidden>
-          <div><h2>加入新的项目</h2><p class="muted">用当前账号接受邀请。</p></div>
+          <div><h2 id="join-title">加入新的项目</h2><p id="join-lead" class="muted">用当前账号接受邀请。</p></div>
           <button id="accept-invite" class="primary">接受邀请</button>
         </section>
 
@@ -94,7 +94,7 @@
           <div class="section-title"><div><h1 tabindex="-1">项目与成员</h1><p class="muted">按项目整理笔记、共享任务。</p></div></div>
           <div class="two-columns">
             <details class="card compose"><summary><span>创建新项目</span><span class="compose-description">为共同目标留一个独立空间</span><span class="compose-plus" aria-hidden="true">＋</span></summary><form id="space-form"><label>项目名称<input name="name" required maxlength="60" placeholder="例如：每周研究"></label><button class="primary" type="submit">创建项目</button></form></details>
-            <details class="card compose" id="member-invite-card"><summary><span>邀请成员</span><span class="compose-description">选择他们在当前项目中的权限</span><span class="compose-plus" aria-hidden="true">＋</span></summary><form id="invite-form"><label>邀请备注<input name="label" maxlength="60" placeholder="可选"></label><label>项目角色<select name="role"><option value="member">成员 · 发起任务、编辑笔记</option><option value="viewer">访客 · 查看项目内容</option><option value="owner">负责人 · 同时管理成员与规则</option></select></label><button type="submit">生成一次性邀请</button></form></details>
+            <details class="card compose" id="member-invite-card"><summary><span>邀请成员</span><span class="compose-description">选择他们在当前项目中的权限</span><span class="compose-plus" aria-hidden="true">＋</span></summary><form id="invite-form"><label>邀请备注<input name="label" maxlength="60" placeholder="可选"></label><label>项目角色<select name="role"><option value="member">成员 · 能对话、发起任务、编辑笔记</option><option value="viewer">访客 · 能看对话和笔记，不能发言</option><option value="owner">负责人 · 同时管理成员与规则</option></select></label><button type="submit">生成邀请链接</button></form><div class="compose-foot"><p class="hint">链接 24 小时内有效，只能用一次。发错了，或者想收回：</p><button id="revoke-invites" class="ghost" type="button">撤销还没用的邀请</button></div></details>
           </div>
           <section class="card"><h2>当前成员</h2><div id="members-list" class="stack"></div></section>
         </section>

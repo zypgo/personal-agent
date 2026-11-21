@@ -69,10 +69,28 @@ class Invitation:
 
 @dataclass(frozen=True)
 class Enrollment:
+    """What accepting a project invitation did.
+
+    `created`: a new identity was made for the person. `joined`: the project gained a member;
+    False when they were already in it, in which case the invitation was not used up."""
+
     principal: Principal
     space: Space
     created: bool
     recovery_code: str | None = None
+    role: Role = "member"
+    joined: bool = True
+
+
+@dataclass(frozen=True)
+class InvitePreview:
+    """What a project invitation is for, shown before anyone accepts it."""
+
+    space_name: str
+    role: Role
+    invited_by: str
+    expires_at: float
+    already_member: bool
 
 
 @dataclass(frozen=True)

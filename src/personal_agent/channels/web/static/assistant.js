@@ -488,10 +488,13 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       received = true;
       if (!alive) return;
       const changedOwnMembership = execution.action === "change_member" && execution.payload.principal_id === me?.principal?.id;
+      // Taking an invitation lands them in a project: say which, and (below) go there.
+      const project = execution.action === "accept_project_invite" && response?.space?.id ? response : null;
+      const done = project ? (project.joined === false ? `你已经在「${project.space.name}」里了。` : `已加入「${project.space.name}」。`) : "操作已完成。";
       // The response may contain credentials. They are never included in complete or chat.
       showSecret(execution.action, response || {});
       me = null; memberNames = null;
-      message(entry, "操作已完成。"); onNotice("操作已完成。");
+      message(entry, done); onNotice(done);
       // The old proposal's membership snapshot is intentionally no longer authorized.
       // Do not issue a guaranteed forbidden complete/read from a space the user has left.
       if (changedOwnMembership) {
@@ -502,7 +505,11 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       }
       try { await api(`${base}/complete`, { method: "POST", json: { execution_id: execution.execution_id, outcome: "succeeded" } }); }
       catch { if (alive) onNotice("操作已经完成，待办列表还没更新，刷新一下就行。"); }
-      if (alive) { suppressed.add(entry.card.id); onContextChanged(); await refresh(); }
+      if (alive) {
+        suppressed.add(entry.card.id);
+        onContextChanged(project ? { joinedSpace: project.space, role: project.role, joined: project.joined } : undefined);
+        await refresh();
+      }
     } catch (error) {
       if (!alive || error?.name === "AbortError") return;
       const definite = !received && error.status >= 400 && error.status < 500;
@@ -578,7 +585,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       case "invite_node": {
         const remark = field("label", "电脑名称", draft.label, { ...required, maxLength: 60 });
         const choices = [];
-        for (const space of ctx.spaces || []) { const choice = check(entry, space.name || "当前空间", (draft.space_ids || [ctx.space_id]).includes(space.id)); form.append(choice.element); choices.push([space.id, choice.control]); }
+        for (const space of ctx.spaces || []) { const choice = check(entry, space.kind === "personal" ? "个人空间" : space.name || "当前空间", (draft.space_ids || [ctx.space_id]).includes(space.id)); form.append(choice.element); choices.push([space.id, choice.control]); }
         read = () => { const space_ids = choices.filter(([, control]) => control.checked).map(([id]) => id); if (!space_ids.length) throw new Error("请选择至少一个空间。"); return { label: remark.read().trim(), space_ids }; }; label = "生成电脑邀请"; break;
       }
       case "revoke_device": case "revoke_node": case "revoke_agent": case "rotate_agent_token": {

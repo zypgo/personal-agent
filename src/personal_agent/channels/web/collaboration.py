@@ -18,7 +18,7 @@ from personal_agent.channels.ingress import Ingress
 from personal_agent.channels.web import contracts as dto
 from personal_agent.channels.web import vault_views as views
 from personal_agent.channels.web.openapi import Endpoint, document, router
-from personal_agent.collaboration.models import AccessDenied, IdentityError
+from personal_agent.collaboration.models import AccessDenied, IdentityError, InvalidInvite
 from personal_agent.execution.models import ExecutionConflict, ExecutionError, ExecutionNotFound
 from personal_agent.execution.workspaces import snapshot
 from personal_agent.memory.store import Actor
@@ -155,12 +155,17 @@ class V3Api:
         )
         return response
 
-    def throttle(self, request: Request) -> None:
+    def throttle(self, request: Request, *, count: bool = True) -> None:
+        """Make a source that tried too often wait. By default this attempt counts too."""
         source = request.client.host if request.client else ""
         now = self.root.clock.now()
         if self.strikes.wait(source, now) is not None:
             raise HTTPException(429, "Too many attempts; try again later.")
-        self.strikes.fail(source, now)
+        if count:
+            self.strikes.fail(source, now)
+
+    def strike(self, request: Request) -> None:
+        self.strikes.fail(request.client.host if request.client else "", self.root.clock.now())
 
     async def me(self, request: Request) -> Response:
         app, session = self.selected(request)
@@ -210,6 +215,30 @@ class V3Api:
         )
         return answer(asdict(invitation), 201)
 
+    async def invites_revoke(self, request: Request) -> Response:
+        """Take back the project invitations nobody has used yet."""
+        app, session = self.selected(request, manage=True)
+        revoked = self.identities.revoke_invites(
+            session.principal_id, space_id=app.space_id, kind="member"
+        )
+        return answer({"revoked": revoked})
+
+    async def invite_preview(self, request: Request) -> Response:
+        """Say what an invitation is for before anyone accepts it. Reads only, so only the
+        attempts that fail count against the caller."""
+        self.throttle(request, count=False)
+        token = request.cookies.get(COOKIE, "")
+        data = await body(request, dto.RedeemCode)
+        session = self.root.web_auth.lookup(token)
+        try:
+            seen = self.identities.preview_member_invite(
+                data.code, principal_id=session.principal_id if session else None
+            )
+        except InvalidInvite:
+            self.strike(request)
+            raise
+        return answer(asdict(seen))
+
     async def enroll(self, request: Request) -> Response:
         self.throttle(request)
         token = request.cookies.get(COOKIE, "")
@@ -238,11 +267,19 @@ class V3Api:
                 existing_principal_id=existing,
                 label=data.display_name,
             )
-            return self.signed(
-                enrolled.principal.id,
-                request,
-                {"ok": True, "recovery_code": enrolled.recovery_code},
-            )
+            landed = {
+                "ok": True,
+                "recovery_code": enrolled.recovery_code,
+                "created": enrolled.created,
+                "joined": enrolled.joined,
+                "space": asdict(enrolled.space),
+                "role": enrolled.role,
+            }
+            if existing is not None:
+                # Already signed in as this person: they keep their session. A second one would
+                # sit in their device list as a device nobody holds.
+                return answer(landed)
+            return self.signed(enrolled.principal.id, request, landed)
 
     async def recover(self, request: Request) -> Response:
         self.throttle(request)
@@ -944,6 +981,7 @@ class SpaceRouter:
                     stop=self.api.stop,
                     secure=self.api.secure,
                     wake=wake,
+                    assets=(self.api.assets, self.api.version),
                 )
                 self.children[app.space_id] = Starlette(
                     routes=api.routes(),

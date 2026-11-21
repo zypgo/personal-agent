@@ -253,7 +253,28 @@ class OkResponse(ResponseModel):
 
 
 class EnrollmentResponse(OkResponse):
+    """Where accepting the invitation landed the person.
+
+    `created`: a new identity was made. `joined`: the project gained a member; False when they
+    were already in it (the invitation is then left unused). `role` is the one they hold now."""
+
     recovery_code: str | None
+    created: bool
+    joined: bool
+    space: Space
+    role: Role
+
+
+class InvitePreviewResponse(ResponseModel):
+    space_name: str
+    role: Role
+    invited_by: str
+    expires_at: float
+    already_member: bool
+
+
+class RevokedResponse(ResponseModel):
+    revoked: int
 
 
 class ErrorResponse(BaseModel):
@@ -448,6 +469,15 @@ ROUTES = (
     RouteContract("/members", "members", response=MembersResponse),
     RouteContract("/members", "members", "POST", ChangeMember, MembersResponse),
     RouteContract("/invites", "invite", "POST", InviteMember, InvitationResponse, 201),
+    RouteContract("/invites/revoke", "invites_revoke", "POST", response=RevokedResponse),
+    RouteContract(
+        "/invites/preview",
+        "invite_preview",
+        "POST",
+        RedeemCode,
+        InvitePreviewResponse,
+        authority="public",
+    ),
     RouteContract("/enroll", "enroll", "POST", Enroll, EnrollmentResponse, authority="public"),
     RouteContract("/recover", "recover", "POST", RedeemCode, OkResponse, authority="public"),
     RouteContract("/recovery-code", "recovery", "POST", response=CodeResponse, authority="session"),
