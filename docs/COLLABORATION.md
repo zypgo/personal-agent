@@ -45,7 +45,7 @@ pa web pair --principal EXISTING_PRINCIPAL_ID --no-qr
 
 知识库页读写当前空间自己的那份笔记：每个项目空间一个文件夹，私人空间的位置是 `[vault] path`（默认 `~/.personal-agent/vault`）。查看者只能读，成员和负责人可以写。支持搜索、看每一笔的历史、恢复旧版本，和版本号冲突检查。来源 URL 可以写在正文里，供成员和 Agent 引用。两个人同时编辑时，后提交的、基于旧版本的那一份会收到冲突，不会覆盖新内容。
 
-接进来的 Agent 交回的结果，原样存在这个空间知识库的 `raw/agents/<助手名>/` 下，新交出去的任务，每个在 `threads/` 里有自己的一篇。Agent 之间不直接读对方的笔记，要用到别人的成果，由栖序读了再带进下一次派活。详细说明见 [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md)。
+接进来的 Agent 交回的结果、它问你的问题和你的回答，原样存在这个空间知识库的 `raw/agents/<助手名>/` 下，新交出去的任务，每个在 `threads/` 里有自己的一篇。Agent 之间不直接读对方的笔记，要用到别人的成果，由栖序读了再带进下一次派活。详细说明见 [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md)。
 
 以前的“资料”，第一次启动时搬进了 `wiki/`，旧入口保存的资料也会同步一份过去。
 

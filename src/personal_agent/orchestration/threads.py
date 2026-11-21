@@ -540,7 +540,20 @@ class ThreadKeeper:
         )
         kept: dict[str, str] = {}
         by_step: dict[str, str] = {}
+        exchanges: dict[str, str] = {}
         if self.app.config.vault.capture_results:
+            for question in self.db.query(
+                """SELECT q.id, q.attempt_id, q.step_id, q.text, q.choices, q.answer, q.answered_at,
+                          a.name
+                   FROM orchestration_questions q
+                   JOIN orchestration_steps s ON s.task_id = q.task_id AND s.id = q.step_id
+                   JOIN orchestration_agents a ON a.id = s.agent_id
+                   WHERE q.task_id = ? AND q.state = 'answered' ORDER BY q.created_at""",
+                (task_id,),
+            ):
+                found = self._keep_exchange(task, question)
+                if found:
+                    exchanges[question["id"]] = found
             for attempt in self.db.query(
                 """SELECT t.id, t.step_id, t.result, t.result_received_at, a.name
                    FROM orchestration_attempts t JOIN orchestration_agents a ON a.id = t.agent_id
@@ -561,11 +574,13 @@ class ThreadKeeper:
         for event in events:
             text = self._line(event, names)
             if text:
-                lines.append(
-                    notes.Line(event["created_at"], text, kept.get(event["attempt_id"] or "", ""))
-                    if event["event_type"] == "attempt.result_reported"
-                    else notes.Line(event["created_at"], text)
-                )
+                link = ""
+                if event["event_type"] == "attempt.result_reported":
+                    link = kept.get(event["attempt_id"] or "", "")
+                elif event["event_type"] == "question.answered":
+                    asked = loads(event["data"], {}).get("question_id")
+                    link = exchanges.get(str(asked), "")
+                lines.append(notes.Line(event["created_at"], text, link))
         need = words.need_of(
             task["state"],
             int(
@@ -666,6 +681,43 @@ class ThreadKeeper:
             )
         except (VaultError, OSError):
             log.warning("could not keep a result in the knowledge base", exc_info=True)
+            return None
+        return path
+
+    def _keep_exchange(self, task: sqlite3.Row, question: sqlite3.Row) -> str | None:
+        """A question an agent asked and what the owner answered, kept as it came, next to the
+        results. Like them it is words from outside, so it stays out of the task note itself."""
+        vault = self.app.vault
+        assert vault is not None
+        asked = str(question["text"] or "").strip()
+        answer = str(question["answer"] or "").strip()
+        if not asked or not answer:
+            return None
+        parts = [f"问：{asked}"]
+        options = [str(c) for c in loads(question["choices"], [])[:6]]
+        if options:
+            parts.append("可选：" + " / ".join(options))
+        parts.append(f"答：{answer}")
+        when = question["answered_at"] or self._now()
+        agent = question["name"]
+        try:
+            path, _ = vault.capture(
+                folder=f"agents/{agent}",
+                title=f"问答：{words.one_line(task['title'], 40)}（{agent}）",
+                body="\n\n".join(parts),
+                key=f"{question['attempt_id']}-{question['id']}",
+                front={
+                    "agent": agent,
+                    "task": task["id"],
+                    "step": question["step_id"],
+                    "source": "agent-question",
+                    "tags": ["qixu/capture"],
+                    "captured": notes.iso(when, self.app.tz),
+                },
+                day=datetime.fromtimestamp(when, self.app.tz).strftime("%Y-%m-%d"),
+            )
+        except (VaultError, OSError):
+            log.warning("could not keep a question in the knowledge base", exc_info=True)
             return None
         return path
 

@@ -390,6 +390,27 @@ M = [
         "        if task is None:\n            return False\n        self.adopt(task_id)\n",
         TK,
     ),
+    (
+        "th exchange: the answer is not linked from the task note",
+        TH,
+        '                elif event["event_type"] == "question.answered":\n',
+        "                elif False:\n",
+        TK,
+    ),
+    (
+        "th exchange: a question is kept although result capture is off",
+        TH,
+        "        if self.app.config.vault.capture_results:\n            for question in",
+        "        if True:\n            for question in",
+        TK,
+    ),
+    (
+        "th exchange: the kept question is named after what the agent asked",
+        TH,
+        "                title=f\"问答：{words.one_line(task['title'], 40)}（{agent}）\",\n",
+        '                title=f"问答：{words.one_line(asked, 40)}（{agent}）",\n',
+        TK,
+    ),
     # ---- the pace of a reply --------------------------------------------------------------
     (
         "pa chatty: the switch for bubbles does nothing",

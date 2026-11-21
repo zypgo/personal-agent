@@ -252,7 +252,7 @@ uv run pa vault lint                   # 断掉的链接、没人链接的笔记
 uv run pa vault log                    # 最近的改动，带版本号；pa vault restore 42 放回一篇，pa vault undo 运行号 撤回一整轮
 ```
 
-想放进你已有的仓库：在 `config.toml` 里写 `[vault]`，`path = "~/Documents/笔记/栖序"`。助手交回的结果，原样存在 `raw/agents/<助手名>/`；升级之后交出去的任务每个一篇，放在 `threads/`；栖序写的每一笔都能撤销，保留 180 天。详细说明见[知识库：和 Obsidian 一起用](docs/KNOWLEDGE_BASE.md)。
+想放进你已有的仓库：在 `config.toml` 里写 `[vault]`，`path = "~/Documents/笔记/栖序"`。助手交回的结果、它问你的问题和你的回答，原样存在 `raw/agents/<助手名>/`；升级之后交出去的任务每个一篇，放在 `threads/`；栖序写的每一笔都能撤销，保留 180 天。详细说明见[知识库：和 Obsidian 一起用](docs/KNOWLEDGE_BASE.md)。
 
 ### 让它一直在后台跑（macOS）
 

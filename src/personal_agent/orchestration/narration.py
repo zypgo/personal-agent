@@ -165,11 +165,11 @@ def stalled(*, state: str, title: str, agent: str, idle: float) -> str:
     who, task = named(agent), _quoted(title)
     if state == "queued":
         return (
-            f"{task}派出去 {span(idle)} 了，{who}还没接手，可能没在线。"
+            f"{task}派出去 {span(idle)}了，{who}还没接手，可能没在线。"
             "我不会重发；想放弃就告诉我，我来取消。"
         )
     return (
-        f"{task}已经 {span(idle)} 没有新动静了，{who}可能卡住了。"
+        f"{task}已经 {span(idle)}没有新动静了，{who}可能卡住了。"
         "我先不重发，免得它做两遍；想放弃就告诉我，我来取消。"
     )
 
@@ -238,7 +238,7 @@ def plan_patrol(
                 line = (
                     f"{_quoted(f.title)}还没人接手"
                     if f.state == "queued"
-                    else f"{_quoted(f.title)}已经 {span(idle)} 没有新动静"
+                    else f"{_quoted(f.title)}已经 {span(idle)}没有新动静"
                 )
                 key = f"thread:{f.task_id}:stall:{int(f.activity)}"
                 nudges.append(Nudge(f.task_id, key, text, line))

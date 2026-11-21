@@ -945,7 +945,7 @@ task_index_lines = 20            # unfinished task files (memory/state/tasks/) l
 enabled = true                   # a folder of notes that Obsidian opens as it is (see docs/KNOWLEDGE_BASE.md)
 # path = "~/Documents/笔记/栖序"  # default: the vault/ folder in this home; point it into your Obsidian vault
 # exclude = ["私人"]             # folders inside it the assistant never opens
-capture_results = true           # what connected assistants hand in is kept as a note under raw/agents/
+capture_results = true           # what connected assistants hand in, and what they asked you, is kept under raw/agents/
 
 [threads]
 notify = true                    # tell you when an assistant asks something, hands in a result or gives up

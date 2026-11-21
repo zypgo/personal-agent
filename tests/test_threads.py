@@ -126,7 +126,7 @@ def test_every_nudge_has_a_line_of_its_own_for_a_bundle():
         "「整理 Q3 财报」要你确认它停了没有",
     ]
     idle = words.plan_patrol([facts(activity=0.0)], CFG, 3600)[0][0]
-    assert idle.line == "「整理 Q3 财报」已经 60 分钟 没有新动静"
+    assert idle.line == "「整理 Q3 财报」已经 60 分钟没有新动静"
     queued = words.plan_patrol([facts(state="queued", activity=0.0)], CFG, 3600)[0][0]
     assert queued.line == "「整理 Q3 财报」还没人接手"
 
@@ -343,6 +343,68 @@ def test_a_result_is_announced_kept_in_the_knowledge_base_and_noted_in_the_day(a
     app.threads.follow()
     app.threads.record(app.db.one("SELECT * FROM orchestration_tasks"))
     assert (vault.read_text(TODAY) or "").count("Grok 交回了结果") == 1
+
+
+def answered(app, *, answer="含税", text="报价按含税还是不含税比？", choices=("含税", "不含税")):
+    desk = Desk(app)
+    desk.approve()
+    desk.claim()
+    desk.ask(text, choices=list(choices))
+    desk.store.answer_question(desk.task["id"], "q1", desk.actor, answer=answer)
+    app.threads.follow()
+    return desk
+
+
+def test_a_question_and_its_answer_are_kept_next_to_the_results_and_linked(app):
+    desk = Desk(app)
+    desk.approve()
+    desk.claim()
+    desk.ask("报价按含税还是不含税比？", choices=["含税", "不含税"])
+    app.threads.follow()
+    vault: Vault = app.vault
+    assert not [p for p in vault.entries() if p.startswith("raw/agents/")]  # not before the answer
+    desk.store.answer_question(desk.task["id"], "q1", desk.actor, answer="含税")
+    app.threads.follow()
+    [path] = [p for p in vault.entries() if p.startswith("raw/agents/Grok/")]
+    kept = vault.read(path)
+    assert kept.type == "capture" and kept.outside and "source: agent-question" in kept.text
+    assert "问：报价按含税还是不含税比？" in kept.text and "可选：含税 / 不含税" in kept.text
+    assert "答：含税" in kept.text and "task: " + desk.task["id"] in kept.text
+    [thread] = [p for p in vault.entries() if p.startswith("threads/")]
+    text = vault.read_text(thread) or ""
+    assert f"你回答了。 [[{path.removesuffix('.md')}]]" in text
+    assert "报价按含税" not in text  # what the agent wrote stays out of the task note itself
+
+
+def test_a_kept_question_is_saved_once_and_loses_any_credential(app):
+    desk = answered(app, answer="token: ghp_" + "a" * 36, text="要用哪个令牌？", choices=())
+    task = app.db.one("SELECT * FROM orchestration_tasks WHERE id=?", (desk.task["id"],))
+    app.threads.record(task)
+    app.threads.record(task)
+    [path] = [p for p in app.vault.entries() if p.startswith("raw/agents/Grok/")]
+    assert "ghp_" not in (app.vault.read_text(path) or "") and "可选" not in (
+        app.vault.read_text(path) or ""
+    )
+
+
+def test_what_an_agent_asks_does_not_name_its_note_or_reach_the_task_note(app):
+    answered(app, text="看 [[wiki/张三]] 和 [x|y#z]\n## 笔记", answer="好", choices=())
+    [path] = [p for p in app.vault.entries() if p.startswith("raw/agents/Grok/")]
+    kept = app.vault.read(path)
+    assert "张三" not in path and "张三" not in kept.title  # named after the task, not the question
+    assert "整理 Q3 财报" in kept.title and kept.outside
+    [thread] = [p for p in app.vault.entries() if p.startswith("threads/")]
+    assert "张三" not in (app.vault.read_text(thread) or "")
+
+
+def test_questions_are_not_kept_when_the_owner_turned_result_capture_off(make_app):
+    built = make_app(config=Config(vault=VaultConfig(capture_results=False)))
+    built.threads.follow()
+    answered(built)
+    assert not [p for p in built.vault.entries() if p.startswith("raw/agents/")]
+    [thread] = [p for p in built.vault.entries() if p.startswith("threads/")]
+    text = built.vault.read_text(thread) or ""
+    assert "你回答了。" in text and "[[raw/" not in text
 
 
 def test_the_note_follows_the_task_to_its_end_and_keeps_what_the_owner_wrote(app, clock):
