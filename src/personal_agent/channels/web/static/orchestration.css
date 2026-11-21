@@ -398,6 +398,33 @@
   flex: 0 0 auto;
 }
 
+/* a command to paste into a terminal: what it is for, the text, a button that copies it */
+.or-command {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.or-command[hidden] {
+  display: none;
+}
+
+.or-command > p {
+  margin: 0;
+}
+
+/* one tap selects the whole command, so it can be copied by hand where there is no clipboard */
+.or-command-text {
+  max-height: none;
+  margin: 0;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+.or-command > button {
+  justify-self: start;
+}
+
 .or-occupancy-record {
   margin: 0.9rem 0;
   padding-top: 0.9rem;

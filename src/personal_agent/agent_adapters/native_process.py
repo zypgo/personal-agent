@@ -22,12 +22,24 @@ def process_identity(pid: int) -> dict[str, Any] | None:
     """Creation time + boot identity prevent signalling a recycled PID."""
     try:
         process = psutil.Process(pid)
+        status = process.status()
+        pgid: int | None
+        try:
+            pgid = os.getpgid(pid)
+        except ProcessLookupError:
+            # macOS refuses to name the group of a process that has exited but not yet been
+            # collected by its parent. It is still a known process, and it has stopped: leaving
+            # it unnamed made every such descendant look untraceable, so a clean exit of the
+            # Codex turn could never be confirmed.
+            if status != psutil.STATUS_ZOMBIE:
+                raise
+            pgid = None
         result: dict[str, Any] = {
             "pid": pid,
             "create_time": process.create_time(),
             "boot_time": psutil.boot_time(),
-            "pgid": os.getpgid(pid),
-            "status": process.status(),
+            "pgid": pgid,
+            "status": status,
         }
         if sys.platform == "linux":
             fields = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()

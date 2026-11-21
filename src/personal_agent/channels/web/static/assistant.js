@@ -1,7 +1,7 @@
 // Cards in the chat. They show state kept by the server. The model can only propose a named
 // action; the buttons and forms here are what carry it out.
 import { buildTaskRequest, buildStepRequest, buildAnswerRequest } from "./query.js";
-import { AGENT_KINDS, statusLabel, wakeDescription, secretReferences, currentAttempt, artifactPath } from "./orchestration.js";
+import { AGENT_KINDS, statusLabel, wakeDescription, createDescription, secretReferences, currentAttempt, artifactPath } from "./orchestration.js";
 import { createAgentMark, createProductIcon } from "./product-shell.js";
 
 const CLOSED = new Set(["completed", "dismissed", "stale", "executing", "uncertain", "succeeded", "failed", "expired", "revoked", "cancelled", "cancel_requested", "cancelling", "accepted", "rejected", "stopped"]);
@@ -660,7 +660,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       key = input(entry, "webhook_key_env", "认证密钥的环境变量名", previous?.secret_env?.webhook_key || "", { maxLength: 128 });
       advanced = disclosure("已配置 Grok Routine？", node("p", "填环境变量名，不是网址或密钥。", "assistant-hint"), url.element, key.element); form.append(advanced);
     }
-    const updateMode = () => { guidance.textContent = wakeDescription({ kind: kind.read(), wake_mode: wake.read() }); if (url) { const required = kind.read() === "grok" && wake.read() === "grok_routine"; url.control.required = key.control.required = required; advanced.hidden = kind.read() !== "grok"; advanced.open = required; } };
+    const updateMode = () => { guidance.textContent = createDescription({ kind: kind.read(), wake_mode: wake.read() }); if (url) { const required = kind.read() === "grok" && wake.read() === "grok_routine"; url.control.required = key.control.required = required; advanced.hidden = kind.read() !== "grok"; advanced.open = required; } };
     const updateKind = (first = false) => {
       const options = kind.read() === "muse" ? [["manual", "手动领取"], ["native_schedule", "使用 Muse 已有的原生定时任务"]] : kind.read() === "grok" && ctx.principal?.is_admin ? [["manual", "手动领取"], ["grok_routine", "使用已配置的 Grok Routine"]] : [["manual", "由执行端主动领取"]];
       wake.control.replaceChildren(...options.map(([value, label]) => { const option = node("option", label); option.value = value; return option; }));

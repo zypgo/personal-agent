@@ -132,6 +132,11 @@
     <dialog id="secret-dialog" aria-labelledby="secret-title">
       <h2 id="secret-title"></h2><p id="secret-description" class="muted"></p>
       <label class="sr-only" for="secret-value">一次性代码或链接</label><textarea id="secret-value" readonly rows="3" spellcheck="false"></textarea>
+      <div id="secret-command-box" class="or-command" hidden>
+        <p id="secret-command-label" class="hint"></p>
+        <pre id="secret-command" class="or-command-text" tabindex="0" aria-labelledby="secret-command-label"></pre>
+        <button id="secret-copy-command" class="ghost" type="button">复制命令</button>
+      </div>
       <p id="secret-extra" class="hint"></p><div class="actions"><button id="secret-copy" class="primary" type="button">复制</button><button id="secret-close" type="button">完成</button></div>
     </dialog>
     <dialog id="knowledge-history-dialog" class="history-dialog" aria-labelledby="knowledge-history-title">

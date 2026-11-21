@@ -237,9 +237,21 @@ def host(
 ) -> None:
     """Run approved tasks on this computer (macOS or Linux)."""
     import asyncio
+    import shutil
 
     from personal_agent.agent_adapters.bridge import BridgeError, WorkerBridge, public_result
-    from personal_agent.agent_adapters.host import AgentHost, provider_for
+    from personal_agent.agent_adapters.host import AgentHost, program_for, provider_for
+
+    # Say so now. Found only when a task arrives, a missing program would leave that task
+    # claimed and its outcome marked unknown.
+    program = program_for(provider, executable)
+    if program is not None and shutil.which(program) is None:
+        typer.echo(
+            f"Cannot find {program!r} on this computer. Install it and sign in first, "
+            "or add --executable followed by its full path.",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     async def run() -> None:
         worker = WorkerBridge(ctx.obj)

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { FakeElement, elements, find, toHtml } from "./fake_dom.mjs";
-import { createOrchestrationUI, buildCollaborationTask, secretReferences, wakeDescription, artifactPath, statusLabel, wakeStatus, connectionStatus, threadOf, arrangeThreads } from "../../src/personal_agent/channels/web/static/orchestration.js";
+import { createOrchestrationUI, buildCollaborationTask, secretReferences, wakeDescription, createDescription, hostCommands, artifactPath, statusLabel, wakeStatus, connectionStatus, threadOf, arrangeThreads } from "../../src/personal_agent/channels/web/static/orchestration.js";
 
 class Element extends FakeElement {
   constructor(tag) {
@@ -25,9 +25,9 @@ const taskFixture=()=>({
   id:"task-a",title:"研究计划",actor_id:"alice",visibility:"private",state:"planned",revision:3,plan_hash:"confirmed-plan",created_at:100,
   steps:[{id:"s1",agent_id:"grok-a",prompt:"研究市场",acceptance:"注明来源",required:true,depends_on:[],state:"planned",attempt:null}],questions:[],
 });
-function setup({task=taskFixture(),agents=agentsFixture(),principal="alice",role="member",admin=false,respond,confirm=true}={}) {
+function setup({task=taskFixture(),agents=agentsFixture(),principal="alice",role="member",admin=false,respond,confirm=true,documentExtras={}}={}) {
   const ids=new Map();const get=id=>{if(!ids.has(id))ids.set(id,new Element("div"));return ids.get(id);};
-  const document={createElement:tag=>new Element(tag),getElementById:get,activeElement:null};
+  const document={createElement:tag=>new Element(tag),getElementById:get,activeElement:null,...documentExtras};
   const context={epoch:0,space:"space-a",me:{principal:{id:principal,display_name:"Alice",is_admin:admin},role,spaces:[{id:"space-a",kind:"project"}]}};
   const calls=[],notices=[],secrets=[],downloads=[],opened=[];
   const api=async(path,options={})=>{
@@ -44,6 +44,8 @@ function setup({task=taskFixture(),agents=agentsFixture(),principal="alice",role
   return {ui,get,document,context,calls,notices,secrets,downloads,opened,task,agents};
 }
 const button=(root,text)=>find(root,"button").find(el=>el.textContent===text);
+/** The blocks of a terminal command on a card (the protocol text in the fold is a `pre` too). */
+const commandTexts=root=>find(root,"pre").filter(el=>el.className.split(" ").includes("or-command-text"));
 const submit=async form=>form.listeners.get("submit")({preventDefault(){}});
 const click=async el=>el.listeners.get("click")();
 
@@ -74,7 +76,11 @@ test("credential references reject raw URLs, secrets and shell expressions",()=>
 test("Muse wake labels distinguish manual and existing native schedules",()=>{
   assert.match(wakeDescription({kind:"muse",wake_mode:"manual"}),/手动领取/);
   assert.match(wakeDescription({kind:"muse",wake_mode:"native_schedule"}),/原生定时领取/);
-  assert.match(wakeDescription({kind:"cursor",wake_mode:"manual"}),/自有电脑执行/);
+  assert.equal(wakeDescription({kind:"cursor",wake_mode:"manual"}),"自有电脑执行 · 要在你的电脑上运行 pa 命令行，才会领取任务。");
+  assert.equal(wakeDescription({kind:"codex",wake_mode:"manual"}),wakeDescription({kind:"cursor",wake_mode:"manual"}));
+  // Before the connection exists the page says what happens next; afterwards it does not repeat it.
+  assert.equal(createDescription({kind:"codex",wake_mode:"manual"}),"自有电脑执行 · 要在你的电脑上运行 pa 命令行，才会领取任务。保存后，页面会给出连接用的命令。");
+  for(const agent of [{kind:"muse",wake_mode:"manual"},{kind:"grok",wake_mode:"grok_routine"},{kind:"personal_agent",wake_mode:"manual"}])assert.equal(createDescription(agent),wakeDescription(agent));
   assert.equal(statusLabel("planned"),"待确认计划");assert.equal(statusLabel("private_internal_code"),"等待状态更新");
 });
 
@@ -238,8 +244,162 @@ test("connection guide shows server-provided MCP, OpenAPI and Bridge addresses w
   assert.deepEqual(addresses,["https://example.invalid/mcp","https://example.invalid/openapi.json","https://example.invalid/bridge.py"]);
   assert.equal(find(guide,"button").filter(el=>el.textContent==="复制").length,3);
   assert.doesNotMatch(guide.textContent,/must-not-render/);
+  // The cloud agents keep their guide as it was: no terminal command, no fold around the addresses.
+  assert.equal(commandTexts(guide).length,0);assert.equal(find(guide,"details").length,0);
+  assert.match(guide.textContent,/把凭据存成 Bearer Token/);assert.doesNotMatch(guide.textContent,/pa 命令行|自有电脑/);
   await click(button(guide,"下载 OpenAPI 定义"));assert.deepEqual(downloads,[["/api/v4/agents/grok-a/openapi.json","Grok 研究-openapi.json"]]);
   ui.clear();assert.equal(get("agents-list").textContent,"");
+});
+
+// Codex and Cursor work on the person's own computer. The page hands over the commands for it, with
+// the address and ids of this very connection filled in; only the credential is left to the person.
+const HOST = {base_url:"https://agent.example.test",agent_id:"ag0123456789abcdef0123456789abcdef",space_id:"personal-owner"};
+const codexAgent = () => [{id:HOST.agent_id,name:"我的 Codex",kind:"codex",owner_id:"alice",state:"active",wake_mode:"manual"}];
+const created = (extra = {}) => (path, options) => path === "/api/v4/agents" && options.method === "POST"
+  ? {agent:{id:HOST.agent_id,owner_id:"alice",...options.body},worker_token:"single-display-credential",connection:{...HOST,instructions:"协议说明",mcp_url:"https://agent.example.test/api/v4/mcp",...extra}}
+  : undefined;
+async function createConnection(kind, name, respond) {
+  const made = setup({respond});await made.ui.loadAgents();
+  const form = find(made.get("agent-create-content"),"form")[0];
+  form.elements.namedItem("kind").value = kind;form.elements.namedItem("name").value = name;await submit(form);
+  return made;
+}
+
+test("the connection form says what happens next only for the kinds that get a command",async()=>{
+  const {ui,get}=setup();await ui.loadAgents();
+  const form=find(get("agent-create-content"),"form")[0],kind=form.elements.namedItem("kind");
+  const note=()=>find(get("agent-create-content"),"p").find(el=>el.className==="or-connection-note").textContent;
+  for(const value of ["codex","cursor","muse","grok","personal_agent"]) {
+    kind.value=value;kind.listeners.get("change")();
+    assert.equal(note(),createDescription({kind:value,wake_mode:"manual"}),value);
+  }
+  kind.value="codex";kind.listeners.get("change")();
+  assert.match(note(),/保存后，页面会给出连接用的命令。$/);
+  kind.value="grok";kind.listeners.get("change")();
+  assert.doesNotMatch(note(),/保存后/);
+});
+
+test("Codex and Cursor get the commands with this connection's address and ids in them, and nothing secret",()=>{
+  const codex = hostCommands("codex",HOST);
+  assert.equal(codex.again,'pa agents --home ~/.qixu/codex-01234567 host --provider codex --cwd "$PWD" --watch');
+  assert.equal(codex.first,[
+    "pa agents --home ~/.qixu/codex-01234567 setup --token-stdin \\",
+    "  --url https://agent.example.test --agent ag0123456789abcdef0123456789abcdef --space personal-owner \\",
+    '  && pa agents --home ~/.qixu/codex-01234567 host --provider codex --cwd "$PWD" --watch',
+  ].join("\n"));
+  // The credential is typed in when `setup` asks for it: never an argument, never in the history.
+  assert.match(codex.first,/--token-stdin/);assert.doesNotMatch(codex.first,/--token(?!-stdin)|--token-env|<<<|echo |pbpaste/);
+  const cursor = hostCommands("cursor",HOST);
+  assert.match(cursor.first,/--home ~\/\.qixu\/cursor-01234567 setup/);assert.match(cursor.again,/host --provider cursor --cwd/);
+  // Another connection of the same kind keeps its own state directory.
+  assert.notEqual(hostCommands("codex",{...HOST,agent_id:"agffffffffffffffffffffffffffffffff"}).again,codex.again);
+  for (const kind of ["grok","muse","personal_agent","constructor","__proto__","",undefined])assert.equal(hostCommands(kind,HOST),null,String(kind));
+  assert.equal(hostCommands("codex",null),null);assert.equal(hostCommands("codex",{}),null);
+});
+
+test("the commands are made only from an address a computer connects to and from plain ids, since they are pasted into a terminal",()=>{
+  assert.match(hostCommands("codex",{...HOST,base_url:"http://127.0.0.1:18765"}).first,/--url http:\/\/127\.0\.0\.1:18765 /);
+  assert.match(hostCommands("codex",{...HOST,base_url:"http://localhost:8765/"}).first,/--url http:\/\/localhost:8765 /);
+  assert.match(hostCommands("codex",{...HOST,base_url:"http://[::1]:8765"}).first,/--url http:\/\/\[::1\]:8765 /);
+  for (const base_url of ["http://192.168.1.5:8765","http://agent.example.test","https://user:pw@agent.example.test","https://:pw@agent.example.test","https://agent.example.test/app","https://agent.example.test/?x=1","https://agent.example.test/#x","ftp://agent.example.test","not a url","",undefined,42,null])
+    assert.equal(hostCommands("codex",{...HOST,base_url}),null,String(base_url));
+  for (const bad of ["a b","a;b","a$(id)","a`id`","a\nb","a'b",'a"b',"a&b","a|b","a>b","a\\b","../x","a.b","",undefined,7,null,"x".repeat(81)]) {
+    assert.equal(hostCommands("codex",{...HOST,agent_id:bad}),null,`agent ${String(bad)}`);
+    assert.equal(hostCommands("codex",{...HOST,space_id:bad}),null,`space ${String(bad)}`);
+  }
+  assert.ok(hostCommands("codex",{...HOST,agent_id:"x".repeat(80),space_id:"s_0-9_A"}));
+});
+
+test("a new Codex connection shows the credential once, together with the command for the computer that will do the work",async()=>{
+  const {secrets,get}=await createConnection("codex","我的 Codex",created());
+  assert.equal(secrets.length,1);
+  const [title,value,description,extra,options] = secrets[0];
+  assert.equal(title,"我的 Codex · 连接凭据");assert.equal(value,"single-display-credential");
+  assert.equal(options.command.text,hostCommands("codex",HOST).first);
+  assert.match(options.command.label,/cd 到你的 Git 项目/);assert.match(options.command.label,/等凭据/);
+  assert.match(extra,/Codex，并且登录过/);assert.match(extra,/pa 命令行/);assert.match(extra,/第二条命令/);
+  // None of the cloud-agent wording (Bearer token, MCP address) belongs to this kind.
+  assert.doesNotMatch(`${description}${extra}${options.command.label}`,/MCP|Bearer|OpenAPI/);
+  assert.doesNotMatch(options.command.text+get("agents-list").textContent,/single-display-credential/);
+  const cursor = await createConnection("cursor","我的 Cursor",created());
+  assert.match(cursor.secrets[0][3],/agent login/);assert.doesNotMatch(cursor.secrets[0][3],/--executable/);
+  assert.match(cursor.secrets[0][4].command.text,/--provider cursor/);
+});
+
+test("a Codex connection on an address the computer would not connect to says so instead of showing a command that cannot work",async()=>{
+  const {secrets}=await createConnection("codex","我的 Codex",created({base_url:"http://192.168.1.5:8765"}));
+  assert.equal(secrets.length,1);assert.equal(secrets[0].length,4);
+  assert.equal(secrets[0][1],"single-display-credential");assert.match(secrets[0][3],/不是 https/);assert.match(secrets[0][3],/重新生成连接凭据/);
+});
+
+test("Grok and Muse connections keep their addresses and get no terminal command",async()=>{
+  for (const kind of ["grok","muse"]) {
+    const {secrets}=await createConnection(kind,"助手",created());
+    assert.equal(secrets[0].length,4);assert.match(secrets[0][3],/MCP 地址：https:\/\/agent\.example\.test\/api\/v4\/mcp/);
+  }
+});
+
+test("regenerating a Codex credential shows the command again",async()=>{
+  const agents = codexAgent();
+  const {ui,get,secrets}=setup({agents,respond:path=>path.endsWith("/token") ? {agent:agents[0],worker_token:"rotated-single-display",connection:HOST} : undefined});
+  await ui.loadAgents();await click(button(get("agents-list"),"重新生成连接凭据"));
+  assert.equal(secrets.length,1);assert.equal(secrets[0][1],"rotated-single-display");
+  assert.equal(secrets[0][4].command.text,hostCommands("codex",HOST).first);
+});
+
+test("the card of a Codex connection shows both commands, and keeps the other ways in a fold",async()=>{
+  const copied = [];
+  Object.defineProperty(globalThis.navigator,"clipboard",{value:{writeText:async text=>{copied.push(text);}},configurable:true});
+  try {
+    const {ui,get,notices}=setup({agents:codexAgent(),respond:path=>path===`/api/v4/agents/${HOST.agent_id}` ? {connection:{...HOST,mcp_url:"https://agent.example.test/mcp",instructions:"协议说明",worker_token:"must-not-render"}} : undefined});
+    await ui.loadAgents();const guide=find(get("agents-list"),"details")[0];guide.open=true;await guide.listeners.get("toggle")();
+    const commands = hostCommands("codex",HOST);
+    const boxes = commandTexts(guide);
+    assert.deepEqual(boxes.map(el=>el.textContent),[commands.first,commands.again]);
+    assert.deepEqual(boxes.map(el=>el.getAttribute("aria-label")),["第一次的命令","以后的命令"]);
+    assert.ok(boxes.every(el=>el.tabIndex===0),"a keyboard can reach them to select them");
+    assert.match(guide.textContent,/第一次：先 cd 到你的 Git 项目/);assert.match(guide.textContent,/以后：这台电脑已经连接过/);
+    assert.match(guide.textContent,/Codex，并且登录过/);assert.match(guide.textContent,/凭据只在创建时显示一次/);assert.match(guide.textContent,/pa 命令行/);
+    assert.doesNotMatch(guide.textContent,/must-not-render/);
+    const fold = find(guide,"details").find(el=>el.children[0]?.textContent.startsWith("其他接入方式"));
+    assert.ok(fold);assert.deepEqual(find(fold,"input").map(el=>el.value),["https://agent.example.test/mcp"]);
+    assert.equal(find(guide,"input").length,1);
+    const copies = find(guide,"button").filter(el=>el.textContent==="复制命令");assert.equal(copies.length,2);
+    await click(copies[0]);await click(copies[1]);assert.deepEqual(copied,[commands.first,commands.again]);
+    assert.deepEqual(notices.map(args=>args[0]),["已复制命令。","已复制命令。"]);
+  } finally { delete globalThis.navigator.clipboard; }
+});
+
+test("the card of a Codex connection works without any cloud address, and without a usable server address",async()=>{
+  const bare = setup({agents:codexAgent(),respond:path=>path===`/api/v4/agents/${HOST.agent_id}` ? {connection:HOST} : undefined});
+  await bare.ui.loadAgents();const guide=find(bare.get("agents-list"),"details")[0];guide.open=true;await guide.listeners.get("toggle")();
+  assert.equal(commandTexts(guide).length,2);assert.equal(find(guide,"details").length,0);assert.doesNotMatch(guide.textContent,/暂不可用/);
+  const lan = setup({agents:codexAgent(),respond:path=>path===`/api/v4/agents/${HOST.agent_id}` ? {connection:{...HOST,base_url:"http://192.168.1.5:8765"}} : undefined});
+  await lan.ui.loadAgents();const other=find(lan.get("agents-list"),"details")[0];other.open=true;await other.listeners.get("toggle")();
+  assert.equal(commandTexts(other).length,0);assert.match(other.textContent,/不是 https/);
+});
+
+test("on a page with no clipboard the copy button selects the command instead",async()=>{
+  const picked=[];
+  const range={selectNodeContents:el=>picked.push(["range",el])};
+  const selection={removeAllRanges:()=>picked.push(["clear"]),addRange:given=>picked.push(["add",given])};
+  const connection=path=>path===`/api/v4/agents/${HOST.agent_id}` ? {connection:HOST} : undefined;
+  const select=setup({agents:codexAgent(),respond:connection,documentExtras:{createRange:()=>range,defaultView:{getSelection:()=>selection}}});
+  await select.ui.loadAgents();const guide=find(select.get("agents-list"),"details")[0];guide.open=true;await guide.listeners.get("toggle")();
+  const [first,again]=commandTexts(guide);const copies=find(guide,"button").filter(el=>el.textContent==="复制命令");
+  await click(copies[1]);
+  assert.deepEqual(picked.map(([what])=>what),["range","clear","add"]);assert.equal(picked[0][1],again,"the command that belongs to the button");assert.equal(picked[2][1],range);
+  assert.deepEqual(select.notices.map(args=>args[0]),["命令已选中，请复制。"]);assert.notEqual(first,again);
+  // A page that can neither copy nor select says what to do by hand.
+  const none=setup({agents:codexAgent(),respond:connection});
+  await none.ui.loadAgents();const bare=find(none.get("agents-list"),"details")[0];bare.open=true;await bare.listeners.get("toggle")();
+  await click(find(bare,"button").find(el=>el.textContent==="复制命令"));
+  assert.deepEqual(none.notices,[["这里复制不了，请手动选中上面的命令。"]]);
+});
+
+test("a connection of the app's own id format gets a tidy state directory",()=>{
+  assert.equal(hostCommands("codex",{...HOST,agent_id:"ag_41f6bec786986ebbf1bb7773"}).again,'pa agents --home ~/.qixu/codex-41f6bec7 host --provider codex --cwd "$PWD" --watch');
+  assert.match(hostCommands("cursor",{...HOST,agent_id:"ag_0a1b2c3d4e5f"}).first,/--home ~\/\.qixu\/cursor-0a1b2c3d setup/);
 });
 
 test("resource owner can clear opaque occupancy without fetching another member's private task",async()=>{

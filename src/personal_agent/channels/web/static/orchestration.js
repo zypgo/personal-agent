@@ -3,6 +3,44 @@
 /** @typedef {import('./orchestration').Task} Task */
 
 export const AGENT_KINDS = Object.freeze({grok:"Grok",muse:"Meta Muse",personal_agent:"栖序",codex:"Codex",cursor:"Cursor"});
+
+// Codex and Cursor do their work on the person's own computer, through `pa agents host`. The page
+// can fill in everything except the credential. That is shown once and must not land in a command
+// line or the shell's history, so `setup` reads it from the keyboard instead.
+const HOST_KINDS = new Set(["codex","cursor"]);
+const HOST_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const LOOPBACK = new Set(["127.0.0.1","localhost","[::1]"]);
+const HOST_NOTES = Object.freeze({
+  codex:"这台电脑要装好 Codex，并且登录过。终端找不到 codex 时，在 host 那一行末尾加上 --executable 和 codex 的完整路径。",
+  cursor:"这台电脑要装好 Cursor CLI，并且先在终端运行一次 agent login。",
+});
+const HOST_INSTALL = "这台电脑还要装好 pa 命令行，步骤见文档「Codex / Cursor / 栖序 Host」。";
+const NO_COMMAND = "现在生成不了连接命令：这个服务的对外地址不是 https，或者还没设置。设置好以后，在这个连接的「接入指引与地址」里就能看到。";
+
+/**
+ * What to type on the computer that will do the work: the first time (connect, then start) and
+ * every time after that (start). Null for any other kind of agent, and when the server's address
+ * is one a computer would not connect to (https, or this very computer), or one of the ids is
+ * not made of plain characters: the text is meant to be pasted into a terminal.
+ * @param {string} kind
+ * @param {{base_url?: unknown, agent_id?: unknown, space_id?: unknown}|null|undefined} connection
+ * @returns {{first: string, again: string}|null}
+ */
+export function hostCommands(kind, connection) {
+  if (!HOST_KINDS.has(kind) || !connection) return null;
+  const {base_url:base,agent_id:agent,space_id:space}=connection;
+  if (typeof base !== "string" || typeof agent !== "string" || typeof space !== "string") return null;
+  if (!HOST_ID.test(agent) || !HOST_ID.test(space)) return null;
+  let url;
+  try { url=new URL(base); } catch { return null; }
+  const secure=url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK.has(url.hostname));
+  if (!secure || url.username || url.password || url.pathname !== "/" || url.search || url.hash) return null;
+  const home=`~/.qixu/${kind}-${agent.replace(/^ag_?/,"").slice(0,8)}`;
+  const start=`pa agents --home ${home} host --provider ${kind} --cwd "$PWD" --watch`;
+  const connect=`pa agents --home ${home} setup --token-stdin \\\n  --url ${url.origin} --agent ${agent} --space ${space}`;
+  return {first:`${connect} \\\n  && ${start}`,again:start};
+}
+
 const STATES = Object.freeze({
   planned:"待确认计划",draft:"待确认计划",awaiting_approval:"待确认计划",waiting_approval:"等待批准",approved:"已批准",
   pending:"等待前序验收",blocked:"等待前序验收",ready:"等待领取",queued:"等待领取",waiting_claim:"等待领取",
@@ -63,8 +101,13 @@ export function wakeDescription(agent) {
   if (agent.kind === "grok") return ["grok_routine","verified_hook"].includes(agent.wake_mode)
     ? "Routine 触发 · 通过你配置的 Grok Routine 通知它来领取。"
     : "手动领取 · 在 Grok 启动已连接的任务工具后领取。";
-  if (["codex","cursor"].includes(agent.kind)) return "自有电脑执行 · 需要一个能领取任务的执行端。";
+  if (HOST_KINDS.has(agent.kind)) return "自有电脑执行 · 要在你的电脑上运行 pa 命令行，才会领取任务。";
   return "由你自己的栖序执行端领取任务并回传结果。";
+}
+
+/** The same sentence, for a connection that is about to be made. */
+export function createDescription(agent) {
+  return HOST_KINDS.has(agent.kind) ? `${wakeDescription(agent)}保存后，页面会给出连接用的命令。` : wakeDescription(agent);
 }
 
 /** Build the task from the form fields. */
@@ -173,9 +216,38 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     });
   }
   function disclosure(title,text) {const details=node("details","","or-disclosure");details.append(node("summary",title),node("p",text,"hint"));return details;}
+  /** Select a block of text, so it can be copied by hand on a page that has no clipboard. */
+  function selectText(el) {
+    const selection=(doc.defaultView || globalThis).getSelection?.(),range=doc.createRange?.();
+    if(!selection || !range)return false;
+    range.selectNodeContents(el);selection.removeAllRanges();selection.addRange(range);return true;
+  }
+  /** A command to paste into a terminal: what it is for, the text itself, and a button that copies it. */
+  function commandBox(name,about,text) {
+    const row=node("div","","or-command"),control=node("pre",text,"or-command-text");
+    control.tabIndex=0;control.setAttribute("aria-label",name);
+    row.append(node("p",about,"hint"),control,action(node("button","复制命令","ghost"),async()=>{
+      if(globalThis.navigator?.clipboard){await globalThis.navigator.clipboard.writeText(text);notice("已复制命令。");}
+      else notice(selectText(control) ? "命令已选中，请复制。" : "这里复制不了，请手动选中上面的命令。");
+    }));
+    return row;
+  }
   function secretDialog(data,agent) {
     if(!data.worker_token) {notice("连接已保存，但没有返回凭据。可以在这个 Agent 下重新生成。",true);return;}
     const connection=data.connection || {};
+    if(HOST_KINDS.has(agent.kind)) {
+      const commands=hostCommands(agent.kind,connection);
+      const notes=[HOST_NOTES[agent.kind],HOST_INSTALL];
+      if(!commands) {
+        showSecret(`${agent.name} · 连接凭据`,data.worker_token,"凭据只显示这一次，请先复制。",
+          [NO_COMMAND,"要换凭据，点「重新生成连接凭据」。",...notes].join("\n\n"));
+        return;
+      }
+      showSecret(`${agent.name} · 连接凭据`,data.worker_token,"凭据只显示这一次，关掉就看不到了。按下面的命令，把你的电脑接进来。",
+        [...notes,"以后重新启动，不用再连接：在这个连接的「接入指引与地址」里复制第二条命令。"].join("\n"),
+        {command:{label:"在要干活的电脑上，先 cd 到你的 Git 项目（不能有没提交的改动），再运行这条。它会停下来等凭据：点最下面的「复制」，粘贴进去，按回车。",text:commands.first}});
+      return;
+    }
     const lines=[wakeDescription(agent)];
     lines.push("把凭据存成 Bearer Token，再用下面的地址接入。地址也能在 Agent 卡片的「接入指引」里再看。");
     for(const [name,labelText] of [["mcp_url","MCP 地址"],["openapi_url","OpenAPI 地址"],["bridge_url","Python Bridge 下载地址"]])if(typeof connection[name] === "string")lines.push(`${labelText}：${connection[name]}`);
@@ -282,9 +354,22 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     const content=node("div");details.append(node("summary","接入指引与地址"),content);
     const render=()=>{
       const connection=state.connections.get(agent.id);content.replaceChildren();
-      content.append(node("p","在执行环境里选一种接入方式，把凭据存成 Bearer Token。","hint"));
-      content.append(node("p",wakeDescription(agent),"hint"));
+      const host=HOST_KINDS.has(agent.kind);
+      content.append(node("p",host ? "在要干活的电脑上，用 pa 命令行接入。" : "在执行环境里选一种接入方式，把凭据存成 Bearer Token。","hint"));
+      if(!host)content.append(node("p",wakeDescription(agent),"hint"));
       if(!connection){content.append(node("p","正在读取接入地址…","hint"));return;}
+      const addresses=["mcp_url","openapi_url","bridge_url"].some(name=>connection[name]);
+      let more=content;
+      if(host) {
+        const commands=hostCommands(agent.kind,connection);
+        if(commands)content.append(
+          commandBox("第一次的命令","第一次：先 cd 到你的 Git 项目（不能有没提交的改动），再运行这条。它会停下来等凭据：粘贴进去，按回车。",commands.first),
+          commandBox("以后的命令","以后：这台电脑已经连接过，直接开始接任务。",commands.again));
+        else content.append(node("p",NO_COMMAND,"hint"));
+        content.append(node("p",HOST_NOTES[agent.kind],"hint"),node("p","凭据只在创建时显示一次。丢了就点「重新生成连接凭据」。","hint"),node("p",HOST_INSTALL,"hint"));
+        if(!addresses)return;
+        more=node("details","","or-disclosure");more.append(node("summary","其他接入方式：MCP、OpenAPI、Python 脚本"));content.append(more);
+      }
       const copyField=(title,text)=>{
         const row=node("div","","or-address"),control=input("",{value:text,maxLength:4000});control.readOnly=true;control.setAttribute("aria-label",title);
         row.append(label(title,control),action(node("button","复制","ghost"),async()=>{
@@ -293,18 +378,18 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
         }));return row;
       };
       for(const [fieldName,title] of [["mcp_url","支持 MCP：添加此服务器"],["openapi_url","支持 HTTP 工具：导入此 OpenAPI"],["bridge_url","支持 Python：下载独立 Bridge 脚本"]]) {
-        if(typeof connection[fieldName] === "string")content.append(copyField(title,connection[fieldName]));
+        if(typeof connection[fieldName] === "string")more.append(copyField(title,connection[fieldName]));
       }
       const schemaPath=`/api/v4/agents/${encodeURIComponent(agent.id)}/openapi.json`;
       if(connection.openapi_download_path===schemaPath && downloadArtifact) {
-        content.append(action(node("button","下载 OpenAPI 定义","ghost"),async()=>downloadArtifact(schemaPath,`${agent.name}-openapi.json`)));
-        content.append(node("p","读取这个地址需要 Bearer 凭据。也可以下载定义文件，导入到 Muse 这类支持导入的工具里。","hint"));
+        more.append(action(node("button","下载 OpenAPI 定义","ghost"),async()=>downloadArtifact(schemaPath,`${agent.name}-openapi.json`)));
+        more.append(node("p","读取这个地址需要 Bearer 凭据。也可以下载定义文件，导入到 Muse 这类支持导入的工具里。","hint"));
       }
-      if(connection.bridge_url)content.append(node("p","下载后运行 python bridge.py --help 查看用法。","hint"));
+      if(connection.bridge_url)more.append(node("p","下载后运行 python bridge.py --help 查看用法。","hint"));
       if(typeof connection.instructions === "string") {
-        const instructions=node("details","","or-disclosure");instructions.append(node("summary","给执行 Agent 的协议说明"),node("pre",connection.instructions));content.append(instructions);
+        const instructions=node("details","","or-disclosure");instructions.append(node("summary","给执行 Agent 的协议说明"),node("pre",connection.instructions));more.append(instructions);
       }
-      if(!["mcp_url","openapi_url","bridge_url"].some(name=>connection[name]))content.append(node("p","接入地址暂不可用，请刷新后重试。","hint"));
+      if(!addresses)content.append(node("p","接入地址暂不可用，请刷新后重试。","hint"));
     };
     details.addEventListener("toggle",async()=>{
       if(ownerScope!==key() || details.isConnected===false)return;
@@ -314,7 +399,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       const before=key();
       try {
         const response=await request(`/api/v4/agents/${encodeURIComponent(agent.id)}`);
-        const connection={};for(const name of ["mcp_url","openapi_url","openapi_download_path","bridge_url","instructions"])if(typeof response.connection?.[name]==="string")connection[name]=response.connection[name];
+        const connection={};for(const name of ["base_url","agent_id","space_id","mcp_url","openapi_url","openapi_download_path","bridge_url","instructions"])if(typeof response.connection?.[name]==="string")connection[name]=response.connection[name];
         state.connections.set(agent.id,connection);render();
       }catch(error){if(before===key()){content.replaceChildren(node("p","接入地址读取失败。收起后再打开可重试。","hint"));reportError(error);}}
     });
@@ -349,7 +434,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       envDetails.append(node("p","填服务器上已设置的环境变量名。Routine 需要网址和认证密钥两个变量。","hint"),label("Routine 网址的环境变量名",url),label("认证密钥的环境变量名",secret));form.append(envDetails);
     } else form.append(node("p","要用 Routine 触发，需要实例管理员来配置。","hint"));
     const refreshMode=()=>{
-      guidance.textContent=wakeDescription({kind:kind.value,wake_mode:mode.value});
+      guidance.textContent=createDescription({kind:kind.value,wake_mode:mode.value});
       if(envDetails){const required=mode.value==="grok_routine";envDetails.open=required;field(form,"webhook_url_env").required=required;field(form,"webhook_key_env").required=required;}
     };
     const refreshKind=()=>{

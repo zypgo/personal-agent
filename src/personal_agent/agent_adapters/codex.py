@@ -18,6 +18,76 @@ from personal_agent.agent_adapters.native_process import NativeProcess
 
 MAX_TEXT = 240_000
 
+COMMAND_APPROVAL = "item/commandExecution/requestApproval"
+FILE_APPROVAL = "item/fileChange/requestApproval"
+
+# The only answers a person can give to an approval, and what each one tells Codex.
+# "拒绝" skips this one step; "拒绝并停止" ends the whole attempt.
+APPROVAL_ANSWERS = {"允许": "accept", "拒绝": "decline", "拒绝并停止": "cancel"}
+
+# What each kind of request shows. Fields that only identify a request on the wire are left out;
+# anything else Codex sends is still shown, word for word, after these.
+_WIRE_FIELDS = frozenset(
+    {
+        "approvalId",
+        "availableDecisions",
+        "commandActions",
+        "environmentId",
+        "itemId",
+        "kind",
+        "proposedExecpolicyAmendment",
+        "proposedNetworkPolicyAmendments",
+        "startedAtMs",
+        "threadId",
+        "turnId",
+    }
+)
+_COMMAND_FACTS = (
+    ("cwd", "在这个目录里"),
+    ("reason", "原因"),
+    ("networkApprovalContext", "需要联网"),
+)
+_FILE_FACTS = (("grantRoot", "想要写入的范围"), ("reason", "原因"))
+
+
+def _facts(params: dict[str, Any], labels: Sequence[tuple[str, str]]) -> list[str]:
+    return [
+        f"{label}：{value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)}"
+        for key, label in labels
+        if (value := params.get(key)) is not None
+    ]
+
+
+def approval_text(method: str, params: dict[str, Any]) -> str:
+    """What the person is asked to approve, in plain words.
+
+    A command is always shown whole, never shortened. A request this function does not
+    recognise is shown exactly as Codex sent it.
+    """
+    raw = f"Codex 请求批准（{method}）：\n{json.dumps(params, ensure_ascii=False)}"
+    if method == COMMAND_APPROVAL:
+        command = params.get("command")
+        if params.get("kind", "command") != "command" or not isinstance(command, str):
+            return raw
+        if not command.strip():
+            return raw
+        facts = _facts(params, _COMMAND_FACTS)
+        text = "\n".join(["Codex 想运行这条命令：", command, *(["", *facts] if facts else [])])
+        shown = {"command", *(key for key, _ in _COMMAND_FACTS)}
+    elif method == FILE_APPROVAL:
+        text = "\n".join(["Codex 想修改文件。", *_facts(params, _FILE_FACTS)])
+        shown = {key for key, _ in _FILE_FACTS}
+    else:
+        return raw
+    extras = {
+        key: value
+        for key, value in params.items()
+        if key not in _WIRE_FIELDS and key not in shown and value is not None
+    }
+    if extras:
+        text += f"\n\n其他信息：{json.dumps(extras, ensure_ascii=False)}"
+    return text
+
 
 class BeforeTurnCancelled(Exception):
     pass
@@ -183,25 +253,16 @@ class CodexProvider:
             question_id = (
                 "codex_" + hashlib.sha256((request.run_id + identity).encode()).hexdigest()[:24]
             )
-            if method in {
-                "item/commandExecution/requestApproval",
-                "item/fileChange/requestApproval",
-            }:
+            if method in {COMMAND_APPROVAL, FILE_APPROVAL}:
                 if cancel.is_set():
                     return {"decision": "cancel"}
-                details = json.dumps(params, ensure_ascii=False)
-                if len(details) > 40_000:
+                if len(json.dumps(params, ensure_ascii=False)) > 40_000:
                     return {"decision": "decline"}
-                decision = await callbacks.question(
-                    question_id,
-                    f"Codex native approval ({method}):\n{details}",
-                    ["accept", "decline", "cancel"],
+                answer = await callbacks.question(
+                    question_id, approval_text(method, params), list(APPROVAL_ANSWERS)
                 )
-                return {
-                    "decision": decision
-                    if decision in {"accept", "decline", "cancel"} and not cancel.is_set()
-                    else "cancel"
-                }
+                decision = APPROVAL_ANSWERS.get(answer or "")
+                return {"decision": decision if decision and not cancel.is_set() else "cancel"}
             if method == "item/tool/requestUserInput":
                 answers: dict[str, Any] = {}
                 for index, item in enumerate(params.get("questions", [])):

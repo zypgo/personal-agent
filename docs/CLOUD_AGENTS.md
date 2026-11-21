@@ -191,7 +191,33 @@ python3 /workspace/muse_vault_worker.py \
 
 ## Codex / Cursor / 栖序 Host
 
-Host 运行在你自己的 Linux 或 macOS 电脑上，要用完整安装的栖序；云端的 Grok / Muse 仍然只需要单文件桥接。Host 沿用同一个 worker token，以及同样的领取、租约、问答和候选结果接口。还没有在真实的 Codex / Cursor 账号上验证过，装好之后请在目标电脑上自己试一遍。
+Host 运行在你自己的 Linux 或 macOS 电脑上，要用完整安装的栖序；云端的 Grok / Muse 仍然只需要单文件桥接。Host 沿用同一个 worker token，以及同样的领取、租约、问答和候选结果接口。在 macOS 上，用 ChatGPT 应用自带的 Codex（0.169）完整跑通过一个小任务：领取、问你批准、改文件、交回补丁。Cursor 和 Linux 还没有在真实账号上验证过，装好之后请在目标电脑上自己试一遍。
+
+### 最省事的接法：照网页给的命令
+
+服务可以放在别处（比如 Railway），这台电脑不用跑网页服务，只装一个 `pa` 命令行：
+
+```bash
+uv tool install --python 3.13 /path/to/personal-agent
+pa --version
+```
+
+`/path/to/personal-agent` 是和服务同一版本的源码目录。`uv tool` 把它装在独立的环境里，不动系统自带的 Python，也不启动任何服务。
+
+1. 在网页的「助手与连接 → 连接 Agent」里选 Codex 或 Cursor，保存。弹出的窗口里有凭据，下面还有一条现成的命令：服务地址、Agent 编号、空间编号都已经填好，只差凭据。
+2. 在要干活的电脑上，先 `cd` 到你的 Git 项目（不能有没提交的改动），粘贴运行这条命令。它先保存连接，然后停下来等凭据。
+3. 回到弹窗，点最下面的「复制」，把凭据粘贴进去，按回车。凭据不在命令行里，也不会进命令历史。
+4. 保存好之后，它马上开始等任务（`--watch`，每 10 秒看一次）。你在网页里批准的任务，会由这台电脑上的 Codex 或 Cursor 领走。
+
+以后重新启动，不用再连接：在这个连接的卡片里打开「接入指引与地址」，复制第二条命令（只有 `host` 那一半）。
+
+- 命令里的 `--home ~/.qixu/codex-xxxxxxxx` 是这个连接自己的状态目录，在 Git 项目之外；同一台电脑上接几个连接，各用各的。
+- 网页只在服务地址是 `https`（或者就是这台电脑自己的 `127.0.0.1`）时才给命令。没有设置对外地址的话，页面会说明，设置好以后在卡片里就能看到。
+- 终端找不到 `codex`（Cursor 是 `agent`）时，命令会马上停下，说 `Cannot find 'codex'`，这时还没有领任何任务。在 `host` 那一行末尾加上 `--executable` 和 codex 的完整路径就行。比如 macOS 上，ChatGPT 应用自带的 Codex 在 `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`。Cursor 要先在终端运行一次 `agent login`。
+- 凭据丢了，就在这个连接下点「重新生成连接凭据」，弹窗会再给一次同样的命令。
+- 这台电脑要保持开机、不休眠、能上网，才接得到任务。
+
+下面是同样的步骤，一步一步手动做：
 
 先按前面讲的 `pa agents setup` 配好独立的状态目录，再由账号的拥有者，在原生 CLI 里用已有的账户登录。Host 不会发起登录，也不接受把 API key 放进命令行参数。
 
@@ -218,6 +244,18 @@ Git 项目默认要求源工作区是干净的（包括未跟踪的文件），�
 升级原生 CLI 时，请重新核对协议。公开依据：[Codex app-server](https://developers.openai.com/codex/app-server)、[Cursor ACP](https://cursor.com/docs/cli/acp)、[ACP Python SDK](https://agentclientprotocol.com/libraries/python)。
 
 Codex 的工具审批、Cursor 的单次工具权限，以及计划批准，都通过控制台的问题，等一个明确的答案；取消或没有答案，按不批准处理。不提供 `allow-always`、`acceptForSession`。过长的审批请求不会被截断后再提交批准。
+
+Codex 想运行命令时，问题里是这样写的：
+
+```text
+Codex 想运行这条命令：
+git status --short
+
+在这个目录里：/…/worktrees/attempt_…
+原因：…
+```
+
+命令总是完整显示。可以选「允许」、「拒绝」（只跳过这一步，Codex 会接着想别的办法）或「拒绝并停止」（结束这次执行）。Codex 还附带了别的信息，比如要联网访问哪个地址，也会照原样写在下面；只有标识这条请求的编号和时间不显示。
 
 每次启动原生程序之前，都先保存一份本地 journal，里面记着 PID、启动时间、boot 身份、原生的 session / turn、见过的子进程和终止的证据。Host 会对 profile 和规范化后的工作目录加本机锁，防止不同的 Host 同时往同一个目录里写。
 

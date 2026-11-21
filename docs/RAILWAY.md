@@ -77,6 +77,17 @@ pa node run
 
 `pair` 用隐藏输入的方式读一次性配对码，配对码不放在命令行参数里。节点只主动向服务端发起出站的 HTTPS，不开放入站端口，也不需要把 Docker API 暴露到公网。恢复、撤销和限制的细节见 [NODES.md](NODES.md)。
 
+### 让自己的电脑用 Codex 或 Cursor 接任务
+
+节点在 Docker 里跑命令。想让电脑上的 Codex 或 Cursor 在你的 Git 项目里干活，用的是另一条路，这台电脑也不用跑网页服务，只装 `pa` 命令行：
+
+```bash
+uv tool install --python 3.13 /path/to/personal-agent
+pa --version
+```
+
+然后在网页的「助手与连接 → 连接 Agent」里选 Codex 或 Cursor，保存。弹窗会给出凭据，还有一条现成的命令，里面的 `https://agent.example.test`（你自己的服务地址）和各个编号已经填好。在要干活的电脑上，先 `cd` 到一个没有未提交改动的 Git 项目，运行这条命令，等它问凭据的时候再粘贴。完整步骤见 [CLOUD_AGENTS.md](CLOUD_AGENTS.md#codex--cursor--栖序-host)。
+
 ## 4. 备份、升级与回滚
 
 升级前，先停止提交新任务；等正在运行的任务做完，或者在网页里请求取消，等节点确认。

@@ -489,15 +489,26 @@ class AgentHost:
             }
 
 
+# What each provider runs when `--executable` is not given.
+DEFAULT_PROGRAMS = {"codex": "codex", "cursor": "agent"}
+
+
+def program_for(name: str, executable: str | None = None) -> str | None:
+    """The program a provider starts, or None when it starts no other program."""
+    return (executable or DEFAULT_PROGRAMS[name]) if name in DEFAULT_PROGRAMS else None
+
+
 def provider_for(name: str, executable: str | None = None) -> NativeProvider:
     if name == "codex":
         from personal_agent.agent_adapters.codex import CodexProvider
 
-        return CodexProvider((executable or "codex", "app-server", "--listen", "stdio://"))
+        return CodexProvider(
+            (executable or DEFAULT_PROGRAMS[name], "app-server", "--listen", "stdio://")
+        )
     if name == "cursor":
         from personal_agent.agent_adapters.cursor import CursorProvider
 
-        return CursorProvider((executable or "agent", "acp"))
+        return CursorProvider((executable or DEFAULT_PROGRAMS[name], "acp"))
     if name == "personal_agent":
         from personal_agent.agent_adapters.native_pa import PersonalAgentProvider
 

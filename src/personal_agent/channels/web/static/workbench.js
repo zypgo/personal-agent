@@ -736,18 +736,31 @@ async function loadDevices() {
 // What is to happen once the person has read and closed the dialog (`then`), e.g. going on into
 // a project after saving the recovery code. Closing it from the program never runs it.
 let afterSecret = null;
-function showSecret(title,value,description,extra="",{done="完成",then=null}={}) {
+// `command` is something to paste into a terminal, shown below the code with a button of its own:
+// connecting a computer to an assistant takes both, the command first and the code when it asks.
+function showSecret(title,value,description,extra="",{done="完成",then=null,command=null}={}) {
   $("secret-title").textContent=title;$("secret-description").textContent=description;
   input("secret-value").value=value;$("secret-extra").textContent=extra;
-  $("secret-copy").textContent="复制";$("secret-close").textContent=done;
+  $("secret-command-box").hidden=!command;
+  $("secret-command-label").textContent=command?.label || "";$("secret-command").textContent=command?.text || "";
+  $("secret-copy").textContent="复制";$("secret-copy-command").textContent="复制命令";$("secret-close").textContent=done;
   afterSecret=then;
   /** @type {HTMLDialogElement} */ ($("secret-dialog")).showModal();
+}
+function forgetSecret() {
+  input("secret-value").value="";$("secret-extra").textContent="";
+  $("secret-command-box").hidden=true;$("secret-command-label").textContent="";$("secret-command").textContent="";
+}
+/** Select a block of text, so it can be copied by hand on a page that has no clipboard. */
+function selectText(el) {
+  const selection=getSelection();if(!selection)return;
+  const range=document.createRange();range.selectNodeContents(el);selection.removeAllRanges();selection.addRange(range);
 }
 function closeSecret() {
   afterSecret=null;
   const dialog=/** @type {HTMLDialogElement} */ ($("secret-dialog"));
   if (dialog.open) dialog.close();
-  input("secret-value").value="";$("secret-extra").textContent="";
+  forgetSecret();
 }
 function finishSecret() { const next=afterSecret;closeSecret();next?.(); }
 /** Where this page can be reached from another device, and whether only this computer can open it. */
@@ -847,8 +860,9 @@ $("space-select").addEventListener("change",event=>run(()=>switchSpace(event.tar
 for (const id of ["refresh-tasks","refresh-agents","refresh-knowledge","refresh-devices"]) $(id).addEventListener("click",()=>run(()=>refresh(true)));
 for (const view of ["collaboration","computer"]) $("task-view-"+view).addEventListener("click",()=>run(()=>selectTaskView(view)));
 $("secret-close").addEventListener("click",finishSecret);
-$("secret-dialog").addEventListener("close",()=>{input("secret-value").value="";$("secret-extra").textContent="";const next=afterSecret;afterSecret=null;next?.();});
-$("secret-copy").addEventListener("click",()=>run(async()=>{if(navigator.clipboard) {await navigator.clipboard.writeText(input("secret-value").value);$("secret-copy").textContent="已复制";} else {input("secret-value").focus();input("secret-value").select();}}));
+$("secret-dialog").addEventListener("close",()=>{forgetSecret();const next=afterSecret;afterSecret=null;next?.();});
+$("secret-copy").addEventListener("click",()=>run(async()=>{if(navigator.clipboard) {await navigator.clipboard.writeText(input("secret-value").value);$("secret-copy").textContent="已复制";$("secret-copy-command").textContent="复制命令";} else {input("secret-value").focus();input("secret-value").select();}}));
+$("secret-copy-command").addEventListener("click",()=>run(async()=>{if(navigator.clipboard) {await navigator.clipboard.writeText($("secret-command").textContent || "");$("secret-copy-command").textContent="已复制";$("secret-copy").textContent="复制";} else selectText($("secret-command"));}));
 document.addEventListener("visibilitychange",()=>{if(!document.hidden) run(refresh);});
 // The project page is kept fresh too, so someone who has just joined shows up in the list;
 // it is left alone while a member's role menu is open, which a redraw would close.

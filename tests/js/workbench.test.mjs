@@ -551,6 +551,70 @@ test("a dialog closed by the program never moves the page", async () => {
   assert.equal(moved, 1, "only the person closing it goes on");
 });
 
+test("a command shown with the credential has its own box and its own copy button, and is wiped with it", async () => {
+  const copied = [];
+  const s = setup(taskFixture(), {globals: {navigator: {clipboard: {writeText: async text => { copied.push(text); }}}}});
+  wire(s.context, '$("secret-close").addEventListener', 'document.addEventListener("visibilitychange"');
+  const command = "pa agents setup --token-stdin \\\n  --url https://agent.example.test";
+  s.ui.showSecret("我的 Codex · 连接凭据", "CREDENTIAL", "说明", "补充", {command: {label: "先运行这条", text: command}});
+  assert.equal(s.get("secret-command-box").hidden, false);
+  assert.equal(s.get("secret-command-label").textContent, "先运行这条");
+  assert.equal(s.get("secret-command").textContent, command);
+  assert.equal(s.get("secret-value").value, "CREDENTIAL", "the credential is where it always was");
+  s.get("secret-copy-command").listeners.get("click")(); await settled();
+  assert.deepEqual(copied, [command]);
+  assert.equal(s.get("secret-copy-command").textContent, "已复制");
+  assert.equal(s.get("secret-copy").textContent, "复制");
+  s.get("secret-copy").listeners.get("click")(); await settled();
+  assert.deepEqual(copied, [command, "CREDENTIAL"]);
+  assert.equal(s.get("secret-copy").textContent, "已复制");
+  assert.equal(s.get("secret-copy-command").textContent, "复制命令", "the clipboard holds one of them, and the buttons say which");
+  s.get("secret-copy-command").listeners.get("click")(); await settled();
+  assert.deepEqual(copied, [command, "CREDENTIAL", command]);
+  assert.equal(s.get("secret-copy-command").textContent, "已复制");
+  assert.equal(s.get("secret-copy").textContent, "复制", "and the other way round");
+  s.get("secret-dialog").listeners.get("close")(); // Escape, or the browser closing it
+  assert.equal(s.get("secret-command-box").hidden, true);
+  assert.equal(s.get("secret-command").textContent, "", "the command is wiped from the page");
+  assert.equal(s.get("secret-value").value, "", "and so is the credential");
+  assert.equal(s.get("secret-command-label").textContent, "");
+});
+
+test("without a clipboard the command's button selects it, so it can be copied by hand", async () => {
+  const picked = [];
+  const range = {selectNodeContents: element => picked.push(["range", element])};
+  const selection = {removeAllRanges: () => picked.push(["clear"]), addRange: given => picked.push(["add", given])};
+  const s = setup(taskFixture(), {documentExtras: {createRange: () => range}, globals: {navigator: {}, getSelection: () => selection}});
+  wire(s.context, '$("secret-close").addEventListener', 'document.addEventListener("visibilitychange"');
+  s.ui.showSecret("我的 Codex · 连接凭据", "CREDENTIAL", "说明", "补充", {command: {label: "先运行这条", text: "pa agents setup"}});
+  s.get("secret-copy-command").listeners.get("click")(); await settled();
+  assert.deepEqual(picked.map(([what]) => what), ["range", "clear", "add"]);
+  assert.equal(picked[0][1], s.get("secret-command"), "the whole command, not the credential");
+  assert.equal(picked[2][1], range);
+  assert.equal(s.get("secret-copy-command").textContent, "复制命令", "nothing was copied, so it does not say it was");
+  assert.notEqual(s.get("notice").className, "notice error");
+  // A page that has no selection to give does nothing, and does not break.
+  const bare = setup(taskFixture(), {globals: {navigator: {}, getSelection: () => null}});
+  wire(bare.context, '$("secret-close").addEventListener', 'document.addEventListener("visibilitychange"');
+  bare.ui.showSecret("我的 Codex · 连接凭据", "CREDENTIAL", "说明", "补充", {command: {label: "先运行这条", text: "pa agents setup"}});
+  bare.get("secret-copy-command").listeners.get("click")(); await settled();
+  assert.equal(bare.get("secret-command").textContent, "pa agents setup");
+  assert.notEqual(bare.get("notice").className, "notice error");
+});
+
+test("a dialog without a command does not keep the command of the one before it", async () => {
+  const s = setup();
+  s.ui.showSecret("甲", "ONE", "说明", "补充", {command: {label: "先运行这条", text: "pa agents setup"}});
+  s.ui.showSecret("乙", "TWO", "说明", "补充");
+  assert.equal(s.get("secret-command-box").hidden, true);
+  assert.equal(s.get("secret-command").textContent, "");
+  assert.equal(s.get("secret-command-label").textContent, "");
+  s.ui.showSecret("丙", "THREE", "说明", "补充", {command: {label: "先运行这条", text: "pa agents setup"}});
+  s.ui.closeSecret();
+  assert.equal(s.get("secret-command-box").hidden, true);
+  assert.equal(s.get("secret-command").textContent, "", "closing from the program wipes it too");
+});
+
 test("someone who restores access with an invitation in hand goes on into the project", async () => {
   const me = {principal: {id: "bob", display_name: "小红", is_admin: false}, role: "member", space_id: "space-p", spaces: [PROJECT]};
   const s = setup(taskFixture(), {respond: url => {
