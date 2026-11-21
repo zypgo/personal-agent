@@ -27,7 +27,6 @@
       <section id="workspace-error" class="workspace-error" hidden><h1>暂时连不上助理</h1><p class="muted">请检查网络，再试一次。</p><button id="retry-workspace" class="primary" type="button">重新连接</button></section>
 
       <main id="login" class="login" hidden>
-        <p class="eyebrow">欢迎回来</p>
         <h1>进入你的空间</h1>
         <p class="muted">新成员用项目邀请加入。已有账号的，配对这台设备，或者用恢复码登录。</p>
         <div class="two-columns">
@@ -57,7 +56,7 @@
         </section>
 
         <section id="panel-tasks" class="panel">
-          <div class="section-title"><div><span class="section-emblem" aria-hidden="true"><svg viewBox="0 0 44 44" focusable="false"><rect x="11" y="7" width="24" height="31" rx="4"/><path d="m16 18 3 3 6-7M16 28h13M16 32h8"/><path d="M7 13H5v24a4 4 0 0 0 4 4h18"/><circle cx="33" cy="9" r="5" fill="var(--sage)"/></svg></span><p class="eyebrow">交办 · 跟进 · 验收</p><h1 tabindex="-1">任务</h1><p id="tasks-intro" class="muted">把目标交给助手，进度与成果都在这里。</p></div><button id="refresh-tasks" class="ghost refresh-button" type="button">刷新</button></div>
+          <div class="section-title"><div><h1 tabindex="-1">任务</h1><p id="tasks-intro" class="muted">把目标交给助手，进度与成果都在这里。</p></div><button id="refresh-tasks" class="ghost refresh-button" type="button">刷新</button></div>
           <div class="task-switch" role="group" aria-label="任务类型"><button id="task-view-collaboration" type="button" class="selected" aria-pressed="true">助手协作</button><button id="task-view-computer" type="button" aria-pressed="false">电脑任务</button></div>
           <div id="collaboration-tasks">
             <details class="card compose" id="collaboration-compose"><summary><span>交办新任务</span><span class="compose-description">选择助手，说明目标与验收标准</span><span class="compose-plus" aria-hidden="true">＋</span></summary><div id="collaboration-compose-content"></div></details>
@@ -85,13 +84,13 @@
         </section>
 
         <section id="panel-agents" class="panel" hidden>
-          <div class="section-title"><div><span class="section-emblem" aria-hidden="true"><svg viewBox="0 0 44 44" focusable="false"><circle cx="22" cy="22" r="5"/><circle cx="8" cy="10" r="4"/><circle cx="36" cy="10" r="4"/><circle cx="22" cy="37" r="4"/><path d="m11 13 7 6m8 0 7-6M22 27v6M7 21a15 15 0 0 0 6 12M37 21a15 15 0 0 1-6 12"/></svg></span><p class="eyebrow">你的协作伙伴</p><h1 tabindex="-1">助手与连接</h1><p class="muted">连接你的 Grok、Muse 或其他 Agent，让它们一起完成任务。</p></div><button id="refresh-agents" class="ghost refresh-button" type="button">刷新</button></div>
+          <div class="section-title"><div><h1 tabindex="-1">助手与连接</h1><p class="muted">连接你的 Grok、Muse 或其他 Agent，让它们一起完成任务。</p></div><button id="refresh-agents" class="ghost refresh-button" type="button">刷新</button></div>
           <details class="card compose" id="agent-create"><summary id="agent-create-summary">连接 Agent</summary><div id="agent-create-content"></div></details>
           <div id="agents-list" class="or-agent-grid"></div>
         </section>
 
         <section id="panel-spaces" class="panel" hidden>
-          <div class="section-title"><div><span class="section-emblem" aria-hidden="true"><svg viewBox="0 0 44 44" focusable="false"><path d="M5 15V8h12l4 5h18v25H5V15Z"/><path d="M5 20h34"/><circle cx="18" cy="28" r="3"/><circle cx="28" cy="28" r="3"/><path d="M13 35c1-4 9-4 10 0m1-3c3-1 7 0 8 3"/></svg></span><p class="eyebrow">一起把事情做好</p><h1 tabindex="-1">项目与成员</h1><p class="muted">按项目整理资料、共享任务。</p></div></div>
+          <div class="section-title"><div><h1 tabindex="-1">项目与成员</h1><p class="muted">按项目整理资料、共享任务。</p></div></div>
           <div class="two-columns">
             <details class="card compose"><summary><span>创建新项目</span><span class="compose-description">为共同目标留一个独立空间</span><span class="compose-plus" aria-hidden="true">＋</span></summary><form id="space-form"><label>项目名称<input name="name" required maxlength="60" placeholder="例如：每周研究"></label><button class="primary" type="submit">创建项目</button></form></details>
             <details class="card compose" id="member-invite-card"><summary><span>邀请成员</span><span class="compose-description">选择他们在当前项目中的权限</span><span class="compose-plus" aria-hidden="true">＋</span></summary><form id="invite-form"><label>邀请备注<input name="label" maxlength="60" placeholder="可选"></label><label>项目角色<select name="role"><option value="member">成员 · 发起任务、编辑资料</option><option value="viewer">访客 · 查看项目内容</option><option value="owner">负责人 · 同时管理成员与规则</option></select></label><button type="submit">生成一次性邀请</button></form></details>
@@ -100,7 +99,7 @@
         </section>
 
         <section id="panel-knowledge" class="panel" hidden>
-          <div class="section-title"><div><span class="section-emblem" aria-hidden="true"><svg viewBox="0 0 44 44" focusable="false"><path d="m9 7 23-2 3 33-23 2-3-33Z"/><path d="m15 15 13-1m-12 7 13-1m-12 7 8-1M7 12l-2 1 3 29 19-2"/><path d="m35 10 2-5 2 5 4 2-4 2-2 4-2-4-4-2 4-2Z" fill="var(--card)"/></svg></span><p class="eyebrow">留住有用的信息</p><h1 tabindex="-1">资料</h1><p class="muted">保存背景、想法和笔记，让下一次对话接着往下走。</p></div><div class="actions"><button id="refresh-knowledge" class="ghost refresh-button" type="button">刷新</button><button id="knowledge-new" class="primary" type="button">新建资料</button></div></div>
+          <div class="section-title"><div><h1 tabindex="-1">资料</h1><p class="muted">保存背景、想法和笔记，让下一次对话接着往下走。</p></div><div class="actions"><button id="refresh-knowledge" class="ghost refresh-button" type="button">刷新</button><button id="knowledge-new" class="primary" type="button">新建资料</button></div></div>
           <form id="knowledge-search-form" class="knowledge-search"><label class="sr-only" for="knowledge-search">搜索资料标题或内容</label><input id="knowledge-search" name="q" type="search" maxlength="200" placeholder="搜索资料名称或正文"><button type="submit">搜索资料</button></form>
           <div class="two-columns knowledge-layout">
             <section class="card knowledge-directory"><h2>全部资料</h2><div id="knowledge-list" class="stack"></div></section>
@@ -110,7 +109,7 @@
         </section>
 
         <section id="panel-devices" class="panel" hidden>
-          <div class="section-title"><div><span class="section-emblem" aria-hidden="true"><svg viewBox="0 0 44 44" focusable="false"><rect x="4" y="8" width="26" height="20" rx="3"/><path d="M4 23h22M17 28v7m-7 0h15"/><rect x="27" y="18" width="12" height="23" rx="3"/><path d="M31 22h4M32 37h2"/><path d="m33 6 2 3 4 1-4 2-2 3-1-3-4-2 4-1 1-3Z"/></svg></span><p class="eyebrow">随时随地，接着处理</p><h1 tabindex="-1">设备与账号</h1><p class="muted">管理登录设备、执行电脑和聊天账号。</p></div><button id="refresh-devices" class="ghost refresh-button" type="button">刷新</button></div>
+          <div class="section-title"><div><h1 tabindex="-1">设备与账号</h1><p class="muted">管理登录设备、执行电脑和聊天账号。</p></div><button id="refresh-devices" class="ghost refresh-button" type="button">刷新</button></div>
           <section id="device-diagnostics" class="card diagnostics" aria-label="设备与额度状态"></section>
           <div class="two-columns">
             <section class="card"><h2>执行电脑</h2><div id="nodes-list" class="stack"></div><details id="node-invite-details" class="inline-compose"><summary>连接一台电脑</summary><form id="node-invite-form" hidden><label>设备名称<input name="label" required maxlength="60" placeholder="例如：我的笔记本"></label><button type="submit">生成电脑连接代码</button></form></details></section>
@@ -121,7 +120,6 @@
           <div class="actions footer-actions"><a href="/" class="button ghost" id="device-chat-link">返回对话</a><button id="logout-button" type="button" class="danger ghost">退出当前设备</button></div>
         </section>
       </main>
-      <footer class="footer">栖序 Qixu · 你的个人助理</footer>
     </div>
 
     <dialog id="secret-dialog" aria-labelledby="secret-title">

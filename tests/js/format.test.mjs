@@ -113,8 +113,8 @@ test("clipping prefers the end of a word", () => {
 test("the tab is titled with the product; the agent's own name goes first and unread messages in front", () => {
   assert.equal(pageTitle(""), "栖序");
   assert.equal(pageTitle(undefined), "栖序");
-  assert.equal(pageTitle("Ada"), "Ada · 栖序");
+  assert.equal(pageTitle("Sam"), "Sam · 栖序");
   assert.equal(pageTitle("栖序"), "栖序"); // an agent named after the product is not said twice
-  assert.equal(pageTitle("Ada", 3), "(3) Ada · 栖序");
+  assert.equal(pageTitle("Sam", 3), "(3) Sam · 栖序");
   assert.equal(pageTitle("", 2), "(2) 栖序");
 });

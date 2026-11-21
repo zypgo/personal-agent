@@ -69,7 +69,7 @@ def test_an_unknown_command_is_not_known(commands):
 def test_new_clears_the_conversation_but_not_the_log(commands):
     app, chat, _ = commands
     app.sessions.append(DEFAULT_SESSION, [{"role": "user", "content": "old"}])
-    assert "fresh conversation" in ask(chat, "new")
+    assert "新对话" in ask(chat, "new")
     assert app.sessions.items(DEFAULT_SESSION) == []
     assert any(r["kind"] == "item" for r in app.sessions.transcript(DEFAULT_SESSION))
 

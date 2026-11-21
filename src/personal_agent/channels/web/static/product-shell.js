@@ -101,7 +101,6 @@ export function createProductShell({ document: doc = globalThis.document, conten
   const nav = node("nav", "", "product-nav"); nav.setAttribute("aria-label", "主导航");
   const links = new Map();
   for (const page of PRODUCT_PAGES) {
-    if (page.id === "tasks") nav.append(node("p", "我的空间", "product-nav-label"));
     const link = node("a", "", "product-nav-link");
     link.dataset.page = page.id;
     link.setAttribute("href", resolve(page.path));

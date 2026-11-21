@@ -42,6 +42,15 @@ def _identifier() -> str:
     return uuid.uuid4().hex
 
 
+def _finished(title: str, status: str) -> str:
+    """The reminder when a computer task ends: what happened, and where the details are."""
+    if status == "succeeded":
+        return f"「{title}」做完了，结果和日志在「任务」里。"
+    if status == "cancelled":
+        return f"「{title}」已取消。"
+    return f"「{title}」没有做成，原因和日志在「任务」里。"
+
+
 def _safe(value: str, limit: int = MAX_LOG_CHARS) -> str:
     # Do not expose a credential prefix when truncating a final or live snapshot.
     if not isinstance(value, str):
@@ -811,7 +820,7 @@ class ExecutionStore:
                         channel=task["channel"] if deliver and not stale else "web",
                         recipient=task["recipient"] if deliver and not stale else None,
                         name=Path(item["path"]).name,
-                        description=f"Task result: {task['title']}",
+                        description=f"任务结果：{task['title']}",
                         web_enabled=True,
                         authority=authority,
                     )
@@ -879,7 +888,7 @@ class ExecutionStore:
                     channel=task["channel"],
                     recipient=task["recipient"],
                     kind="notice",
-                    text=f"Task {_safe(task['title'], 200)}: {status}. Open Tasks for logs and results.",
+                    text=_finished(_safe(task["title"], 200), status),
                     dedupe_key=f"execution:complete:{job['id']}:{generation}",
                     extra={
                         "task_id": task["id"],

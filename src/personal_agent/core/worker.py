@@ -34,8 +34,8 @@ MIN_HEARTBEAT_S = 1.0
 def dropped_text(event: Event, count: int) -> str:
     """What the owner is told when events from a source (a webhook, a timer) were given up on."""
     if count == 1:
-        return f"An event from '{event.source}' ({event.kind}) failed repeatedly and was dropped."
-    return f"{count} events from '{event.source}' have failed repeatedly and been dropped today."
+        return f"来自「{event.source}」的一条事件（{event.kind}）反复出错，已经放弃处理。"
+    return f"今天来自「{event.source}」的 {count} 条事件反复出错，已经放弃处理。"
 
 
 @dataclass
@@ -167,7 +167,7 @@ class Worker:
         failure carries a `notice_key` (a paused budget), once per key and local day.
         """
         origin = self.harness.origin_for(batch)
-        hint = failure.user_hint or "Something went wrong."
+        hint = failure.user_hint or "出了点问题。"
         if failure.notice_key:
             day = int(self.app.clock.now() // 86400)
             self._notice(
@@ -185,7 +185,7 @@ class Worker:
             channel=origin.channel,
             recipient=origin.recipient,
             session_key=batch.session_key,
-            text=f"{hint} I will retry automatically.",
+            text=f"{hint}我会自动再试一次。",
             dedupe=f"fail:{batch.ids[0]}",
             interactive=True,
         )
@@ -201,7 +201,7 @@ class Worker:
                     channel=event.source,
                     recipient=event.payload.get("recipient"),
                     session_key=event.session_key,
-                    text="I could not process your message and gave up on it. Please send it again.",
+                    text="这条消息我没能处理，只好放弃了。请再发一次。",
                     dedupe=f"dead:{event.id}",
                     interactive=True,
                 )
@@ -252,8 +252,8 @@ class Worker:
             recipient=recipient,
             session_key=event.session_key,
             text=(
-                "I could not continue a task after you answered its approval request, "
-                f"so I dropped it (run {run.id if run else run_id}). Ask me again if you still want it."
+                "你确认之后，这件事没能接着做下去，我已经放弃它"
+                f"（运行 {run.id if run else run_id}）。如果还需要，请再说一次。"
             ),
             dedupe=f"dead-resume:{run_id}",
         )

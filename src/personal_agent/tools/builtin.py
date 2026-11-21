@@ -70,7 +70,8 @@ Wake yourself up later: reminders, follow-ups ("check on this in 2 hours") and r
 timezone: a recurring job. The owner may be asked to approve recurring jobs.
 - action "list": your pending wake-ups. action "cancel": remove one by name.
 When it fires, `prompt` is the only instruction you get, so write it for a colleague with no \
-context: what to check, where, and what to do with the result (usually send_message).
+context: what to check, where, and what to do with the result (usually send_message). For a plain \
+reminder, put in it what to tell the owner and any detail they will need at that moment.
 session: "own" (default) is a fresh isolated conversation; "here" continues this conversation, \
 for reminders that depend on what was just discussed.
 Times are in the owner's timezone unless you pass timezone. Every run costs money, so keep \

@@ -179,10 +179,10 @@ async def test_an_ogg_voice_note_is_sent_as_it_is_when_it_cannot_be_converted(mo
     ("error", "expect"),
     [
         (api_error(openai.AuthenticationError, 401), "OPENAI_API_KEY"),
-        (api_error(openai.RateLimitError, 429), "busy or out of quota"),
-        (api_error(openai.InternalServerError, 500), "could not reach"),
-        (api_error(openai.APIConnectionError), "could not reach"),
-        (api_error(openai.APITimeoutError), "could not reach"),
+        (api_error(openai.RateLimitError, 429), "额度用完了"),
+        (api_error(openai.InternalServerError, 500), "没连上语音服务"),
+        (api_error(openai.APIConnectionError), "没连上语音服务"),
+        (api_error(openai.APITimeoutError), "没连上语音服务"),
     ],
 )
 async def test_service_failures_become_a_sentence_for_the_owner(error, expect):
@@ -196,7 +196,7 @@ async def test_a_refused_format_suggests_ffmpeg_only_when_that_could_help(monkey
     refused = api_error(openai.BadRequestError, 400, "Invalid file format")
     with pytest.raises(TranscriptionError) as ogg:
         await transcriber(FakeSpeech(error=refused)).transcribe(b"x", mime="audio/ogg")
-    assert "ffmpeg" in str(ogg.value) and "(ogg)" in str(ogg.value)
+    assert "ffmpeg" in str(ogg.value) and "（ogg）" in str(ogg.value)
     with pytest.raises(TranscriptionError) as mp3:
         await transcriber(FakeSpeech(error=refused)).transcribe(b"x", mime="audio/mpeg")
     assert "ffmpeg" not in str(mp3.value)

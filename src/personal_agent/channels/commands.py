@@ -74,7 +74,7 @@ class ChatCommands:
             return HELP
         if name == "new":
             self.app.sessions.clear(session_key)
-            return "Started a fresh conversation. The old one stays in the log."
+            return "新对话开始了，之前的内容还在记录里。"
         if name == "status":
             return self.status()
         if name == "approvals":

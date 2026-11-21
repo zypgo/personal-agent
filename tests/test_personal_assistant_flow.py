@@ -1,4 +1,3 @@
-# ruff: noqa: RUF001
 """A real conversation can prepare a user-reviewed operation and observe its result."""
 
 from __future__ import annotations

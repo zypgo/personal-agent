@@ -33,14 +33,14 @@ async def give_up_on(app, count: int, source: str = "github") -> None:
 
 
 def told(app) -> list[str]:
-    return [m.text for m in app.outbox.recent() if "failed repeatedly" in m.text]
+    return [m.text for m in app.outbox.recent() if "反复出错" in m.text]
 
 
-FIRST = "An event from 'webhook:github' (webhook) failed repeatedly and was dropped."
+FIRST = "来自「webhook:github」的一条事件（webhook）反复出错，已经放弃处理。"
 
 
 def total(count: int, source: str = "github") -> str:
-    return f"{count} events from 'webhook:{source}' have failed repeatedly and been dropped today."
+    return f"今天来自「webhook:{source}」的 {count} 条事件反复出错，已经放弃处理。"
 
 
 async def test_a_source_that_keeps_failing_is_reported_at_growing_intervals_with_the_count(

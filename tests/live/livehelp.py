@@ -38,7 +38,7 @@ def record_spend(usd: float) -> None:
 def live_config(**sections: dict[str, Any]) -> Config:
     """The settings every live test starts from; `sections` adds to or overrides them."""
     base: dict[str, dict[str, Any]] = {
-        "agent": {"name": "Ada", "owner_name": "Frank", "timezone": "Asia/Shanghai"},
+        "agent": {"name": "Sam", "owner_name": "Frank", "timezone": "Asia/Shanghai"},
         "model": {"main": MODEL, "fast": MODEL, "reasoning_effort": EFFORT},
         "budget": {"per_run_usd": 0.5, "daily_usd": 2.0},
     }

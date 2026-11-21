@@ -169,7 +169,10 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
     const control = node(options.multiline ? "textarea" : options.options ? "select" : "input");
     control.name = name;
     if (options.options) for (const [key, title] of options.options) { const option = node("option", title); option.value = key; control.append(option); }
-    else { control.type = options.type || "text"; control.maxLength = options.maxLength ?? 16000; control.autocomplete = "off"; }
+    else {
+      if (!options.multiline) control.type = options.type || "text"; // a textarea's type is read-only
+      control.maxLength = options.maxLength ?? 16000; control.autocomplete = "off";
+    }
     control.value = String(value ?? ""); control.required = Boolean(options.required);
     if (options.multiline) control.rows = options.rows || 3;
     if (options.min != null) control.min = options.min;

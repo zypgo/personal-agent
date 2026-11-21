@@ -708,7 +708,7 @@ async def _error(_request: Request, exc: Exception) -> Response:
         )
     log.exception("web request failed", exc_info=exc)
     return JSONResponse(
-        {"error": "Something went wrong. The details are in the agent's log."},
+        {"error": "出了点问题，详情在日志里。"},
         status_code=500,
         headers={"Cache-Control": "no-store"},
     )

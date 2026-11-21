@@ -79,6 +79,7 @@ function date(value) {
 function badge(value) {
   const result = node("span",statuses[value] || value || "等待处理","badge");
   if (value === "succeeded") result.classList.add("good");
+  if (value === "awaiting_approval") result.classList.add("wait");
   if (["failed","uncertain","rejected"].includes(value)) result.classList.add("bad");
   return result;
 }
@@ -676,7 +677,8 @@ async function loadDevices() {
     copy.append(node("strong",device.label || device.name || "执行电脑"));
     copy.append(node("span",device.last_seen_at ? `最近连接 ${date(device.last_seen_at)}` : "尚未连接"));
     const online = device.online ?? (device.last_seen_at && Date.now()/1000 - device.last_seen_at < 90);
-    row.append(copy,node("span",device.revoked_at ? "已撤销" : online ? "在线" : "等待连接","badge"));
+    const live = online && !device.revoked_at;
+    row.append(copy,node("span",device.revoked_at ? "已撤销" : online ? "在线" : "等待连接",live ? "badge good" : "badge"));
     if(state.me?.principal.is_admin && !device.revoked_at) {
       const revoke=node("button","撤销","ghost danger");
       revoke.addEventListener("click",()=>run(async()=>{

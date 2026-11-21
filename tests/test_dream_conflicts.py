@@ -36,7 +36,7 @@ def receipt(app, run_id):
 
 
 def review_notices(app):
-    return [m for m in app.outbox.recent(limit=100) if "could not automatically undo" in m.text]
+    return [m for m in app.outbox.recent(limit=100) if "没法自动撤销" in m.text]
 
 
 def test_recovery_isolates_conflict_and_still_recovers_other_passes(make_app):
@@ -53,7 +53,7 @@ def test_recovery_isolates_conflict_and_still_recovers_other_passes(make_app):
     assert app.memory.read_text(safe_path) == "original"
     assert Dreamer(app).cursor() == 0
     assert len(review_notices(app)) == 1
-    assert "some changes from that pass may remain" in review_notices(app)[0].text
+    assert "部分改动可能还在" in review_notices(app)[0].text
 
 
 def test_restart_and_repeat_finish_skip_the_flagged_receipt_and_notify_once(make_app, monkeypatch):
@@ -96,7 +96,7 @@ def test_successful_mass_delete_cannot_advance_cursor_or_claim_undo_when_owner_e
     assert app.memory.read_text(paths[0]) == "new owner correction"
     assert all(app.memory.read_text(p) is None for p in paths[1:6])
     assert len(review_notices(app)) == 1
-    assert not any("undid everything" in m.text for m in app.outbox.recent())
+    assert not any("都撤销了" in m.text for m in app.outbox.recent())
 
 
 async def test_dead_approval_conflict_does_not_block_other_events_or_retain_sdk_snapshot(make_app):
@@ -119,7 +119,7 @@ async def test_dead_approval_conflict_does_not_block_other_events_or_retain_sdk_
     assert receipt(app, run_id)["needs_review"]
     assert app.memory.read_text(owner_path) == "new owner correction"
     assert len(review_notices(app)) == 1
-    assert not any("candidate memory changes were undone" in m.text for m in app.outbox.recent())
+    assert not any("改动已经撤回" in m.text for m in app.outbox.recent())
 
 
 def test_conflict_marker_and_notice_obey_an_outer_transaction_rollback(make_app):

@@ -1,6 +1,6 @@
 [project]
 name = "personal-agent"
-version = "0.8.0"
+version = "0.8.1"
 description = "Qixu: a personal AI assistant for everyday tasks, lasting memory, and trusted agent collaboration."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -99,6 +99,8 @@ ignore = [
     "RUF012",
     "SIM105",
 ]
+# What the owner reads is Chinese, and Chinese is written with these marks (not their ASCII look-alikes).
+allowed-confusables = ["，", "：", "；", "（", "）", "！", "？"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S104", "S105", "S106", "S108", "B011"]  # S104: addresses under test, never binds

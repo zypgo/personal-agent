@@ -289,12 +289,12 @@ class ArtifactStore:
                     output.flush()
                     os.fsync(output.fileno())
                 os.fsync(directory)
-                text = description.strip() or f"File ready: {filename} ({len(data)} bytes)."
+                text = description.strip() or f"文件已准备好：{filename}（{len(data)} 字节）。"
                 if channel not in ("web", "telegram"):
                     text += (
-                        " Open your signed-in Qixu web console to download the file."
+                        " 请在已登录的栖序网页里下载这个文件。"
                         if web_enabled
-                        else " The file is saved locally; turn on the Qixu web console and sign in to download it."
+                        else " 文件保存在本机；开启栖序网页并登录后才能下载。"
                     )
                 outbox_id = Outbox(self.db, self.clock).enqueue(
                     session_key=session_key,

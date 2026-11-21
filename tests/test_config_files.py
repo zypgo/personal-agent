@@ -44,9 +44,9 @@ def test_text_that_is_not_utf8_is_an_error_that_says_how_to_fix_it(paths):
 
 
 def test_a_byte_order_mark_is_not_part_of_the_text(paths):
-    paths.config_file.write_bytes(b"\xef\xbb\xbf[agent]\nname = 'Ada'\n")
+    paths.config_file.write_bytes(b"\xef\xbb\xbf[agent]\nname = 'Sam'\n")
     assert read_text_file(paths.config_file).startswith("[agent]")
-    assert load_config(paths).agent.name == "Ada"
+    assert load_config(paths).agent.name == "Sam"
 
 
 def test_a_file_that_cannot_be_read_at_all_is_a_config_error(paths):

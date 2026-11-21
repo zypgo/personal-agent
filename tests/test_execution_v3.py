@@ -135,6 +135,24 @@ def test_complete_receipt_event_and_outbox_are_atomic_and_deduplicated(jobs):
         finish(jobs, env, stdout="changed")
 
 
+def test_the_owner_is_told_how_a_task_ended_in_one_plain_sentence(jobs):
+    def reminder() -> str:
+        return max(jobs.outbox.recent(), key=lambda message: message.id).text
+
+    _task, env = start(jobs)
+    finish(jobs, env)
+    assert reminder() == "「Check input」做完了，结果和日志在「任务」里。"
+
+    _task, env = start(jobs, submit(jobs, request_id="r2"))
+    jobs.complete(env["attempt_id"], 1, node_id="node-a", status="failed", exit_code=1)
+    assert reminder() == "「Check input」没有做成，原因和日志在「任务」里。"
+
+    task, env = start(jobs, submit(jobs, request_id="r3"))
+    jobs.cancel_task(task["id"], actor_id="alice")
+    jobs.complete(env["attempt_id"], 1, node_id="node-a", status="cancelled")
+    assert reminder() == "「Check input」已取消。"
+
+
 def test_old_generation_or_other_node_cannot_finish_or_cleanup(jobs):
     _, env = start(jobs)
     with pytest.raises(ExecutionConflict):

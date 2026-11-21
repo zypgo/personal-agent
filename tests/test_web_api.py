@@ -236,13 +236,13 @@ def test_ending_a_session_from_the_computer_signs_the_browser_out_at_once(web):
 def test_the_session_says_who_and_what_it_can_do(make_app):
     app = make_app(
         config=Config(
-            agent=AgentConfig(name="Ada", owner_name="Frank"), media=MediaConfig(voice=False)
+            agent=AgentConfig(name="Sam", owner_name="Frank"), media=MediaConfig(voice=False)
         )
     )
     site = Web(app)
     site.pair("my phone")
     info = site.client.get("/api/session").json()
-    assert (info["agent"], info["owner"], info["label"]) == ("Ada", "Frank", "my phone")
+    assert (info["agent"], info["owner"], info["label"]) == ("Sam", "Frank", "my phone")
     assert info["features"]["voice"] is False and info["features"]["images"] is True
     assert info["features"]["max_images"] == MAX_IMAGES
     assert info["last_id"] == 0 and len(info["version"]) == 12

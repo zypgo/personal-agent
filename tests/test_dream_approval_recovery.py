@@ -76,7 +76,7 @@ async def test_mass_delete_guard_also_reviews_success_after_approval(make_app):
     await Worker(app).run_once()
     assert all(app.memory.read_text(p) is not None for p in paths)
     assert not pending(app) and Dreamer(app).cursor() == 40
-    assert any("undid everything" in m.text for m in app.outbox.recent())
+    assert any("都撤销了" in m.text for m in app.outbox.recent())
 
 
 async def test_budget_stop_after_approved_edits_also_rolls_back_and_closes_snapshot(make_app):
@@ -91,7 +91,7 @@ async def test_budget_stop_after_approved_edits_also_rolls_back_and_closes_snaps
     assert all(app.memory.read_text(p) is not None for p in paths)
     assert app.approvals.load_run(run_id) is None and not pending(app)
     assert len(model.calls) == 1
-    assert any("saved execution was closed" in m.text for m in app.outbox.recent())
+    assert any("保存的执行也关闭了" in m.text for m in app.outbox.recent())
 
 
 @pytest.mark.parametrize("stop", ["error", "cancel", "timeout"])
@@ -133,7 +133,7 @@ async def test_failed_resume_rolls_back_drops_snapshot_and_never_replays(
     assert all(app.memory.read_text(p) is not None for p in paths)
     assert app.approvals.load_run(run_id) is None and not pending(app)
     assert app.runs.get(run_id).status == ("cancelled" if stop == "cancel" else "failed")
-    assert any("saved execution was closed" in m.text for m in app.outbox.recent())
+    assert any("保存的执行也关闭了" in m.text for m in app.outbox.recent())
     count = len(model.calls)
     old_event = replace(
         dream_batch().events[0], kind=Kind.APPROVAL_RESPONSE, payload={"run_id": run_id}
@@ -175,6 +175,6 @@ async def test_restart_recovers_between_resume_terminal_commit_and_rollback(make
     restarted = make_app(config=cfg())
     assert Dreamer(restarted).recover() == 1
     assert restarted.memory.read_text(path) is not None
-    notices = [m for m in restarted.outbox.recent() if "saved execution was closed" in m.text]
+    notices = [m for m in restarted.outbox.recent() if "保存的执行也关闭了" in m.text]
     assert len(notices) == 1 and not pending(restarted)
     assert Dreamer(restarted).recover() == 0

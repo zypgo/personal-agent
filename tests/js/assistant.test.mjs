@@ -23,7 +23,12 @@ class Element extends FakeElement {
 }
 const documentFixture = () => {
   const doc = { hidden: false, activeElement: null };
-  doc.createElement = tag => { const element = new Element(tag); element.ownerDocument = doc; return element; };
+  doc.createElement = tag => {
+    const element = new Element(tag); element.ownerDocument = doc;
+    // As in a browser, a textarea's type cannot be assigned; in a module that throws.
+    if (tag === "textarea") Object.defineProperty(element, "type", { get: () => "textarea" });
+    return element;
+  };
   doc.createElementNS = (_namespace, tag) => doc.createElement(tag);
   doc.body = doc.createElement("body"); return doc;
 };
@@ -91,6 +96,15 @@ test("native decisions keep the reviewed revision, hash, attempt and cross-space
   assert.throws(() => nativeCardRequest(result, "accept"), /变化/);
   assert.throws(() => nativeCardRequest({ ...card, status: "completed" }, "approve"), /变化/);
   assert.throws(() => nativeCardRequest({ ...card, status: "revoked" }, "approve"), /变化/);
+});
+
+test("a delivered result carries its reason box, and one card never takes the whole inbox down", async () => {
+  const card = { ...planCard(), id: "result-a", kind: "agent_result", status: "result_reported", actions: [{ id: "accept" }, { id: "reject" }], data: { task: task(), step: { id: "s1", acceptance: "每条都有出处" }, attempt: { id: "attempt-a", result: { text: "摘要写好了。" } } } };
+  const s = setup({ cards: [card, planCard()] }); await s.ui.refresh();
+  assert.ok(field(s.ui.element, "reason"), "the form for turning a result down is there");
+  assert.ok(button(s.ui.element, "验收通过"));
+  assert.ok(button(s.ui.element, "确认并派发"), "the other card is still shown");
+  assert.doesNotMatch(toHtml(s.ui.element), /暂时无法更新/);
 });
 
 test("fixed workspace routes cover all 24 actions without interpreting model URLs", () => {

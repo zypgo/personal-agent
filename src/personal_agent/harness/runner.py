@@ -747,7 +747,7 @@ class Harness:
         with app.db.tx():
             app.approvals.drop_run(ctx.run_id)
             if ctx.origin.interactive and ctx.profile == "full":
-                reply = final_text or "(I finished without a reply. Ask again if you expected one.)"
+                reply = final_text or "（这次我没有给出回复。想要答复的话，请再问一次。）"
                 message_id = app.outbox.enqueue(
                     session_key=ctx.session_key,
                     channel=ctx.origin.channel,
@@ -800,8 +800,8 @@ class Harness:
         return self._stop(
             ctx,
             text=(
-                f"I stopped after {limit} steps without finishing. Everything I did so far is saved; "
-                "tell me to continue and I will pick up where I left off."
+                f"我做了 {limit} 步还没做完，先停下了。已经做的都保存着，"
+                "说一声「继续」，我就接着做。"
             ),
             key="step-limit",
             error=f"step limit ({limit}) reached",
@@ -811,9 +811,8 @@ class Harness:
         return self._stop(
             ctx,
             text=(
-                f"I stopped this task because it reached its cost limit (${exc.limit:.2f}; "
-                f"it used ${exc.spent:.2f}). Everything I did so far is saved. Tell me to continue "
-                "if you want me to keep going."
+                f"这件事花到了费用上限（${exc.limit:.2f}，已用 ${exc.spent:.2f}），先停下了。"
+                "已经做的都保存着，想继续就告诉我。"
             ),
             key="run-budget",
             error=f"run budget reached (${exc.spent:.2f} of ${exc.limit:.2f})",

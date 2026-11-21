@@ -30,17 +30,17 @@ from personal_agent.daemon import Daemon
 from personal_agent.security.sandbox import SandboxProvider
 
 ANSWERS = [
-    """Good morning. Here is how the day looks.
+    """早安，今天是这样的。
 
-## Today
-- **09:30** stand-up with the platform team
-- **13:00** lunch with Mira (she asked to move it to *13:30*)
-- **16:00** dentist, `Rua Augusta 112`
+## 今天
+- **09:30** 和平台组站会
+- **13:00** 和 Mira 吃午饭（她想改到 *13:30*）
+- **16:00** 看牙，`Rua Augusta 112`
 
-> Nothing urgent in the inbox, but one thing needs a decision: the venue wants a deposit by Friday.
+> 收件箱里没有急事，只有一件要你拿主意：场地周五前要付订金。
 
-Want me to put the deposit on the calendar as a reminder?""",
-    """Here is the script, and what it prints.
+要我把付订金设成日历提醒吗？""",
+    """脚本在这里，运行后会打印出最新的那份笔记。
 
 ```python
 from pathlib import Path
@@ -52,38 +52,38 @@ def newest(folder: str, pattern: str = "*.md") -> Path | None:
 print(newest("~/notes"))
 ```
 
-It looks for the most recently changed `.md` file and returns `None` when there is none.""",
-    """Three options for the trip, compared:
+它会找最近改动过的 `.md` 文件，没有的话返回 `None`。""",
+    """三种去的方式比较：
 
-| Option | Time | Cost | Notes |
+| 方式 | 用时 | 花费 | 备注 |
 |:--|--:|--:|:--|
-| Train | 3h 10m | €48 | direct, quiet carriage |
-| Flight | 1h 05m | €96 | plus 2h at airports |
-| Car | 3h 40m | €31 | fuel and tolls, you drive |
+| 火车 | 3 小时 10 分 | €48 | 直达，安静车厢 |
+| 飞机 | 1 小时 05 分 | €96 | 另加机场 2 小时 |
+| 自驾 | 3 小时 40 分 | €31 | 油费和过路费，自己开 |
 
-The train is the best fit if you want to work on the way. Details are in [the timetable](https://www.example.com/timetable).""",
-    """Done. I wrote the summary to `/notes/2026-11-15.md`:
+想在路上工作的话，火车最合适。时刻表在[这里](https://www.example.com/timetable)。""",
+    """好了，摘要写到了 `/notes/2026-11-15.md`：
 
-1. Reviewed the three open pull requests
-2. Replied to Mira about lunch
-3. Booked the 16:00 dentist slot
+1. 看了三个未处理的 pull request
+2. 回复了 Mira 午饭的事
+3. 订好了 16:00 的牙医
 
-- [x] summary written
-- [ ] send it to the team (waiting for you)
+- [x] 摘要写好了
+- [ ] 发给团队（等你确认）
 
-Let me know if you want it shortened.""",
-    "Understood. I will remind you tomorrow at 9:00.\n\nAnything else?",
+需要缩短的话告诉我。""",
+    "好的，明天 9:00 我提醒你。\n\n还有别的吗？",
 ]
 
 EARLIER = [
-    (-26 * 3600, "in", "telegram", "remind me to renew the passport"),
-    (-26 * 3600 + 20, "out", "telegram", "Noted. I will remind you on **Monday morning**."),
-    (-5 * 3600, "in", "web", "what did I decide about the venue?"),
+    (-26 * 3600, "in", "telegram", "提醒我续办护照"),
+    (-26 * 3600 + 20, "out", "telegram", "记下了，我会在**周一早上**提醒你。"),
+    (-5 * 3600, "in", "web", "场地的事，我当时是怎么定的？"),
     (
         -5 * 3600 + 15,
         "out",
         "web",
-        "You said the **Lisbon** option, if the deposit stays under €500. The venue asked for €450.",
+        "你说选**里斯本**，前提是订金不超过 €500。场地要的是 €450。",
     ),
 ]
 
@@ -102,7 +102,7 @@ class Voice:
     """Stands in for transcription: whatever was said, it heard this."""
 
     async def transcribe(self, data: bytes, *, mime: str, name: str = "") -> str:
-        return "this is what the recording said"
+        return "这是录音里说的话"
 
 
 def scripted(think_s: float, first: int = 0) -> Thoughtful:
@@ -121,7 +121,7 @@ def scripted(think_s: float, first: int = 0) -> Thoughtful:
 
 def open_app(home: Path, args: argparse.Namespace) -> App:
     config = Config(
-        agent=AgentConfig(name="Ada", owner_name="Frank"),
+        agent=AgentConfig(owner_name="Frank"),
         web=WebConfig(
             enabled=True, host=args.host, port=args.port, allowed_hosts=list(args.allow_host)
         ),
@@ -132,7 +132,7 @@ def open_app(home: Path, args: argparse.Namespace) -> App:
         home=home,
         config=config,
         model_factory=lambda name: model,
-        sandbox=SandboxProvider.fixed(None, "the demo runs no commands"),
+        sandbox=SandboxProvider.fixed(None, "演示里不会真的运行命令"),
         read_env=False,
         transcriber=Voice(),
     )
@@ -145,7 +145,7 @@ def seed(app: App, bulk: int = 0) -> None:
         return
     now = app.clock.now()
     older = [
-        (-30 * 3600 - (bulk - i) * 1800, "in" if i % 2 == 0 else "out", "web", f"Older note {i}")
+        (-30 * 3600 - (bulk - i) * 1800, "in" if i % 2 == 0 else "out", "web", f"较早的消息 {i}")
         for i in range(bulk)
     ]
     for offset, direction, channel, text in [*older, *EARLIER]:
@@ -154,10 +154,10 @@ def seed(app: App, bulk: int = 0) -> None:
             " VALUES (?, ?, ?, 'message', ?, NULL, '{}')",
             (now + offset, direction, channel, text),
         )
-    ask(app, "git -C ~/notes push origin main", "I would like to push your notes. May I?")
+    ask(app, "git -C ~/notes push origin main", "我想把你的笔记推送上去，可以吗？")
 
 
-def ask(app: App, command: str, text: str = "May I run this?") -> None:
+def ask(app: App, command: str, text: str = "要运行这个吗？") -> None:
     """Put an action in front of the owner, the way a paused run does."""
     [approval] = app.approvals.create(
         f"demo-{time.time_ns()}", "main", [PendingCall("c1", "shell", command)]

@@ -177,7 +177,7 @@ async def test_the_per_run_cap_stops_a_runaway_run_and_tells_the_owner(make_app)
     run = app.runs.get(result.outcome.run_id)
     assert run.status == "failed" and "run budget reached" in run.error
     [notice] = app.outbox.recent()
-    assert "cost limit" in notice.text and "$0.01" in notice.text
+    assert "费用上限" in notice.text and "$0.01" in notice.text
     assert app.inbox.counts()["done"] == 1  # not retried: a retry would spend the same again
 
 
@@ -199,7 +199,7 @@ async def test_the_daily_cap_pauses_work_until_midnight_and_nothing_is_lost(make
     assert first.failure is not None and first.failure.environmental
     assert app.runs.recent()[0].status == "paused_budget"
     [notice] = app.outbox.recent()
-    assert "Today's budget" in notice.text and "pa budget extend" in notice.text
+    assert "今天的预算" in notice.text and "pa budget extend" in notice.text
     event = app.inbox.get(1)
     assert event["status"] == "pending" and event["attempts"] == 0  # waiting, not failing
 

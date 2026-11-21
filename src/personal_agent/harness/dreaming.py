@@ -275,11 +275,10 @@ class Dreamer:
                 session_key=DREAM_KEY,
                 channel=app.notify_channel(),
                 text=(
-                    f"I could not automatically undo nightly memory pass {run_id}: later edits "
-                    "would be overwritten. I kept the current files; some changes from that pass "
-                    "may remain. Other work can continue. `pa dream review` lists the affected "
-                    "notes and their versions. After reviewing them, you can explicitly keep "
-                    f"the current memory with `pa dream review resolve {run_id} --keep-current`."
+                    f"夜里的记忆整理（{run_id}）没法自动撤销：撤销会盖掉之后的修改。"
+                    "我保留了现在的文件，那次整理的部分改动可能还在，其他事情不受影响。"
+                    "`pa dream review` 能看到涉及的笔记和版本；看完确认无误，"
+                    f"运行 `pa dream review resolve {run_id} --keep-current` 保留现在的内容。"
                 ),
                 kind="notice",
                 urgency="low",
@@ -392,9 +391,8 @@ class Dreamer:
                     session_key=DREAM_KEY,
                     channel=app.notify_channel(),
                     text=(
-                        "The nightly memory tidy-up did not finish after approval, so its "
-                        "candidate memory changes were undone and its saved execution was closed. "
-                        "It will try again on a future scheduled pass. `pa dream log` shows why."
+                        "夜里的记忆整理在你确认之后没有做完，它的改动已经撤回，"
+                        "保存的执行也关闭了。下次定时整理会再试。`pa dream log` 能看到原因。"
                     ),
                     kind="notice",
                     urgency="low",
@@ -461,9 +459,8 @@ class Dreamer:
             session_key=DREAM_KEY,
             channel=app.notify_channel(),
             text=(
-                f"The nightly memory tidy-up wanted to delete {deleted} of about {before} notes, "
-                "which is more than I allow, so I undid everything it changed. Nothing is lost; "
-                "`pa dream log` shows what it tried."
+                f"夜里的记忆整理想删掉约 {before} 条笔记里的 {deleted} 条，超出了我允许的范围，"
+                "所以它的改动都撤销了，什么也没丢。`pa dream log` 能看到它想做什么。"
             ),
             kind="notice",
             urgency="low",
@@ -488,9 +485,8 @@ class Dreamer:
             session_key=DREAM_KEY,
             channel=app.notify_channel(),
             text=(
-                f"The nightly memory tidy-up has not worked {MAX_FAILURES} nights in a row, so I "
-                "paused it for a week. `pa dream log` shows what happened; `pa dream run` tries "
-                "it again by hand."
+                f"夜里的记忆整理已经连续 {MAX_FAILURES} 晚没成功，我先暂停一周。"
+                "`pa dream log` 能看到发生了什么，`pa dream run` 可以手动再试。"
             ),
             kind="notice",
             urgency="low",

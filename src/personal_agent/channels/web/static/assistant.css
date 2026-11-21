@@ -1,5 +1,5 @@
 /* The assistant's own surfaces: the welcome, the cards that wait for the person, and their forms.
-   Forms are grouped like a settings list: a rounded surface, hairlines between rows. */
+   Cards rest on the page by tone alone; forms are a rounded surface with hairlines between rows. */
 
 /* ---- the welcome -------------------------------------------------------------------------------- */
 .assistant-welcome {
@@ -41,7 +41,7 @@
 }
 
 .assistant-scene .product-mark[data-state] .mark-leaf {
-  animation: leaf-grow 800ms 280ms var(--spring-bouncy) both, leaf-sway 6s 1100ms var(--ease-sway) infinite;
+  animation: leaf-grow 800ms 280ms var(--spring-leaf) both, leaf-sway 6s 1100ms var(--ease-sway) infinite;
 }
 
 /* Two specks drift round it, slowly, like pollen. */
@@ -90,17 +90,16 @@
 
 .assistant-eyebrow {
   margin: 0 0 0.5rem;
-  color: var(--ink-2);
+  color: var(--ink-3);
   font-size: var(--fs-footnote);
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
 
 .assistant-welcome h2 {
   margin: 0.35rem 0 0.9rem;
   font-size: var(--fs-display);
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
+  font-weight: var(--w-strong);
+  line-height: 1.25;
 }
 
 .assistant-welcome h2 > span {
@@ -127,21 +126,19 @@
 }
 
 .assistant-shortcut {
-  --tint: var(--pencil);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 0.75rem;
-  min-height: 6.75rem;
-  padding: 0.95rem;
+  min-height: 6.5rem;
+  padding: 1rem;
   border: 0;
   border-radius: var(--r-l);
   background: var(--surface);
-  box-shadow: var(--shadow-1);
   color: var(--ink);
   text-align: start;
-  animation: card-in var(--t-slow) var(--spring) both;
-  transition: transform var(--t-base) var(--spring), box-shadow var(--t-base) var(--ease-out);
+  animation: card-in var(--t-slow) var(--ease-out) both;
+  transition: transform var(--t-base) var(--ease-out), box-shadow var(--t-base) var(--ease-out);
 }
 
 .assistant-shortcut:nth-child(2) {
@@ -156,22 +153,6 @@
   animation-delay: 150ms;
 }
 
-.assistant-shortcut[data-kind="organize"] {
-  --tint: var(--tint-tasks);
-}
-
-.assistant-shortcut[data-kind="remind"] {
-  --tint: var(--tint-chat);
-}
-
-.assistant-shortcut[data-kind="collect"] {
-  --tint: var(--tint-knowledge);
-}
-
-.assistant-shortcut[data-kind="begin"] {
-  --tint: var(--tint-agents);
-}
-
 .assistant-shortcut:active {
   transform: scale(0.96);
 }
@@ -179,17 +160,13 @@
 .assistant-shortcut-icon {
   display: grid;
   place-items: center;
-  width: 2.1rem;
-  height: 2.1rem;
-  border-radius: 0.65rem;
-  background: var(--tint);
-  color: var(--tint-ink);
+  color: var(--accent);
 }
 
 .assistant-shortcut-icon .product-icon {
-  width: 1.2rem;
-  height: 1.2rem;
-  stroke-width: 1.9;
+  width: 1.5rem;
+  height: 1.5rem;
+  stroke-width: 1.5;
 }
 
 .assistant-shortcut-copy {
@@ -201,12 +178,11 @@
 
 .assistant-shortcut strong {
   font-size: var(--fs-subhead);
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-weight: var(--w-medium);
 }
 
 .assistant-shortcut-copy > span {
-  color: var(--ink-2);
+  color: var(--ink-3);
   font-size: var(--fs-footnote);
 }
 
@@ -232,8 +208,7 @@
 .assistant-inbox-heading h2 {
   margin: 0;
   font-size: var(--fs-title3);
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-weight: var(--w-strong);
 }
 
 .assistant-card-list {
@@ -242,20 +217,14 @@
 }
 
 .assistant-card {
-  --card-accent: var(--accent);
   min-width: 0;
   padding: 1.15rem;
   border-radius: var(--r-l);
   background: var(--surface);
-  box-shadow: var(--shadow-2);
+  box-shadow: var(--shadow-1);
   overflow-wrap: anywhere;
   scroll-margin-top: calc(var(--bar-h, 4rem) + 0.5rem);
-  animation: card-in var(--t-slow) var(--spring) both;
-}
-
-.assistant-card[data-kind="task_status"],
-.assistant-card[data-kind="agent_result"] {
-  --card-accent: var(--pencil);
+  animation: card-in var(--t-slow) var(--ease-out) both;
 }
 
 .assistant-card > .assistant-eyebrow {
@@ -265,10 +234,10 @@
   margin-bottom: 0.7rem;
   padding: 0.2rem 0.65rem;
   border-radius: var(--r-pill);
-  background: color-mix(in srgb, var(--card-accent) 12%, var(--surface));
-  color: var(--card-accent);
-  font-size: 0.75rem;
-  font-weight: 700;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-caption);
+  font-weight: var(--w-medium);
 }
 
 .assistant-card > .assistant-eyebrow::before {
@@ -290,21 +259,21 @@
 .assistant-card h3 {
   margin: 0 0 0.6rem;
   font-size: var(--fs-title3);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.35;
+  font-weight: var(--w-strong);
+  line-height: 1.4;
 }
 
 .assistant-card h4 {
   margin: 1rem 0 0.4rem;
   font-size: var(--fs-subhead);
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .assistant-card h5 {
   margin: 0.85rem 0 0.35rem;
+  color: var(--ink-3);
   font-size: var(--fs-footnote);
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .assistant-card p {
@@ -332,8 +301,8 @@
 
 .assistant-impact {
   padding: 0.65rem 0.85rem;
-  border-radius: var(--r-s);
-  background: color-mix(in srgb, var(--pencil) 9%, var(--surface));
+  border-radius: var(--r-m);
+  background: var(--surface-2);
 }
 
 .assistant-error {
@@ -342,7 +311,7 @@
 
 .assistant-status {
   color: var(--accent);
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .assistant-actions {
@@ -356,15 +325,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.75rem;
+  min-height: var(--control-h);
   margin: 0;
-  padding: 0.55rem 1.1rem;
+  padding: 0.55rem var(--control-pad);
   border: 0;
   border-radius: var(--r-pill);
   background: var(--surface-2);
   color: var(--ink);
   font-size: var(--fs-subhead);
-  font-weight: 600;
+  font-weight: var(--w-medium);
   transition: transform var(--t-fast) var(--ease-out), background-color var(--t-fast), opacity var(--t-base);
 }
 
@@ -373,14 +342,12 @@
 }
 
 .assistant-button.primary {
-  min-height: 2.75rem;
   background: var(--accent);
   color: var(--accent-ink);
-  font-size: var(--fs-subhead);
 }
 
 .assistant-button.danger {
-  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
@@ -406,7 +373,7 @@
   flex-direction: column;
   gap: 0.4rem;
   font-size: var(--fs-footnote);
-  font-weight: 600;
+  font-weight: var(--w-medium);
   color: var(--ink-2);
 }
 
@@ -416,13 +383,13 @@
 .assistant-secret-dialog textarea {
   display: block;
   width: 100%;
-  padding: 0.7rem 0.85rem;
+  padding: 0.7rem 0.9rem;
   border: 0;
-  border-radius: var(--r-s);
+  border-radius: var(--r-m);
   background: var(--surface-2);
   color: var(--ink);
   font-size: max(1rem, 16px);
-  font-weight: 400;
+  font-weight: var(--w-regular);
   line-height: 1.55;
   transition: box-shadow var(--t-fast);
 }
@@ -432,7 +399,7 @@
 .assistant-field textarea:focus,
 .assistant-secret-dialog textarea:focus {
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 
 .assistant-field textarea {
@@ -471,7 +438,7 @@
   min-height: 2.75rem;
   padding: 0.7rem 0;
   font-size: var(--fs-subhead);
-  font-weight: 600;
+  font-weight: var(--w-medium);
   cursor: pointer;
 }
 
@@ -500,12 +467,12 @@
 .assistant-step-editor legend {
   padding: 0 0.4rem;
   font-size: var(--fs-footnote);
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .assistant-command {
   padding: 0.8rem;
-  border-radius: var(--r-s);
+  border-radius: var(--r-m);
   background: var(--surface-2);
   font-size: 0.78rem;
   white-space: pre-wrap;
@@ -523,7 +490,7 @@
   box-shadow: var(--shadow-3);
   color: var(--ink);
   font-family: var(--font);
-  animation: dialog-in var(--t-slow) var(--spring) both;
+  animation: dialog-in var(--t-slow) var(--ease-out) both;
 }
 
 .assistant-secret-dialog::backdrop {
@@ -535,7 +502,7 @@
 .assistant-secret-dialog h2 {
   margin: 0 0 0.75rem;
   font-size: var(--fs-title3);
-  font-weight: 700;
+  font-weight: var(--w-strong);
 }
 
 .assistant-secret-dialog textarea {
@@ -555,7 +522,7 @@
 @keyframes card-in {
   from {
     opacity: 0;
-    transform: translateY(0.6rem) scale(0.97);
+    transform: translateY(0.5rem) scale(0.98);
   }
 }
 
@@ -601,7 +568,7 @@
 
 @media (hover: hover) and (pointer: fine) {
   .assistant-shortcut:hover {
-    transform: translateY(-3px);
+    transform: translateY(-2px);
     box-shadow: var(--shadow-2);
   }
 
@@ -631,8 +598,8 @@
   }
 
   .assistant-shortcut {
-    min-height: 6.25rem;
-    padding: 0.85rem;
+    min-height: 6rem;
+    padding: 0.9rem;
   }
 
   .assistant-card {

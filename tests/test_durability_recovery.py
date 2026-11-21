@@ -161,7 +161,7 @@ async def test_final_failure_notifies_without_another_ready_event(make_app, cloc
         clock.advance(601)
     assert not app.inbox.has_ready()
     assert app.inbox.counts()["dead"] == 1
-    assert any("gave up" in message.text for message in app.outbox.recent())
+    assert any("放弃" in message.text for message in app.outbox.recent())
     assert not app.inbox.has_unreported_dead()
 
 
@@ -185,6 +185,6 @@ async def test_dead_notification_and_its_ack_commit_together(make_app, monkeypat
     assert app.outbox.recent() == []
     app.recover()
     await Worker(app).run_once()
-    notices = [m for m in app.outbox.recent() if "gave up" in m.text]
+    notices = [m for m in app.outbox.recent() if "放弃" in m.text]
     assert len(notices) == 1
     assert not app.inbox.has_unreported_dead()

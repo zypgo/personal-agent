@@ -1,6 +1,6 @@
 /* The workspace: tasks, knowledge, assistants, projects and devices. It speaks the chat's visual
-   language (tokens.css): large titles, grouped surfaces, quiet forms, one accent for the next step.
-   The class names are the ones workbench.js and orchestration.js build; none are invented here. */
+   language (tokens.css): a plain title, cards resting on tone, quiet forms, one accent for the next
+   step. The class names are the ones workbench.js and orchestration.js build; none are invented here. */
 
 body {
   min-height: 100dvh;
@@ -14,7 +14,7 @@ body {
 }
 
 a {
-  color: var(--pencil);
+  color: var(--accent);
 }
 
 /* ---- the bar on top: where you are, and the way back to the conversation ------------------------ */
@@ -35,13 +35,7 @@ a {
 }
 
 html[data-scrolled="true"] .masthead {
-  border-bottom-color: var(--hairline-strong);
-}
-
-.masthead .product-menu-toggle {
-  background: var(--glass-strong);
-  box-shadow: var(--shadow-1);
-  color: var(--ink);
+  border-bottom-color: var(--hairline);
 }
 
 .workspace-location {
@@ -52,7 +46,7 @@ html[data-scrolled="true"] .masthead {
   gap: 0.6rem;
   min-width: 0;
   font-size: var(--fs-subhead);
-  font-weight: 600;
+  font-weight: var(--w-medium);
   transition: opacity var(--t-base) var(--ease-out);
 }
 
@@ -66,10 +60,10 @@ html[data-scrolled="true"] .masthead {
 .context-role {
   padding: 0.15rem 0.6rem;
   border-radius: var(--r-pill);
-  background: var(--surface-2);
-  color: var(--ink-2);
+  background: var(--accent-soft);
+  color: var(--accent);
   font-size: var(--fs-caption);
-  font-weight: 600;
+  font-weight: var(--w-medium);
   white-space: nowrap;
 }
 
@@ -85,8 +79,7 @@ html[data-scrolled="true"] .masthead {
   overflow: hidden;
   color: var(--ink);
   font-size: var(--fs-body);
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-weight: var(--w-strong);
   opacity: 0;
   text-overflow: ellipsis;
   transform: translateY(0.45rem);
@@ -110,21 +103,21 @@ html[data-scrolled="true"] .context-role {
   transition: opacity var(--t-base) var(--ease-out);
 }
 
-.chat-return {
+.button.chat-return {
   flex: 0 0 auto;
-  min-height: 2.5rem;
+  min-height: var(--control-h-small);
   padding: 0 1rem;
-  background: var(--glass-strong);
-  box-shadow: var(--shadow-1);
+  background: var(--accent-soft);
+  color: var(--accent);
   font-size: var(--fs-footnote);
 }
 
 .chat-return svg {
-  width: 1.15rem;
-  height: 1.15rem;
+  width: 1.1rem;
+  height: 1.1rem;
   fill: color-mix(in srgb, currentColor 16%, transparent);
   stroke: currentColor;
-  stroke-width: 1.7;
+  stroke-width: 1.6;
   stroke-linejoin: round;
   transition: transform var(--t-base) var(--spring);
 }
@@ -148,7 +141,7 @@ html[data-scrolled="true"] .context-role {
 #workspace {
   width: min(72rem, 100%);
   margin: auto;
-  padding: 2rem 2.5rem 0.5rem;
+  padding: 2rem 2.5rem calc(var(--safe-bottom) + 3rem);
 }
 
 /* ---- type -------------------------------------------------------------------------------------------- */
@@ -161,10 +154,9 @@ p {
 
 h1 {
   margin-bottom: 0.4rem;
-  font-size: clamp(1.9rem, 1.5rem + 1.6vw, 2.5rem);
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
+  font-size: clamp(1.625rem, 1.35rem + 1.2vw, 2.125rem);
+  font-weight: var(--w-strong);
+  line-height: 1.25;
 }
 
 h1:focus {
@@ -173,15 +165,14 @@ h1:focus {
 
 h2 {
   margin-bottom: 0.75rem;
-  font-size: 1.125rem;
-  font-weight: 650;
-  letter-spacing: -0.015em;
+  font-size: var(--fs-title3);
+  font-weight: var(--w-strong);
 }
 
 h3 {
   margin-bottom: 0.5rem;
   font-size: var(--fs-body);
-  font-weight: 650;
+  font-weight: var(--w-strong);
 }
 
 .muted,
@@ -200,11 +191,12 @@ h3 {
   line-height: 1.65;
 }
 
+/* the small line above a card's title: what kind of thing it is, or when it happened */
 .eyebrow {
   margin-bottom: 0.2rem;
-  color: var(--tint-text, var(--ink-2));
+  color: var(--ink-3);
   font-size: var(--fs-footnote);
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .badge {
@@ -215,17 +207,23 @@ h3 {
   background: var(--surface-2);
   color: var(--ink-2);
   font-size: var(--fs-caption);
-  font-weight: 650;
+  font-weight: var(--w-medium);
   white-space: nowrap;
 }
 
+/* Only what is waiting for the person is tinted; everything else stays quiet. */
+.badge.wait {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .badge.good {
-  background: color-mix(in srgb, var(--ok) 15%, var(--surface));
+  background: var(--ok-soft);
   color: var(--ok);
 }
 
 .badge.bad {
-  background: color-mix(in srgb, var(--danger) 13%, var(--surface));
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
@@ -236,16 +234,16 @@ button,
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  min-height: 2.75rem;
-  padding: 0.5rem 1.15rem;
+  min-height: var(--control-h);
+  padding: 0.5rem var(--control-pad);
   border: 0;
   border-radius: var(--r-pill);
   background: var(--surface-2);
   color: var(--ink);
   font-size: var(--fs-subhead);
-  font-weight: 600;
+  font-weight: var(--w-medium);
   text-decoration: none;
-  transition: transform var(--t-fast) var(--ease-out), background-color var(--t-fast), color var(--t-fast), opacity var(--t-base), box-shadow var(--t-base);
+  transition: transform var(--t-fast) var(--ease-out), background-color var(--t-fast), color var(--t-fast), opacity var(--t-base);
 }
 
 button:not(:disabled):active,
@@ -260,16 +258,15 @@ button:disabled {
 .primary {
   background: var(--accent);
   color: var(--accent-ink);
-  box-shadow: 0 4px 14px -6px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
 .ghost {
   background: transparent;
-  color: var(--pencil);
+  color: var(--accent);
 }
 
 .danger {
-  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
@@ -302,7 +299,7 @@ label {
   gap: 0.4rem;
   color: var(--ink-2);
   font-size: var(--fs-footnote);
-  font-weight: 600;
+  font-weight: var(--w-medium);
 }
 
 input,
@@ -316,7 +313,7 @@ textarea {
   background: var(--surface-2);
   color: var(--ink);
   font-size: var(--fs-body);
-  font-weight: 400;
+  font-weight: var(--w-regular);
   line-height: 1.5;
   transition: box-shadow var(--t-fast);
 }
@@ -335,7 +332,7 @@ input:focus,
 textarea:focus,
 select:focus {
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 
 .short-field {
@@ -354,30 +351,7 @@ select:focus {
   padding: 0.4rem 0;
 }
 
-/* ---- a page's title ---------------------------------------------------------------------------------- */
-/* A title's colour is the place's tint; text in that colour is the tint pulled toward the ink so it
-   stays readable on paper (and on the dark canvas). */
-.panel {
-  --tint: var(--tint-tasks);
-  --tint-text: color-mix(in srgb, var(--tint) 70%, var(--ink));
-}
-
-#panel-knowledge {
-  --tint: var(--tint-knowledge);
-}
-
-#panel-agents {
-  --tint: var(--tint-agents);
-}
-
-#panel-spaces {
-  --tint: var(--tint-spaces);
-}
-
-#panel-devices {
-  --tint: var(--tint-devices);
-}
-
+/* ---- a page's title: the name, one plain line under it, and the page's own actions -------------- */
 .section-title {
   display: flex;
   flex-wrap: wrap;
@@ -388,42 +362,8 @@ select:focus {
 }
 
 .section-title > div:first-child {
-  display: grid;
   flex: 1 1 15rem;
-  grid-template-columns: auto minmax(0, 1fr);
-  column-gap: 1rem;
   min-width: 0;
-}
-
-.section-title > div:first-child > :not(.section-emblem) {
-  grid-column: 2;
-}
-
-.section-emblem {
-  display: grid;
-  grid-row: 1 / span 3;
-  place-items: center;
-  align-self: start;
-  width: 3.5rem;
-  height: 3.5rem;
-  border-radius: 1.05rem;
-  background: var(--tint);
-  box-shadow: 0 6px 16px -8px var(--tint);
-  color: var(--tint-ink);
-}
-
-.section-emblem svg {
-  width: 2.1rem;
-  height: 2.1rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.section-emblem svg [fill] {
-  fill: color-mix(in srgb, currentColor 30%, transparent);
 }
 
 .section-title .muted {
@@ -491,13 +431,13 @@ select:focus {
 .row-copy strong {
   display: block;
   font-size: var(--fs-subhead);
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .row-copy span {
   display: block;
   margin-top: 0.15rem;
-  color: var(--ink-2);
+  color: var(--ink-3);
   font-size: var(--fs-footnote);
 }
 
@@ -505,6 +445,7 @@ select:focus {
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: var(--fs-subhead);
+  font-weight: var(--w-medium);
 }
 
 .row > .actions {
@@ -553,7 +494,7 @@ select:focus {
   padding: 1rem 1.35rem;
   cursor: pointer;
   font-size: var(--fs-body);
-  font-weight: 650;
+  font-weight: var(--w-strong);
   list-style: none;
   transition: background-color var(--t-fast);
 }
@@ -576,9 +517,9 @@ select:focus {
 
 .compose-description {
   flex: 1;
-  color: var(--ink-2);
+  color: var(--ink-3);
   font-size: var(--fs-footnote);
-  font-weight: 400;
+  font-weight: var(--w-regular);
 }
 
 .compose-plus,
@@ -590,12 +531,12 @@ select:focus {
   height: 2rem;
   margin-left: auto;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--accent) 13%, var(--surface));
+  background: var(--accent-soft);
   color: var(--accent);
   font-size: 1.35rem;
-  font-weight: 400;
+  font-weight: var(--w-regular);
   line-height: 1;
-  transition: transform var(--t-slow) var(--spring-bouncy);
+  transition: transform var(--t-slow) var(--spring);
 }
 
 .compose[open] .compose-plus,
@@ -625,9 +566,9 @@ select:focus {
 .inline-compose > summary {
   min-height: 2.75rem;
   padding: 0.6rem 0;
-  color: var(--pencil);
+  color: var(--accent);
   font-size: var(--fs-subhead);
-  font-weight: 600;
+  font-weight: var(--w-medium);
   cursor: pointer;
 }
 
@@ -656,16 +597,16 @@ select:focus {
   background: var(--surface);
   box-shadow: var(--shadow-1);
   text-align: left;
-  transition: transform var(--t-base) var(--spring), box-shadow var(--t-base) var(--ease-out), background-color var(--t-fast);
+  transition: transform var(--t-base) var(--ease-out), box-shadow var(--t-base) var(--ease-out), background-color var(--t-fast);
 }
 
 .task-card.selected {
-  background: color-mix(in srgb, var(--tint) 9%, var(--surface));
-  box-shadow: 0 0 0 1.5px var(--tint);
+  background: var(--accent-soft);
+  box-shadow: none;
 }
 
-.task-card.selected h3 {
-  color: var(--tint-text);
+.task-card.selected .badge.wait {
+  background: var(--surface);
 }
 
 .task-card h3 {
@@ -687,7 +628,6 @@ select:focus {
   top: calc(var(--safe-top) + 4.5rem);
   align-self: start;
   scroll-margin-top: calc(var(--safe-top) + 4.5rem);
-  box-shadow: var(--shadow-2);
 }
 
 .task-detail .detail-heading {
@@ -743,7 +683,7 @@ pre {
   min-height: 2.75rem;
   padding: 0.6rem 0;
   font-size: var(--fs-subhead);
-  font-weight: 600;
+  font-weight: var(--w-medium);
   cursor: pointer;
 }
 
@@ -753,8 +693,7 @@ pre {
 
 .task-question {
   padding-left: 1rem;
-  border-left: 3px solid var(--accent);
-  border-radius: 1px;
+  border-left: 2px solid color-mix(in srgb, var(--leaf) 70%, transparent);
 }
 
 .task-question > p {
@@ -789,8 +728,7 @@ pre {
   margin-top: 0.4rem;
   font-size: 1.6rem;
   font-variant-numeric: tabular-nums;
-  font-weight: 650;
-  letter-spacing: -0.03em;
+  font-weight: var(--w-strong);
 }
 
 .diagnostics .hint {
@@ -815,7 +753,7 @@ pre {
 }
 
 .knowledge-search input:focus {
-  box-shadow: var(--shadow-1), 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: var(--shadow-1), 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 
 .knowledge-search > button {
@@ -848,15 +786,14 @@ pre {
   border-radius: var(--r-m);
   background: transparent;
   color: var(--ink);
-  font-weight: 500;
+  font-weight: var(--w-medium);
   overflow-wrap: anywhere;
   text-align: left;
 }
 
 .document-link.selected {
-  background: var(--surface);
-  box-shadow: var(--shadow-1);
-  color: var(--tint-text);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .knowledge-placeholder {
@@ -870,7 +807,7 @@ pre {
   width: 7rem;
   height: 6.6rem;
   margin: 0 auto 1.25rem;
-  color: var(--tint);
+  color: var(--accent);
 }
 
 .knowledge-illustration .page {
@@ -880,7 +817,7 @@ pre {
 }
 
 .knowledge-illustration .accent-page {
-  fill: color-mix(in srgb, var(--tint) 14%, var(--surface));
+  fill: var(--accent-soft);
 }
 
 .knowledge-illustration .writing {
@@ -891,12 +828,12 @@ pre {
 }
 
 .knowledge-illustration .spark {
-  fill: var(--accent);
+  fill: var(--leaf);
 }
 
 .knowledge-placeholder h2 {
-  font-size: 1.4rem;
-  font-weight: 650;
+  font-size: var(--fs-title2);
+  font-weight: var(--w-strong);
 }
 
 .text-link {
@@ -966,7 +903,7 @@ pre {
   box-shadow: var(--shadow-1);
 }
 
-/* A leaf in the place's colour (two round corners, two sharp ones), with a smaller one behind it. */
+/* A leaf (two round corners, two sharp ones), with a smaller one behind it. */
 .task-layout > .stack > .empty::before {
   content: "";
   display: block;
@@ -974,8 +911,8 @@ pre {
   height: 3.25rem;
   margin: 0 auto 1.5rem;
   border-radius: 0 100% 0 100%;
-  background: color-mix(in srgb, var(--tint) 20%, var(--surface));
-  box-shadow: -0.95rem 0.75rem 0 -0.7rem color-mix(in srgb, var(--tint) 11%, var(--surface));
+  background: color-mix(in srgb, var(--leaf) 30%, var(--surface));
+  box-shadow: -0.95rem 0.75rem 0 -0.7rem color-mix(in srgb, var(--leaf) 16%, var(--surface));
   rotate: -12deg; /* the sway below turns it a little further each way */
   transform-origin: 0 100%;
   animation: leaf-sway 7s var(--ease-sway) infinite;
@@ -984,8 +921,8 @@ pre {
 .empty h3 {
   margin: 0 0 0.5rem;
   color: var(--ink);
-  font-size: 1.2rem;
-  font-weight: 650;
+  font-size: var(--fs-title3);
+  font-weight: var(--w-strong);
 }
 
 .empty p {
@@ -1017,11 +954,11 @@ pre {
   background: var(--glass-strong);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--shadow-2);
   font-size: var(--fs-subhead);
   overflow-wrap: anywhere;
   cursor: pointer;
-  animation: drop-in var(--t-slow) var(--spring) both;
+  animation: drop-in var(--t-slow) var(--ease-out) both;
 }
 
 .notice::before {
@@ -1031,7 +968,7 @@ pre {
   height: 0.55rem;
   margin-top: 0.5rem;
   border-radius: 50%;
-  background: var(--pencil);
+  background: var(--leaf);
 }
 
 .notice.error::before {
@@ -1063,13 +1000,6 @@ pre {
 .account-recovery {
   background: transparent;
   box-shadow: inset 0 0 0 0.5px var(--hairline-strong);
-}
-
-.footer {
-  padding: 2rem 1.5rem calc(var(--safe-bottom) + 2rem);
-  color: var(--ink-3);
-  font-size: var(--fs-caption);
-  text-align: center;
 }
 
 /* ---- dialogs: the page's secrets and history, as sheets on a phone ---------------------------------- */
@@ -1111,7 +1041,7 @@ dialog textarea {
   }
 
   .ghost:not(:disabled):hover {
-    background: color-mix(in srgb, var(--pencil) 10%, transparent);
+    background: var(--accent-soft);
   }
 
   .task-card:not(:disabled):hover {
@@ -1152,28 +1082,21 @@ dialog textarea {
   }
 
   dialog[open] {
-    animation: dialog-in var(--t-slow) var(--spring) both;
-  }
-}
-
-@keyframes arrive {
-  from {
-    opacity: 0;
-    transform: translateY(0.6rem);
+    animation: dialog-in var(--t-slow) var(--ease-out) both;
   }
 }
 
 @keyframes dialog-in {
   from {
     opacity: 0;
-    transform: scale(0.94);
+    transform: scale(0.96);
   }
 }
 
 @keyframes drop-in {
   from {
     opacity: 0;
-    transform: translateY(-0.7rem) scale(0.96);
+    transform: translateY(-0.6rem) scale(0.97);
   }
 }
 
@@ -1212,23 +1135,10 @@ dialog textarea {
 
   .section-title > div:first-child {
     flex-basis: 12rem;
-    column-gap: 0.85rem;
-  }
-
-  .section-emblem {
-    width: 2.9rem;
-    height: 2.9rem;
-    border-radius: 0.9rem;
-  }
-
-  .section-emblem svg {
-    width: 1.8rem;
-    height: 1.8rem;
   }
 
   .section-title > .actions {
     gap: 0.5rem;
-    margin-left: 3.75rem;
   }
 
   .two-columns,

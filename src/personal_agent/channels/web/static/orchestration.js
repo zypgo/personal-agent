@@ -108,7 +108,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
   const textarea = (name,placeholder,rows=3,maxLength=8000)=>{const el=node("textarea");Object.assign(el,{name,placeholder,rows,maxLength});return el;};
   const select = (name,options)=>{const el=node("select");el.name=name;for(const [value,text] of options){const option=node("option",text);option.value=value;el.append(option);}el.value=options[0]?.[0] || "";return el;};
   const check = (name,text,checked=false)=>{const control=input(name,{type:"checkbox"});control.checked=checked;const el=label(text,control);el.className="or-check";return {el,control};};
-  const badge = (value,text=statusLabel(value))=>{const el=node("span",text,"badge");if(["accepted","succeeded"].includes(value))el.classList.add("good");if(["failed","uncertain","rejected","revoked"].includes(value))el.classList.add("bad");return el;};
+  const badge = (value,text=statusLabel(value))=>{const el=node("span",text,"badge");if(["accepted","succeeded"].includes(value))el.classList.add("good");if(PLAN_STATES.has(value) || REVIEW_STATES.has(value) || value==="waiting_approval")el.classList.add("wait");if(["failed","uncertain","rejected","revoked"].includes(value))el.classList.add("bad");return el;};
   const when = value=>{if(!value)return "";const date=new Date(typeof value === "string" && !/^\d+(\.\d+)?$/.test(value)?value:Number(value)*(Number(value)>1e12?1:1000));return Number.isNaN(date.getTime())?"":date.toLocaleString("zh-CN",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});};
   const agentName = id=>state.agents.find(agent=>agent.id===id)?.name || "已连接的 Agent";
   const agentById = id=>state.agents.find(agent=>agent.id===id);

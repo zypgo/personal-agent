@@ -115,21 +115,23 @@ READABLE_TEXT = [  # text colour, what it is set on: ordinary text needs 4.5 to 
     ("ink", "canvas"),
     ("ink", "surface"),
     ("ink", "surface-2"),
+    ("ink", "accent-soft"),
     ("ink-2", "canvas"),
     ("ink-2", "surface"),
     ("ink-2", "surface-2"),
-    ("pencil", "canvas"),
-    ("pencil", "surface"),
-    ("pencil", "surface-2"),
+    ("ink-2", "accent-soft"),
     ("accent", "canvas"),
     ("accent", "surface"),
+    ("accent", "surface-2"),
+    ("accent", "accent-soft"),
     ("accent-ink", "accent"),
     ("danger", "surface"),
     ("danger", "surface-2"),
+    ("danger", "danger-soft"),
     ("ok", "surface"),
+    ("ok", "ok-soft"),
     ("warn", "warn-bg"),
 ]
-TINTS = ["pencil", "accent", "tint-knowledge", "tint-agents", "tint-spaces", "tint-devices"]
 
 
 @pytest.mark.parametrize("theme", [0, 1], ids=["light", "dark"])
@@ -138,12 +140,21 @@ def test_the_palette_is_readable_in_both_themes(assets, theme):
     for text, ground in READABLE_TEXT:
         ratio = contrast(colours[text][theme], colours[ground][theme])
         assert ratio >= 4.5, f"{text} on {ground} is {ratio:.2f} to 1"
-    for ground in ("canvas", "surface", "surface-2"):  # placeholders and timestamps
+    for ground in ("canvas", "surface", "surface-2", "accent-soft"):  # placeholders, timestamps
         ratio = contrast(colours["ink-3"][theme], colours[ground][theme])
         assert ratio >= 4.0, f"ink-3 on {ground} is {ratio:.2f} to 1"
-    for tint in TINTS:  # a white (or, at night, near-black) icon on a coloured tile
-        ratio = contrast(colours["tint-ink"][theme], colours[tint][theme])
-        assert ratio >= 3.0, f"the icon on {tint} is {ratio:.2f} to 1"
+    for ground in ("canvas", "surface"):  # the leaf is never text, but it has to be seen
+        ratio = contrast(colours["leaf"][theme], colours[ground][theme])
+        assert ratio >= 3.0, f"the leaf on {ground} is {ratio:.2f} to 1"
+
+
+def test_the_icon_tile_keeps_its_mark_readable(assets):
+    tokens = stylesheet(assets, "tokens.css")
+    tile = dict(re.findall(r"^  --(tile-[\w-]+): (#[0-9a-fA-F]{6});", tokens, re.M))
+    for ground in ("tile-from", "tile-via", "tile-to"):  # dark in both themes, so one check does
+        for mark in ("tile-ink", "tile-leaf"):
+            ratio = contrast(rgb(tile[mark]), rgb(tile[ground]))
+            assert ratio >= 3.0, f"{mark} on {ground} is {ratio:.2f} to 1"
 
 
 def test_a_browser_without_light_dark_gets_exactly_the_light_theme(assets):
@@ -162,30 +173,53 @@ def test_a_browser_without_light_dark_gets_exactly_the_light_theme(assets):
             )
 
 
-@pytest.mark.parametrize("theme", [0, 1], ids=["light", "dark"])
-def test_text_set_in_a_places_tint_stays_readable(assets, theme):
-    colours = palette(stylesheet(assets, "tokens.css"))
-    mixes = {
-        int(percent)
-        for name in ("workbench.css", "orchestration.css")
-        for percent in re.findall(
-            r"color-mix\(in srgb, var\(--(?:agent-)?tint\) (\d+)%, var\(--ink\)\)",
-            stylesheet(assets, name),
-        )
+def styles_of(assets) -> dict[str, str]:
+    """Every stylesheet the pages load, without its comments."""
+    return {
+        name: re.sub(r"/\*.*?\*/", "", asset.body.decode(), flags=re.S)
+        for name, asset in assets[0].items()
+        if name.endswith(".css")
     }
-    assert mixes, (
-        "titles in a place's colour are expected to be pulled toward the ink for legibility"
-    )
-    for percent in mixes:
-        weight = percent / 100
-        for tint in TINTS:
-            text = tuple(
-                round(own * weight + ink * (1 - weight))
-                for own, ink in zip(colours[tint][theme], colours["ink"][theme], strict=True)
+
+
+def test_type_uses_the_three_shared_weights(assets):
+    shared = {"var(--w-regular)", "var(--w-medium)", "var(--w-strong)"}
+    for name, text in styles_of(assets).items():
+        if name == "tokens.css":
+            continue
+        for weight in re.findall(r"font-weight:\s*([^;]+);", text):
+            assert weight.strip() in shared, (
+                f"{name}: font-weight {weight.strip()} is off the scale"
             )
-            for ground in ("canvas", "surface"):
-                ratio = contrast(text, colours[ground][theme])  # type: ignore[arg-type]
-                assert ratio >= 4.5, f"{tint} text at {percent}% on {ground} is {ratio:.2f} to 1"
+
+
+def test_colour_is_only_ever_chosen_in_the_tokens(assets):
+    for name, text in styles_of(assets).items():
+        if name == "tokens.css":
+            continue
+        for value in re.findall(r"[\w-]+\s*:\s*([^;{}]+);", text):
+            found = re.findall(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab)\(", value)
+            assert not found, f"{name}: a colour of its own ({found[0]}) in `{value.strip()}`"
+
+
+def test_every_variable_a_stylesheet_reads_is_defined(assets):
+    styles = styles_of(assets)
+    defined = {name for text in styles.values() for name in re.findall(r"(--[\w-]+)\s*:", text)}
+    for name, asset in assets[0].items():  # a few are set while the page runs (a sheet's drag)
+        if name.endswith(".js"):
+            defined |= set(re.findall(r'setProperty\??\.?\(\s*"(--[\w-]+)"', asset.body.decode()))
+    for file, text in styles.items():
+        for used in re.findall(r"var\((--[\w-]+)", text):
+            assert used in defined, f"{file}: var({used}) is not defined anywhere"
+
+
+def test_only_the_leaf_is_allowed_to_overshoot(assets):
+    for name, text in styles_of(assets).items():
+        if name == "tokens.css":
+            continue
+        for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", text):
+            if "var(--spring-leaf)" in body:
+                assert "leaf" in selector, f"{name}: `{selector.strip()}` should not bounce"
 
 
 @pytest.mark.parametrize("name", ["index.html", "workbench.html"])
@@ -529,7 +563,7 @@ def test_the_name_is_never_read_as_a_placeholder_itself():
 
 
 def test_the_tab_is_titled_with_the_product_and_the_agent_name_comes_first():
-    assert page_title("Ada") == "Ada · 栖序"
+    assert page_title("Sam") == "Sam · 栖序"
     assert page_title("栖序") == "栖序"  # an agent named after the product is not said twice
     assert page_title("") == "栖序"
 
@@ -541,12 +575,12 @@ def test_no_placeholder_is_left_unfilled(assets):
 
 # ---- the version: changes when anything the page shows changes ------------------------------------------------
 def test_the_version_is_stable_for_the_same_files_and_name():
-    assert load_assets(agent="Ada")[1] == load_assets(agent="Ada")[1]
-    assert re.fullmatch(r"[0-9a-f]{12}", load_assets(agent="Ada")[1])
+    assert load_assets(agent="Sam")[1] == load_assets(agent="Sam")[1]
+    assert re.fullmatch(r"[0-9a-f]{12}", load_assets(agent="Sam")[1])
 
 
 def test_a_different_name_is_a_different_version_so_phones_fetch_the_page_again():
-    one, version_one = load_assets(agent="Ada")
+    one, version_one = load_assets(agent="Sam")
     two, version_two = load_assets(agent="Grace")
     assert version_one != version_two
     assert one["index.html"].etag != two["index.html"].etag
@@ -556,9 +590,9 @@ def test_a_different_name_is_a_different_version_so_phones_fetch_the_page_again(
 def test_changing_any_file_changes_the_version(tmp_path):
     copy = tmp_path / "static"
     shutil.copytree(STATIC_DIR, copy)
-    before = load_assets(copy, agent="Ada")[1]
+    before = load_assets(copy, agent="Sam")[1]
     (copy / "style.css").write_text((copy / "style.css").read_text() + "\n/* edit */\n")
-    assert load_assets(copy, agent="Ada")[1] != before
+    assert load_assets(copy, agent="Sam")[1] != before
 
 
 def test_the_version_is_what_the_page_and_its_worker_carry(assets):

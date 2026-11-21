@@ -282,7 +282,7 @@ class Ingress:
             )
         except Exception:
             log.exception("command /%s failed", name)
-            answer = f"/{name} failed. The details are in the log."
+            answer = f"/{name} 没有成功，详情在日志里。"
         if key is not None:
             app.db.kv_set(key, "1", now=app.clock.now())
         app.outbox.enqueue(

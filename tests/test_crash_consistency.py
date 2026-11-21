@@ -259,9 +259,7 @@ async def test_a_crash_loop_ends_with_the_owner_told_not_with_silence():
             app, deaths = await play(world, owner, die_at=["status = 'leased'"] * 4)
             assert deaths == 4
             assert app.inbox.counts()["dead"] == 1
-            assert world.channel.texts("notice") == [
-                "I could not process your message and gave up on it. Please send it again."
-            ]
+            assert world.channel.texts("notice") == ["这条消息我没能处理，只好放弃了。请再发一次。"]
         finally:
             world.close()
 

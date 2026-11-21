@@ -55,15 +55,15 @@ def classify(exc: BaseException) -> Failure:
             True,
             300.0,
             text,
-            "The model API key is missing. Run `pa doctor` to see which variable to set.",
+            "还没有配置模型的 API 密钥。运行 `pa doctor`，看看该设置哪个变量。",
         )
     if isinstance(exc, BudgetExceeded) and exc.scope == "daily":
         return Failure(
             True,
             exc.resets_in_s or 3600.0,
             text,
-            f"Today's budget (${exc.limit:.2f}) is used up. Work resumes after midnight; "
-            "run `pa budget extend 2` to allow $2 more today.",
+            f"今天的预算（${exc.limit:.2f}）用完了，过了零点会接着做。"
+            "想今天多给 $2，运行 `pa budget extend 2`。",
             notice_key="budget:daily",
         )
     if isinstance(exc, BudgetExceeded):
@@ -71,25 +71,23 @@ def classify(exc: BaseException) -> Failure:
             False,
             0.0,
             text,
-            f"That task reached its cost limit (${exc.limit:.2f}) and was stopped.",
+            f"这件事花到了费用上限（${exc.limit:.2f}），已经停下。",
         )
     if isinstance(exc, RunTimedOut):
-        return Failure(
-            False, 0.0, text, "That took too long, so I stopped it. What I did so far is saved."
-        )
+        return Failure(False, 0.0, text, "这次花的时间太长，我先停下了。已经做完的部分都保留着。")
     if isinstance(exc, PreferencesProblem):
         return Failure(
             True,
             120.0,
             text,
-            "I could not read your preferences file, so I stopped on purpose instead of guessing.",
+            "没能读懂你的偏好文件，我先停下来，不乱猜。",
         )
     if isinstance(exc, openai.AuthenticationError | openai.PermissionDeniedError):
         return Failure(
             True,
             300.0,
             text,
-            "The model provider rejected the API key. Run `pa doctor` to check the configured key.",
+            "模型服务拒绝了这个 API 密钥。运行 `pa doctor` 检查一下配置的密钥。",
         )
     if isinstance(exc, openai.RateLimitError):
         quota = "insufficient_quota" in str(exc)
@@ -97,7 +95,7 @@ def classify(exc: BaseException) -> Failure:
             True,
             900.0 if quota else 60.0,
             text,
-            "The model provider account is out of quota or credit." if quota else None,
+            "模型服务的账户额度用完了。" if quota else None,
         )
     if isinstance(
         exc, openai.APITimeoutError | openai.APIConnectionError | openai.InternalServerError

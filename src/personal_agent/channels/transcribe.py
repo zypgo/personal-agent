@@ -139,7 +139,7 @@ class OpenAITranscriber:
                     max_retries=2,
                 )
             except ModelUnavailable as exc:
-                raise TranscriptionError(f"I cannot transcribe voice messages: {exc}") from exc
+                raise TranscriptionError(f"没法转写语音：{exc}") from exc
         return self._client
 
     async def aclose(self) -> None:
@@ -166,27 +166,18 @@ class OpenAITranscriber:
             )
         except openai.AuthenticationError as exc:
             key_env = transcription_endpoint(self.model_cfg, self.media_cfg).api_key_env
-            raise TranscriptionError(
-                f"The speech service refused the API key. Check {key_env}."
-            ) from exc
+            raise TranscriptionError(f"语音服务拒绝了这个 API 密钥，请检查 {key_env}。") from exc
         except openai.BadRequestError as exc:
             hint = (
-                " Install ffmpeg (for example `brew install ffmpeg`) so voice notes can be "
-                "converted first."
+                "安装 ffmpeg（例如 `brew install ffmpeg`），语音就能先转换格式。"
                 if extension not in ACCEPTED
                 else ""
             )
             log.warning("speech-to-text rejected the audio: %s", exc)
-            raise TranscriptionError(
-                f"The speech service did not accept that audio ({extension}).{hint}"
-            ) from exc
+            raise TranscriptionError(f"语音服务不接受这段音频（{extension}）。{hint}") from exc
         except openai.RateLimitError as exc:
-            raise TranscriptionError(
-                "The speech service is busy or out of quota. Try again in a minute."
-            ) from exc
+            raise TranscriptionError("语音服务正忙，或者额度用完了。过一分钟再试。") from exc
         except (openai.APIConnectionError, openai.APITimeoutError, openai.APIStatusError) as exc:
             log.warning("speech-to-text failed: %s", exc)
-            raise TranscriptionError(
-                "I could not reach the speech service. Send it again, or type it."
-            ) from exc
+            raise TranscriptionError("没连上语音服务。可以再发一次，或者直接打字。") from exc
         return (getattr(result, "text", "") or "").strip()

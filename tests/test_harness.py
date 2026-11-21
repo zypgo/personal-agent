@@ -117,7 +117,7 @@ async def test_empty_final_answer_gets_an_explicit_notice(make_app):
 
     [message] = app.outbox.recent()
     assert message.kind == "notice"
-    assert "without a reply" in message.text
+    assert "没有给出回复" in message.text
 
 
 # ---- what the model is told -------------------------------------------------------------
@@ -168,7 +168,7 @@ async def test_unreadable_preferences_stop_the_run_before_anything_is_written(ma
     event = app.inbox.get(1)
     assert event["status"] == "pending" and event["attempts"] == 0  # not the message's fault
     [notice] = app.outbox.recent()
-    assert "preferences" in notice.text
+    assert "偏好" in notice.text
 
 
 # ---- trust and profiles -----------------------------------------------------------------
@@ -321,7 +321,7 @@ async def test_a_failed_run_resumes_without_duplicating_the_owners_message(make_
     assert roles(items).count("function_call") == roles(items).count("function_call_output") == 1
     # The owner is told once that the first attempt failed, then gets the real answer.
     sent = [m.text for m in sorted(app.outbox.recent(), key=lambda m: m.id)]
-    assert sent == ["Something went wrong. I will retry automatically.", "recovered"]
+    assert sent == ["出了点问题。我会自动再试一次。", "recovered"]
 
 
 async def test_a_wake_up_that_is_tried_again_does_not_queue_the_same_message_twice(make_app, clock):
@@ -462,7 +462,7 @@ async def test_step_limit_ends_the_run_tells_the_owner_and_does_not_retry(make_a
     assert result.outcome.status == "failed"
     assert app.inbox.counts()["done"] == 1
     [notice] = app.outbox.recent()
-    assert "stopped after 2 steps" in notice.text
+    assert "我做了 2 步" in notice.text
 
 
 # ---- failures are attributed correctly --------------------------------------------------
@@ -488,7 +488,7 @@ async def test_a_missing_api_key_does_not_use_up_an_attempt_and_tells_the_owner_
     await worker.run_once()
     notices = [m for m in app.outbox.recent() if m.kind == "notice"]
     assert len(notices) == 1
-    assert "API key" in notices[0].text and "pa doctor" in notices[0].text
+    assert "API 密钥" in notices[0].text and "pa doctor" in notices[0].text
 
 
 async def test_an_event_that_keeps_failing_is_given_up_on_and_the_owner_is_told(make_app, clock):
@@ -503,7 +503,7 @@ async def test_an_event_that_keeps_failing_is_given_up_on_and_the_owner_is_told(
     await worker.run_once()  # claim reaps the exhausted event
 
     assert app.inbox.counts()["dead"] == 1
-    assert any("gave up" in m.text for m in app.outbox.recent())
+    assert any("放弃" in m.text for m in app.outbox.recent())
 
 
 async def test_interactive_callers_can_drop_instead_of_retry(make_app):

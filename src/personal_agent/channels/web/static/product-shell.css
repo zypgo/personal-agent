@@ -58,13 +58,13 @@
 /* The app icon itself, for the places that are a front door: sign-in, the first moment. The
    tile is dark in both themes, so its colours do not follow them. */
 .product-mark.tile {
-  --mark-ink: #fff6df;
-  --mark-leaf: #b6cf8c;
+  --mark-ink: var(--tile-ink);
+  --mark-leaf: var(--tile-leaf);
   box-sizing: border-box;
   padding: calc(var(--mark-size) * 0.165); /* a percentage would be of the page, not of the mark */
   border-radius: 23%;
-  background: linear-gradient(145deg, #304a40, #1b322d 57%, #132622);
-  box-shadow: inset 0 0 0 1px rgb(232 243 214 / 0.14), var(--shadow-2);
+  background: linear-gradient(145deg, var(--tile-from), var(--tile-via) 57%, var(--tile-to));
+  box-shadow: inset 0 0 0 1px var(--tile-edge), var(--shadow-2);
 }
 
 @keyframes mark-breathe {
@@ -105,7 +105,7 @@
 
 /* ---- the frame: a drawer beside the page on a wide screen, over it on a phone ------------------- */
 .product-layout {
-  --drawer-width: 17.5rem;
+  --drawer-width: 17rem;
   --drawer-p: 1;
   display: grid;
   grid-template-columns: var(--drawer-width) minmax(0, 1fr);
@@ -151,10 +151,10 @@ body.product-menu-open {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--hairline-strong) transparent;
-  background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
-  border-right: 0.5px solid var(--hairline-strong);
+  border-right: 0.5px solid var(--hairline);
   color: var(--ink);
   transition: transform var(--t-slow) var(--ease-ios), visibility var(--t-slow);
 }
@@ -187,9 +187,9 @@ body.product-menu-open {
 }
 
 .product-brand-name {
-  font-size: 1.1875rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-size: 1.125rem;
+  font-weight: var(--w-strong);
+  letter-spacing: 0.06em;
 }
 
 .product-brand-latin {
@@ -197,7 +197,7 @@ body.product-menu-open {
   padding-bottom: 0.2rem;
   color: var(--ink-3);
   font-size: 0.625rem;
-  font-weight: 650;
+  font-weight: var(--w-medium);
   letter-spacing: 0.22em;
   text-transform: uppercase;
 }
@@ -209,7 +209,7 @@ body.product-menu-open {
   height: 1.25rem;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.7;
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -240,13 +240,7 @@ body.product-menu-open {
 
 .product-menu-toggle:active,
 .product-drawer-close:active {
-  transform: scale(0.9);
-}
-
-.bar .product-menu-toggle {
-  background: var(--glass-strong);
-  box-shadow: var(--shadow-1);
-  color: var(--ink);
+  transform: scale(0.92);
 }
 
 /* ---- the space switcher: a native select dressed as a pull-down ---------------------------------- */
@@ -258,9 +252,9 @@ body.product-menu-open {
 .product-space-label {
   display: block;
   margin: 0 0 0.35rem 0.6rem;
-  color: var(--ink-2);
-  font-size: 0.75rem;
-  font-weight: 600;
+  color: var(--ink-3);
+  font-size: var(--fs-caption);
+  font-weight: var(--w-medium);
 }
 
 .product-space:has(select:empty) {
@@ -272,7 +266,7 @@ body.product-menu-open {
   display: block;
   width: 100%;
   max-width: 100%;
-  min-height: 2.75rem;
+  min-height: var(--control-h);
   padding: 0.5rem 2.25rem 0.5rem 0.9rem;
   border: 0;
   border-radius: var(--r-m);
@@ -281,103 +275,59 @@ body.product-menu-open {
   background-position: right 0.7rem center;
   background-repeat: no-repeat;
   background-size: 1.05rem;
-  box-shadow: var(--shadow-1);
   color: var(--ink);
   font-size: var(--fs-subhead);
-  font-weight: 600;
+  font-weight: var(--w-medium);
   text-overflow: ellipsis;
   -webkit-appearance: none;
   appearance: none;
 }
 
-/* ---- navigation ------------------------------------------------------------------------------------ */
+/* ---- navigation: line icons and a name; the page you are on is held in a soft tint -------------- */
 .product-nav {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
 }
 
-.product-nav-label {
-  margin: 1.1rem 0.75rem 0.3rem;
-  color: var(--ink-2);
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
 .product-nav-link,
 .product-settings {
-  --tint: var(--ink-2);
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.7rem;
+  gap: 0.75rem;
   width: 100%;
-  min-height: 2.9rem;
-  padding: 0.3rem 0.6rem;
+  min-height: 2.75rem;
+  padding: 0.3rem 0.75rem;
   border: 0;
   border-radius: var(--r-m);
   background: transparent;
-  color: var(--ink);
+  color: var(--ink-2);
   font-size: var(--fs-body);
-  font-weight: 500;
+  font-weight: var(--w-medium);
   text-align: start;
   text-decoration: none;
   white-space: nowrap;
-  transition: background-color var(--t-fast), transform var(--t-fast) var(--ease-out);
+  transition: background-color var(--t-fast), color var(--t-fast), transform var(--t-fast) var(--ease-out);
 }
 
 .product-nav-link:active,
 .product-settings:active {
   transform: scale(0.98);
-  background: var(--fill, color-mix(in srgb, var(--ink) 7%, transparent));
-}
-
-.product-nav-link[data-page="chat"] {
-  --tint: var(--tint-chat);
-}
-
-.product-nav-link[data-page="tasks"] {
-  --tint: var(--tint-tasks);
-}
-
-.product-nav-link[data-page="knowledge"] {
-  --tint: var(--tint-knowledge);
-}
-
-.product-nav-link[data-page="agents"] {
-  --tint: var(--tint-agents);
-}
-
-.product-nav-link[data-page="spaces"] {
-  --tint: var(--tint-spaces);
-}
-
-.product-nav-link[data-page="devices"] {
-  --tint: var(--tint-devices);
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
 }
 
 .product-nav-symbol {
   display: grid;
   flex: 0 0 auto;
   place-items: center;
-  width: 1.9rem;
-  height: 1.9rem;
-  border-radius: 0.55rem;
-  background: var(--tint);
-  color: var(--tint-ink);
-  transition: transform var(--t-slow) var(--spring-bouncy);
-}
-
-.product-nav-symbol .product-icon {
-  width: 1.1rem;
-  height: 1.1rem;
-  stroke-width: 1.9;
+  width: 1.5rem;
+  height: 1.5rem;
 }
 
 .product-nav-link.selected {
-  background: var(--surface);
-  box-shadow: var(--shadow-1);
-  font-weight: 650;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .product-settings {
@@ -405,10 +355,10 @@ body.product-menu-open {
   width: 2.25rem;
   height: 2.25rem;
   border-radius: 50%;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 80%, #fff), var(--accent));
-  color: var(--accent-ink);
-  font-size: 0.9375rem;
-  font-weight: 700;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-subhead);
+  font-weight: var(--w-strong);
 }
 
 .product-identity-copy {
@@ -427,12 +377,12 @@ body.product-menu-open {
 
 .product-identity-copy strong {
   font-size: var(--fs-subhead);
-  font-weight: 650;
+  font-weight: var(--w-medium);
 }
 
 .product-identity-copy span {
-  color: var(--ink-2);
-  font-size: 0.75rem;
+  color: var(--ink-3);
+  font-size: var(--fs-caption);
 }
 
 /* ---- on a phone the drawer lies over the page and follows the finger ------------------------------- */
@@ -443,17 +393,14 @@ body.product-menu-open {
 @media (hover: hover) and (pointer: fine) {
   .product-menu-toggle:hover,
   .product-drawer-close:hover {
-    background: var(--surface-2);
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
     color: var(--ink);
   }
 
   .product-nav-link:hover:not(.selected),
   .product-settings:hover {
-    background: color-mix(in srgb, var(--ink) 6%, transparent);
-  }
-
-  .product-nav-link:hover .product-nav-symbol {
-    transform: scale(1.08);
+    background: color-mix(in srgb, var(--ink) 5%, transparent);
+    color: var(--ink);
   }
 }
 

@@ -1,11 +1,12 @@
 /* Design tokens and the base every page shares: one palette, one type scale, one set of
    materials and one set of motion curves. Pages add components on top; they do not invent values.
 
-   The look comes from the icon: deep forest, warm cream and one leaf of green. The light theme is
-   cream paper with forest ink and a forest accent for the one thing to do next; the dark theme is
-   forest at night with cream ink and the leaf as its accent. Surfaces are layered (canvas, surface,
-   fill), chrome is translucent glass, and movement is a short spring that settles, with slow sways
-   where something is alive. Type is the system's own. */
+   The rule behind all of it is weight: the page should carry almost none of its own. Colour is the
+   icon's three (deep forest, warm cream, one leaf of green) and the accent is the only hue, used
+   for the next step and for every link. Surfaces are told apart by tone, not by lines; type is
+   regular and medium, with one semibold for the thing that matters; shadows only belong to what
+   floats; and movement is short, with a slow sway where something is alive. Type is the
+   system's own. */
 
 :root {
   color-scheme: light dark;
@@ -13,42 +14,40 @@
   /* ---- layers ------------------------------------------------------------------------------- */
   --canvas: #f3f1e5;
   --surface: #fffdf6;
-  --surface-2: #ebe8d9;
-  --surface-3: #e0ddca;
+  --surface-2: #efecdf;
+  --surface-3: #e5e2d3;
   --ink: #18271f;
   --ink-2: #4f5f55;
   --ink-3: #5d6c63;
-  --hairline: rgb(24 39 31 / 0.11);
-  --hairline-strong: rgb(24 39 31 / 0.24);
-  --scrim: rgb(10 22 17 / 0.38);
+  --hairline: rgb(24 39 31 / 0.08);
+  --hairline-strong: rgb(24 39 31 / 0.16);
+  --scrim: rgb(10 22 17 / 0.34);
 
   /* ---- colour with a job -------------------------------------------------------------------- */
-  --accent: #2c5545; /* the next thing to do */
+  --accent: #2c5545; /* the next step, and every link */
   --accent-strong: #21463a;
+  --accent-soft: #e5edd5; /* the accent let down to a tint: your own words, the place you are in */
   --accent-ink: #fff6df;
-  --pencil: #2b6a74; /* links, quiet emphasis */
   --leaf: #68923f; /* growth: the leaf in the mark, progress, small good news */
   --ok: #3d7a3a;
+  --ok-soft: #eef4e3; /* small good news as a tint, with its own text colour on top */
   --danger: #b23a2b;
+  --danger-soft: #f8e6e1;
   --warn: #8a5a00;
   --warn-bg: #f4e6bc;
-  --sage: #e3ecd6;
-  --lilac: #ebe6ee;
-  --peach: #f6e7d3;
-
-  /* ---- one tint per place, used by the drawer, the welcome tiles and the workspace titles ---- */
-  --tint-chat: var(--accent);
-  --tint-tasks: var(--pencil);
-  --tint-knowledge: #b7791f;
-  --tint-agents: #7a5a8c;
-  --tint-spaces: #6c9a3c;
-  --tint-devices: #6f7b74;
-  --tint-ink: #fff;
 
   /* ---- the mark and its glow; glows stay small, a wash over a whole page shows bands ------- */
   --mark-ink: #1f3d32;
   --mark-leaf: var(--leaf);
   --halo: rgb(125 170 75 / 0.34);
+
+  /* ---- the app icon as a tile (sign-in, the first moment): dark in both themes -------------- */
+  --tile-from: #304a40;
+  --tile-via: #1b322d;
+  --tile-to: #132622;
+  --tile-edge: rgb(232 243 214 / 0.14);
+  --tile-ink: #fff6df;
+  --tile-leaf: #b6cf8c;
 }
 
 :root[data-theme="light"] { color-scheme: light; }
@@ -58,64 +57,45 @@
   :root {
     --canvas: light-dark(#f3f1e5, #0f1b17);
     --surface: light-dark(#fffdf6, #162520);
-    --surface-2: light-dark(#ebe8d9, #1e3029);
-    --surface-3: light-dark(#e0ddca, #283d34);
+    --surface-2: light-dark(#efecdf, #1e3029);
+    --surface-3: light-dark(#e5e2d3, #283d34);
     --ink: light-dark(#18271f, #f2ecd9);
     --ink-2: light-dark(#4f5f55, #b5bfae);
     --ink-3: light-dark(#5d6c63, #8d9a8e);
-    --hairline: light-dark(rgb(24 39 31 / 0.11), rgb(242 236 217 / 0.12));
-    --hairline-strong: light-dark(rgb(24 39 31 / 0.24), rgb(242 236 217 / 0.26));
-    --scrim: light-dark(rgb(10 22 17 / 0.38), rgb(0 0 0 / 0.58));
+    --hairline: light-dark(rgb(24 39 31 / 0.08), rgb(242 236 217 / 0.1));
+    --hairline-strong: light-dark(rgb(24 39 31 / 0.16), rgb(242 236 217 / 0.2));
+    --scrim: light-dark(rgb(10 22 17 / 0.34), rgb(0 0 0 / 0.55));
     --accent: light-dark(#2c5545, #b7d38d);
     --accent-strong: light-dark(#21463a, #cde5a9);
+    --accent-soft: light-dark(#e5edd5, #243a2d);
     --accent-ink: light-dark(#fff6df, #12251b);
-    --pencil: light-dark(#2b6a74, #8fc9d0);
     --leaf: light-dark(#68923f, #b9d48f);
     --ok: light-dark(#3d7a3a, #a6d38a);
+    --ok-soft: light-dark(#eef4e3, #21382a);
     --danger: light-dark(#b23a2b, #f1a193);
+    --danger-soft: light-dark(#f8e6e1, #3e2622);
     --warn: light-dark(#8a5a00, #f0c36b);
     --warn-bg: light-dark(#f4e6bc, #3a2d10);
-    --sage: light-dark(#e3ecd6, #22362a);
-    --lilac: light-dark(#ebe6ee, #2e2b38);
-    --peach: light-dark(#f6e7d3, #3a3026);
-    --tint-knowledge: light-dark(#b7791f, #e0b25c);
-    --tint-agents: light-dark(#7a5a8c, #c3a4d6);
-    --tint-spaces: light-dark(#6c9a3c, #a7cf7c);
-    --tint-devices: light-dark(#6f7b74, #9aa6a0);
-    --tint-ink: light-dark(#fff, #12251b);
     --mark-ink: light-dark(#1f3d32, #fff2d2);
     --halo: light-dark(rgb(125 170 75 / 0.34), rgb(150 200 120 / 0.22));
   }
 }
 
 :root {
-  /* ---- names the older components still use ------------------------------------------------- */
-  --paper: var(--canvas);
-  --paper-2: var(--surface-2);
-  --slip: var(--surface);
-  --card: var(--surface);
-  --rule: var(--hairline);
-  --rule-strong: var(--hairline-strong);
-  --muted: var(--ink-2);
-  --link: var(--pencil);
-  --good: var(--ok);
-  --code-bg: var(--surface-2);
-  --shade: rgb(12 30 22 / 0.14);
-  --shadow: var(--shadow-1);
-  --raised-shadow: var(--shadow-2);
-
-  /* ---- type: the system's own faces; PingFang SC carries Chinese ---------------------------- */
+  /* ---- type: the system's own faces; PingFang SC carries Chinese. Three weights, no more ---- */
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --w-regular: 400;
+  --w-medium: 500; /* labels, buttons, names */
+  --w-strong: 600; /* a title, and the one word in a row that matters */
   --fs-caption: 0.75rem;
   --fs-footnote: 0.8125rem;
   --fs-subhead: 0.9375rem;
   --fs-body: 1rem;
   --fs-chat: 1.0625rem;
-  --fs-title3: 1.25rem;
-  --fs-title2: 1.4375rem;
-  --fs-title1: 1.875rem;
-  --fs-display: clamp(2rem, 1.4rem + 2.4vw, 3rem);
+  --fs-title3: 1.125rem;
+  --fs-title2: 1.3125rem;
+  --fs-display: clamp(1.75rem, 1.3rem + 2vw, 2.375rem);
 
   /* ---- shape -------------------------------------------------------------------------------- */
   --r-xs: 7px;
@@ -125,25 +105,30 @@
   --r-xl: 30px;
   --r-pill: 999px;
 
-  /* ---- depth -------------------------------------------------------------------------------- */
-  --shadow-1: 0 0 0 0.5px var(--hairline), 0 1px 2px rgb(12 30 22 / 0.05);
-  --shadow-2: 0 0 0 0.5px var(--hairline), 0 2px 6px rgb(12 30 22 / 0.06), 0 14px 32px -12px rgb(12 30 22 / 0.16);
-  --shadow-3: 0 0 0 0.5px var(--hairline), 0 8px 24px rgb(12 30 22 / 0.16), 0 36px 72px -20px rgb(12 30 22 / 0.34);
+  /* ---- controls: every button is a pill of this height, every field this rounded ------------ */
+  --control-h: 2.75rem;
+  --control-h-small: 2.25rem;
+  --control-pad: 1.15rem;
+
+  /* ---- depth: cards rest on the page without a shadow; only what floats has one ------------- */
+  --shadow-1: 0 1px 2px rgb(12 30 22 / 0.05);
+  --shadow-2: 0 1px 2px rgb(12 30 22 / 0.04), 0 10px 28px -14px rgb(12 30 22 / 0.2);
+  --shadow-3: 0 16px 48px -16px rgb(12 30 22 / 0.34);
 
   /* ---- glass -------------------------------------------------------------------------------- */
   --glass: color-mix(in srgb, var(--canvas) 72%, transparent);
-  --glass-strong: color-mix(in srgb, var(--surface) 82%, transparent);
-  --glass-blur: saturate(1.7) blur(22px);
+  --glass-strong: color-mix(in srgb, var(--surface) 84%, transparent);
+  --glass-blur: saturate(1.4) blur(20px);
 
-  /* ---- motion: springs settle, easings glide; nothing here is slower than half a second ----- */
+  /* ---- motion: things arrive softly and settle; nothing here is slower than half a second --- */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-sway: cubic-bezier(0.45, 0.05, 0.55, 0.95); /* for things that rock back and forth */
   --spring: cubic-bezier(0.34, 1.32, 0.64, 1);
-  --spring-bouncy: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --spring-leaf: cubic-bezier(0.34, 1.56, 0.64, 1); /* only for a leaf unfurling */
   --t-fast: 140ms;
-  --t-base: 260ms;
-  --t-slow: 460ms;
+  --t-base: 240ms;
+  --t-slow: 420ms;
 
   /* ---- layout ------------------------------------------------------------------------------- */
   --column: 44rem;
@@ -155,9 +140,9 @@
 
 @supports (transition-timing-function: linear(0, 1)) {
   :root {
-    /* a damped spring with a hair of overshoot, and a livelier one for small playful things */
+    /* a damped spring with a hair of overshoot, and a livelier one for a leaf unfurling */
     --spring: linear(0, 0.036, 0.125, 0.243, 0.371, 0.499, 0.617, 0.721, 0.808, 0.879, 0.934, 0.974, 1.003, 1.022, 1.033, 1.038, 1.038, 1.036, 1.032, 1.028, 1.023, 1.018, 1.014, 1.01, 1.007, 1.004, 1);
-    --spring-bouncy: linear(0, 0.095, 0.315, 0.576, 0.816, 1.001, 1.119, 1.172, 1.176, 1.147, 1.103, 1.057, 1.017, 0.989, 0.973, 0.968, 0.97, 0.977, 0.985, 0.993, 0.999, 1.003, 1.005, 1.006, 1.005, 1.004, 1);
+    --spring-leaf: linear(0, 0.095, 0.315, 0.576, 0.816, 1.001, 1.119, 1.172, 1.176, 1.147, 1.103, 1.057, 1.017, 0.989, 0.973, 0.968, 0.97, 0.977, 0.985, 0.993, 0.999, 1.003, 1.005, 1.006, 1.005, 1.004, 1);
   }
 }
 
@@ -184,9 +169,6 @@
   .pair-form,
   .picture,
   .chip img,
-  .primary,
-  .decline,
-  .danger,
   .assistant-card,
   .assistant-shortcut,
   .assistant-step-editor,
@@ -196,7 +178,6 @@
   .product-drawer,
   .product-nav-link,
   .product-settings,
-  .product-nav-symbol,
   .product-space-select {
     corner-shape: squircle;
   }
@@ -225,6 +206,7 @@ body {
   color: var(--ink);
   font-family: var(--font);
   font-size: var(--fs-body);
+  font-weight: var(--w-regular);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -268,11 +250,11 @@ pre,
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 :focus-visible {
-  outline: 2.5px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: 2px;
 }
 
@@ -324,6 +306,14 @@ pre,
   }
 }
 
+/* ---- one way to arrive: a short rise out of nothing, used by everything that appears ---------- */
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+}
+
 /* ---- disclosure rows everywhere share one quiet chevron instead of the browser's triangle ---- */
 .inline-compose > summary,
 .task-editor > summary,
@@ -354,13 +344,13 @@ pre,
 .assistant-disclosure > summary::before {
   content: "";
   flex: 0 0 auto;
-  width: 0.45rem;
-  height: 0.45rem;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  opacity: 0.6;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  opacity: 0.55;
   transform: rotate(-45deg);
-  transition: transform var(--t-base) var(--spring);
+  transition: transform var(--t-base) var(--ease-out);
 }
 
 .inline-compose[open] > summary::before,

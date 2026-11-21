@@ -204,7 +204,7 @@ async def test_a_failing_command_says_so_instead_of_staying_silent(rig, monkeypa
     monkeypatch.setattr(ingress.commands, "run", explode)
     result = await ingress.owner_message(channel="web", text="/status")
     assert result.status == "command"
-    assert "failed" in app.outbox.recent()[0].text
+    assert "没有成功" in app.outbox.recent()[0].text
 
 
 # ---- voice -------------------------------------------------------------------------------------

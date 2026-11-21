@@ -60,7 +60,7 @@ def test_running_out_of_quota_backs_off_much_longer_than_a_burst_limit():
     quota = classify(status_error(openai.RateLimitError, 429, "insufficient_quota: add credit"))
     burst = classify(status_error(openai.RateLimitError, 429, "slow down"))
     assert quota.retry_in > burst.retry_in
-    assert quota.user_hint and "quota" in quota.user_hint
+    assert quota.user_hint and "额度" in quota.user_hint
     assert burst.user_hint is None
 
 

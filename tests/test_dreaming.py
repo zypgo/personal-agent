@@ -517,7 +517,7 @@ async def test_a_pass_that_deletes_more_than_half_of_the_notes_is_undone_whole(m
 
     assert {p: app.memory.read_text(p) for p in paths} == before  # all eight are back
     [notice] = app.outbox.recent()
-    assert "undid everything" in notice.text and "pa dream log" in notice.text
+    assert "都撤销了" in notice.text and "pa dream log" in notice.text
     assert notice.kind == "notice" and notice.urgency == "low"
     assert app.db.kv_get(FAILURES) == "1"
     assert dreamer(app).cursor() > 0  # it was reviewed, not retried forever on the same night
@@ -774,7 +774,7 @@ def test_three_failed_nights_in_a_row_pause_the_pass_for_a_week_and_say_so_once(
     d.finished(dream_batch(), outcome("failed"))
     assert d.paused()
     [notice] = app.outbox.recent()
-    assert "paused it for a week" in notice.text and "pa dream" in notice.text
+    assert "暂停一周" in notice.text and "pa dream" in notice.text
     clock.advance(6 * 86_400)
     assert d.paused()
     clock.advance(2 * 86_400)

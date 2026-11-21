@@ -280,7 +280,7 @@ async def test_a_run_that_cannot_be_resumed_is_dropped_cleanly_after_repeated_fa
 
     assert app.approvals.load_run(first.outcome.run_id) is None
     assert app.runs.get(first.outcome.run_id).status == "failed"
-    assert any("could not continue a task" in m.text for m in app.outbox.recent())
+    assert any("没能接着做下去" in m.text for m in app.outbox.recent())
     assert app.inbox.counts()["dead"] == 1
 
 

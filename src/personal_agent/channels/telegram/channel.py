@@ -415,9 +415,7 @@ class TelegramChannel:
         if chat.get("type") == "private" and self.app.pairing.is_approved(
             self.name, str(sender.get("id", ""))
         ):
-            await self._say(
-                str(chat["id"]), "Something went wrong with that message. Please send it again."
-            )
+            await self._say(str(chat["id"]), "这条消息没处理成功，请再发一次。")
 
     async def _conflict(self, exc: TelegramApiError) -> None:
         if "webhook" in exc.description.lower():

@@ -85,7 +85,7 @@ async def test_a_fact_told_in_one_conversation_is_known_in_another(live):
 
 async def test_the_agent_answers_in_chinese_when_spoken_to_in_chinese(live):
     chat = live()
-    reply = await chat.say("今天星期几？只用一句中文回答。")  # noqa: RUF001 - Chinese punctuation
+    reply = await chat.say("今天星期几？只用一句中文回答。")
     weekday = "一二三四五六日"[datetime.now(ZoneInfo("Asia/Shanghai")).weekday()]
     assert any(ord(ch) in CJK for ch in reply.text)
     assert weekday in reply.text or (weekday == "日" and "天" in reply.text)
@@ -111,7 +111,7 @@ async def test_a_skill_is_listed_by_description_then_loaded_and_followed(live):
         "---\n"
         "# Ship note\n"
         "Write release notes as exactly three bullet lines, each starting with `- `. Then add a "
-        f"last line that reads exactly: Shipped with care by Ada [{code}]\n",
+        f"last line that reads exactly: Shipped with care by Sam [{code}]\n",
         encoding="utf-8",
     )
     reply = await chat.say(
@@ -443,5 +443,5 @@ async def test_an_outside_event_is_data_and_cannot_make_the_agent_act(live):
 async def test_a_tight_budget_stops_a_task_between_steps(live):
     chat = live(live_config(budget={"per_run_usd": 0.001, "daily_usd": 2.0}))
     reply = await chat.say("Use the memory tool to view /memories, then describe what you found.")
-    assert "cost limit" in reply.text
+    assert "费用上限" in reply.text
     assert reply.run.requests == 1  # the first call was paid for, the second was refused

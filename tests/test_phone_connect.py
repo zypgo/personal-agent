@@ -158,7 +158,7 @@ def test_a_disconnected_tailnet_does_not_change_serve():
 
 def test_connect_command_preserves_other_settings_and_prints_a_usable_invite(wired):
     app = wired()
-    app.paths.config_file.write_text('# keep my notes\n[agent]\nname = "Ada"\n[web]\nport = 9010\n')
+    app.paths.config_file.write_text('# keep my notes\n[agent]\nname = "Sam"\n[web]\nport = 9010\n')
     app.paths.config_file.chmod(0o600)
     result = invoke(
         "web", "connect", "--via", "lan", "--host", "192.168.1.23", "--port", "9010", "--no-qr"
@@ -168,7 +168,7 @@ def test_connect_command_preserves_other_settings_and_prints_a_usable_invite(wir
     assert "pa service restart" in result.output
     assert "scan the code" not in result.output  # --no-qr prints no code to scan
     cfg = load_config(app.paths)
-    assert cfg.web.enabled and cfg.web.host == "192.168.1.23" and cfg.agent.name == "Ada"
+    assert cfg.web.enabled and cfg.web.host == "192.168.1.23" and cfg.agent.name == "Sam"
     assert "# keep my notes" in app.paths.config_file.read_text()
     assert stat.S_IMODE(app.paths.config_file.stat().st_mode) == 0o600
     assert len(app.web_auth.pending_invites()) == 1

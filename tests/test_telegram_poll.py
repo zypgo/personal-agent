@@ -426,7 +426,7 @@ async def test_one_poisonous_update_cannot_block_the_ones_after_it(paired, monke
     assert [e["payload"]["text"] for e in events(paired.app)] == ["fine"]
     assert paired.offset() == "3"
     assert paired.sleeps.waited == [float(n) for n in range(1, HANDLE_ATTEMPTS)]
-    assert "Something went wrong" in paired.replies()[0]
+    assert "没处理成功" in paired.replies()[0]
 
 
 async def test_an_update_being_handled_when_the_process_stops_is_seen_again_next_time(
