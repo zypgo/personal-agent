@@ -196,10 +196,6 @@ def trust(name: NameArg, yes: Yes = False) -> None:
                 f"\n{len(gone)} tool(s) you reviewed before are no longer offered: "
                 + escape(", ".join(gone))
             )
-        say(
-            "\nThe model reads these descriptions as if they were instructions. Accept them "
-            "only if you trust whoever runs the server."
-        )
         if not yes and not typer.confirm("Trust these definitions?", default=False):
             say("Nothing was changed.")
             raise typer.Exit(1)

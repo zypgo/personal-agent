@@ -45,7 +45,7 @@ def setup(
     agent: Annotated[str, typer.Option(help="Agent ID registered in the control service.")],
     space: Annotated[str, typer.Option(help="Authorized space ID.")],
     token_env: Annotated[
-        str, typer.Option(help="Environment variable NAME, never the token value.")
+        str, typer.Option(help="Name of the environment variable that holds the token.")
     ] = DEFAULT_TOKEN_ENV,
     token_stdin: Annotated[
         bool, typer.Option(help="Read one token from stdin and save it in a private 0600 file.")
@@ -59,7 +59,7 @@ def setup(
 
 @app.command("check")
 def check(ctx: typer.Context) -> None:
-    """Verify scoped authentication and announce bridge capabilities; does not claim work."""
+    """Check the token and report what this bridge can do."""
     _run(ctx, ["check"])
 
 
@@ -69,11 +69,9 @@ def update_credentials(
     token_env: Annotated[
         str, typer.Option(help="Replacement token environment variable NAME.")
     ] = DEFAULT_TOKEN_ENV,
-    token_stdin: Annotated[
-        bool, typer.Option(help="Read a replacement token from stdin; preserve all host receipts.")
-    ] = False,
+    token_stdin: Annotated[bool, typer.Option(help="Read the new token from stdin.")] = False,
 ) -> None:
-    """Verify and save a new token for the same server, agent and space; never rebind identity."""
+    """Check and save a new token for the same server, agent and space."""
     _run(
         ctx,
         ["update-credentials", *(["--token-stdin"] if token_stdin else ["--token-env", token_env])],
@@ -136,17 +134,15 @@ def progress(
 def report(
     ctx: typer.Context,
     attempt_id: str,
-    status: Annotated[
-        str, typer.Option(help="succeeded, failed or cancelled; this is a candidate outcome.")
-    ],
+    status: Annotated[str, typer.Option(help="succeeded, failed or cancelled.")],
     text: Annotated[str | None, typer.Option()] = None,
     text_file: Annotated[Path | None, typer.Option()] = None,
     file: Annotated[
         list[Path] | None,
-        typer.Option("--file", help="An explicitly selected result file, at most 2 MiB."),
+        typer.Option("--file", help="A result file (up to 2 MiB)."),
     ] = None,
 ) -> None:
-    """Submit a candidate result and hash-checked files; acceptance remains a separate step."""
+    """Submit a result and its files. The task owner accepts it separately."""
     arguments = ["report", attempt_id, "--status", status, *_text_flags(text, text_file)]
     for path in file or []:
         arguments.extend(["--file", str(path)])
@@ -162,7 +158,7 @@ def ask(
     choice: Annotated[list[str] | None, typer.Option("--choice")] = None,
     request_id: Annotated[str | None, typer.Option(help="Optional stable question ID.")] = None,
 ) -> None:
-    """Ask for input; provider-native tool approvals stay in the native product."""
+    """Ask the task owner a question."""
     arguments = ["ask", attempt_id, *_text_flags(text, text_file)]
     for item in choice or []:
         arguments.extend(["--choice", item])
@@ -173,13 +169,13 @@ def ask(
 
 @app.command("retry")
 def retry(ctx: typer.Context, attempt_id: str) -> None:
-    """After checking status, resend the exact saved report; never execute the task again."""
+    """Resend the saved report after checking the status."""
     _run(ctx, ["retry", attempt_id])
 
 
 @app.command("uncertain")
 def uncertain(ctx: typer.Context, attempt_id: str, reason: Annotated[str, typer.Option()]) -> None:
-    """Restrict an attempt after unknown execution; never mark it completed or retry work."""
+    """Record that an attempt may have run, without marking it done or retrying it."""
     _run(ctx, ["uncertain", attempt_id, "--text", reason])
 
 
@@ -189,12 +185,10 @@ def files(
     attempt_id: str,
     out: Annotated[
         Path,
-        typer.Option(
-            help="Directory for verified dependency artifacts; existing files are not overwritten."
-        ),
+        typer.Option(help="Directory for the downloaded files."),
     ],
 ) -> None:
-    """Materialize the explicitly supplied dependency artifacts, checking their hashes."""
+    """Download the files this task depends on and check their hashes."""
     _run(ctx, ["files", attempt_id, "--out", str(out)])
 
 
@@ -223,13 +217,9 @@ def host(
     provider: Annotated[
         str, typer.Option(help="codex, cursor or personal_agent; uses an existing native account.")
     ],
-    cwd: Annotated[
-        Path, typer.Option(help="Existing local working directory; locked across host profiles.")
-    ],
+    cwd: Annotated[Path, typer.Option(help="Local working directory.")],
     task_id: Annotated[str | None, typer.Option(help="Optional approved task ID.")] = None,
-    executable: Annotated[
-        str | None, typer.Option(help="Native executable path; no shell or additional flags.")
-    ] = None,
+    executable: Annotated[str | None, typer.Option(help="Path to the executable.")] = None,
     watch: Annotated[
         bool,
         typer.Option(
@@ -238,18 +228,14 @@ def host(
     ] = False,
     allow_direct_workdir: Annotated[
         bool,
-        typer.Option(
-            help="Explicitly allow writing a non-Git directory without an isolated worktree."
-        ),
+        typer.Option(help="Work directly in a directory that is not a Git repository."),
     ] = False,
     allow_shared_native_profile: Annotated[
         bool,
-        typer.Option(
-            help="Allow other members only for controller-marked shared native profiles and space-visible tasks."
-        ),
+        typer.Option(help="Accept tasks from other members when the agent is marked as shared."),
     ] = False,
 ) -> None:
-    """Run approved work on macOS/Linux, preserving native approvals and receipts."""
+    """Run approved tasks on this computer (macOS or Linux)."""
     import asyncio
 
     from personal_agent.agent_adapters.bridge import BridgeError, WorkerBridge, public_result
@@ -297,12 +283,10 @@ def reconcile_local(
     cwd: Annotated[Path, typer.Option(help="Original host working directory.")],
     stop: Annotated[
         bool,
-        typer.Option(
-            help="Explicitly stop only recorded native process identities that still match."
-        ),
+        typer.Option(help="Stop the recorded process if it is still running."),
     ] = False,
 ) -> None:
-    """Check local stopping evidence and the Agent owner's confirmation before reuse."""
+    """Check that the earlier run has stopped before this host is used again."""
     import asyncio
 
     from personal_agent.agent_adapters.bridge import BridgeError, WorkerBridge

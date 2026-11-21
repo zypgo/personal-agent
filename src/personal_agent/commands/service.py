@@ -198,7 +198,7 @@ def install(
         typer.Option(
             "--pass-env",
             help="Copy this variable of the terminal into the job, e.g. HTTPS_PROXY (a job "
-            "does not inherit your shell's environment). Repeat for more. Secrets are refused.",
+            "does not inherit your shell's environment). Repeat for more.",
         ),
     ] = None,
     python: Annotated[
@@ -366,7 +366,7 @@ def logs(
         bool, typer.Option("--follow", "-f", help="Keep showing new lines.")
     ] = False,
 ) -> None:
-    """What the agent has been saying (its own log; secrets are scrubbed from every line)."""
+    """What the agent has been saying (its own log)."""
     paths = home()
     manager = manager_for(paths)
     files: Sequence[Path] = (

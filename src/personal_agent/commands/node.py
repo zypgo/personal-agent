@@ -101,7 +101,7 @@ def run(
     ),
     image: Annotated[
         str,
-        typer.Option(help="Preinstalled image with /usr/bin/timeout; never pulled automatically."),
+        typer.Option(help="Docker image with /usr/bin/timeout. Pull it yourself first."),
     ] = "python:3.12-slim",
     memory_mb: Annotated[int, typer.Option(min=128, max=4096)] = 512,
     poll_s: Annotated[float, typer.Option(min=0.1, max=60)] = 2,
@@ -110,7 +110,7 @@ def run(
         typer.Option(help="Docker API adapter; cli preserves the legacy implementation."),
     ] = BackendChoice.sdk,
 ) -> None:
-    """Run a single outbound worker; Docker is required and cloud resources are not created."""
+    """Run the worker on this computer (needs Docker)."""
     from personal_agent.nodes.agent import Runner
     from personal_agent.nodes.backend import BackendError, DockerBackend
     from personal_agent.nodes.client import HttpTransport, TransportError, load_credentials
@@ -164,7 +164,7 @@ def status(
         DEFAULT_NODE_HOME
     ),
 ) -> None:
-    """Show local pending receipts, never credentials or task contents."""
+    """Show the receipts waiting on this computer."""
     from personal_agent.nodes.client import load_credentials
     from personal_agent.nodes.store import NodeStore
     from personal_agent.presence import EngineLock

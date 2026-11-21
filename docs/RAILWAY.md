@@ -39,7 +39,7 @@ RAILWAY_DEPLOYMENT_DRAINING_SECONDS=45
 
 迁移已有数据时，要先停掉旧服务，再确认目录里的文件都属于这个服务账号。不要把迁移放进 pre-deploy command：那个阶段没有挂载持久卷。
 
-带卷的服务重新部署时会短暂中断，因为同一个卷不能同时给新旧两个实例用。SQLite、Inbox、Outbox、任务尝试和 Runner 的收据，让恢复过程有迹可查，但不保证零停机。[健康检查的官方说明](https://docs.railway.com/deployments/healthchecks)也提到，健康检查只用来判断部署是否就绪，不是持续监控。程序只对健康检查路径接受 Railway 专用的 Host。
+带卷的服务重新部署时会短暂中断，因为同一个卷不能同时给新旧两个实例用。SQLite、Inbox、Outbox、任务尝试和 Runner 的收据，让恢复过程有迹可查。健康检查只用来判断部署是否就绪（见[官方说明](https://docs.railway.com/deployments/healthchecks)）；程序只对健康检查路径接受 Railway 专用的 Host。
 
 ### 未登录的入口按来源地址限流
 

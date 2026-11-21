@@ -339,7 +339,7 @@ def test_space_configuration_does_not_inherit_owner_privileges():
                 "enabled": ["private_plugin"],
                 "settings": {"private_plugin": {"personal": "value"}},
             },
-            "policy": {"mode": "autonomous", "i_understand_autonomous_risk": True, "allow": ["*"]},
+            "policy": {"mode": "autonomous", "allow": ["*"]},
         }
     )
     child = derive_space_config(root)

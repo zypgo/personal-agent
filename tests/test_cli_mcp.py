@@ -118,7 +118,7 @@ def test_trust_shows_the_definitions_and_pins_them_after_a_yes(wire):
     assert "list_notes not reviewed yet (read: runs without asking)" in out
     assert "Add a note to the notebook." in out
     assert "text (string): What to write." in out
-    assert "The model reads these descriptions as if they were instructions" in out
+    assert "Trust these definitions?" in out
     assert "Reviewed 3 tool(s)" in out
     assert app.mcp.pins.count("fake") == 3 and fake.cleanups == 1
 

@@ -44,7 +44,7 @@ def test_a_missing_sandbox_is_a_warning_that_says_the_shell_is_off(tmp_path, mon
 
 
 def test_running_without_isolation_is_flagged_even_when_chosen(tmp_path):
-    toml = '[sandbox]\nbackend = "none"\ni_understand_no_sandbox = true\n'
+    toml = '[sandbox]\nbackend = "none"\n'
     check = checks_for(tmp_path / "h", toml)["shell sandbox"]
     assert check.status == "warn" and "NONE" in check.detail
 

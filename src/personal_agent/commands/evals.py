@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 EFFORTS = get_args(ReasoningEffort)
 
 app = typer.Typer(
-    help="Test the agent's always-on behaviour: quiet days, news once, hostile input, memory.",
+    help="Test the agent's always-on behaviour: quiet days, news once, outside input, memory.",
     invoke_without_command=True,
 )
 

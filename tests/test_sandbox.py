@@ -255,13 +255,8 @@ def test_an_odd_user_temp_directory_is_never_pasted_into_the_profile(monkeypatch
     assert SeatbeltSandbox.xcrun_cache_rule() == []
 
 
-def test_no_sandbox_needs_an_explicit_acknowledgement(paths):
-    # The setting itself is refused (see test_config); a config that got here some other way is
-    # still not given an unprotected shell.
-    unacknowledged = SandboxConfig.model_construct(backend="none", i_understand_no_sandbox=False)
-    refused, why = select_sandbox(paths, unacknowledged)
-    assert refused is None and "i_understand_no_sandbox" in why
-    chosen, _ = select_sandbox(paths, SandboxConfig(backend="none", i_understand_no_sandbox=True))
+def test_no_sandbox_is_used_when_the_config_asks_for_it(paths):
+    chosen, _ = select_sandbox(paths, SandboxConfig(backend="none"))
     assert isinstance(chosen, NoSandbox) and "NONE" in chosen.describe()
 
 
@@ -283,6 +278,6 @@ def test_auto_prefers_seatbelt_on_macos(paths):
 
 
 async def test_no_sandbox_backend_runs_commands_in_the_workspace(paths):
-    box = NoSandbox(paths, SandboxConfig(backend="none", i_understand_no_sandbox=True))
+    box = NoSandbox(paths, SandboxConfig(backend="none"))
     result = await box.execute("pwd; echo hi", timeout_s=10)
     assert result.exit_code == 0 and result.stdout.splitlines()[1] == "hi"

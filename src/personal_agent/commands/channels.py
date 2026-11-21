@@ -171,7 +171,6 @@ def capabilities() -> None:
         for name in sorted(agent.plugin_channels):
             rows.add_row(escape(name), "yes", "plugin-defined; metadata not inspected")
         console.print(rows)
-        say("A supported feature still needs valid credentials, pairing and platform permissions.")
 
 
 @app.command("pending")
@@ -341,7 +340,7 @@ def revoke(
 def test(
     channel: ChannelArg = "telegram",
 ) -> None:
-    """Probe Telegram identity or DingTalk gateway authentication; never send a chat message."""
+    """Check the Telegram bot identity or the DingTalk gateway login."""
     if channel.lower() not in {"telegram", "dingtalk"}:
         fail(f"No test for {channel}.", code=USAGE)
     with opened() as agent:

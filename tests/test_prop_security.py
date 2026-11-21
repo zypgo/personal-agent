@@ -529,7 +529,6 @@ def policies() -> st.SearchStrategy[PolicyConfig]:
             allow=allow,
             always_ask=ask,
             allow_when_tainted=tainted_ok,
-            i_understand_autonomous_risk=True,
         ),
         MODES, RULES, RULES, RULES, RULES,
     )  # fmt: skip

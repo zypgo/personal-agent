@@ -32,7 +32,4 @@ def _list(ctx: typer.Context) -> None:
             colour = COLOURS.get(item.status, "white")
             rows.add_row(escape(item.name), f"[{colour}]{item.status}[/{colour}]", escape(what))
         console.print(rows)
-        say(
-            "[dim]A plugin runs inside the agent with your rights. Switch on only code you trust; "
-            "its tools ask for approval like any other, by their category.[/dim]"
-        )
+        say("[dim]A plugin's tools ask for approval like any other, by their category.[/dim]")

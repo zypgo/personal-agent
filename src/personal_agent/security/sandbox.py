@@ -13,7 +13,7 @@ Backends, all behind `Sandbox.execute(command) -> ExecResult`:
   and there is no network at all.
 - `docker`: a throwaway container with no network, a read-only root, no capabilities and only the
   workspace mounted. You provide the image (we never pull one for you).
-- `none`: no isolation. Only with `i_understand_no_sandbox = true`.
+- `none`: no isolation; commands run as you.
 
 The child gets a tiny fixed environment. API keys and the rest of your environment are never
 passed on.
@@ -534,11 +534,9 @@ class NoSandbox:
 # ---- choosing -----------------------------------------------------------------------------------------
 def select_sandbox(paths: Paths, cfg: SandboxConfig) -> tuple[Sandbox | None, str]:
     """The sandbox to use, or None with the reason there is none (the shell tool is then not
-    offered: we do not quietly fall back to running commands unprotected)."""
+    offered)."""
     backend = cfg.backend
     if backend == "none":
-        if not cfg.i_understand_no_sandbox:
-            return None, "backend = none needs i_understand_no_sandbox = true"
         return NoSandbox(paths, cfg), "no isolation (by your choice)"
     candidates: list[Sandbox] = []
     if backend in ("auto", "seatbelt") and sys.platform == "darwin":

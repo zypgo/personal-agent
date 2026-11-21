@@ -315,7 +315,7 @@ async def test_a_scheduled_run_asks_through_the_default_channel(make_app, clock)
 
 
 async def test_autonomous_mode_never_asks(make_app):
-    cfg = Config(policy=PolicyConfig(mode="autonomous", i_understand_autonomous_risk=True))
+    cfg = Config(policy=PolicyConfig(mode="autonomous"))
     model = ScriptedModel([push(), [assistant_message("Pushed.")]])
     _app, spy, result = await suspended(make_app, model, config=cfg)
     assert result.outcome.status == "completed" and spy.ran("shell") == ["git push origin main"]

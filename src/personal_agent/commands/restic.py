@@ -57,7 +57,7 @@ def _archive(ctx: typer.Context) -> ResticArchive:
 
 @app.command("init")
 def initialize(ctx: typer.Context) -> None:
-    """Create a new encrypted repository; keep its password outside the backup."""
+    """Create a new encrypted repository."""
     from personal_agent.collaboration.backup import SnapshotError
 
     try:
@@ -90,7 +90,7 @@ def backup(
 
 @app.command("snapshots")
 def snapshots(ctx: typer.Context) -> None:
-    """List snapshot IDs and timestamps for this instance; no paths or credentials."""
+    """List this instance's snapshot IDs and times."""
     from personal_agent.collaboration.backup import SnapshotError
 
     try:
@@ -111,10 +111,10 @@ def restore(
     snapshot_id: str,
     to: Annotated[
         Path,
-        typer.Option("--to", help="New agent home; existing directories are never overwritten."),
+        typer.Option("--to", help="New agent home (it must not exist yet)."),
     ],
 ) -> None:
-    """Download and verify a snapshot, then restore with old authority revoked."""
+    """Download a snapshot, check it and restore it into a new home. Old device, node and channel logins stop working."""
     from personal_agent.collaboration.backup import SnapshotError
 
     try:
@@ -156,7 +156,7 @@ def forget(
         ),
     ] = False,
 ) -> None:
-    """Preview or apply namespace-scoped retention; never prunes repository data."""
+    """Preview or apply the snapshot retention for this instance."""
     from personal_agent.collaboration.backup import SnapshotError
 
     try:

@@ -39,10 +39,7 @@ def _show_review(review: Review) -> None:
         say(escape(review.description))
     say(f"{len(review.files)} file(s), {review.total_bytes:,} bytes")
     if review.scripts:
-        say(
-            "[yellow]Contains scripts[/yellow] (they can only run inside the sandbox, and each "
-            "run asks for your approval):"
-        )
+        say("[yellow]Contains scripts[/yellow]:")
         for script in review.scripts[:15]:
             say(f"  {escape(script)}")
         if len(review.scripts) > 15:
@@ -158,10 +155,6 @@ def _review_and_install(agent: App, folder: Path, *, force: bool, yes: bool) -> 
     _show_review(review)
     if not review.ok:
         raise InstallError("this folder cannot be installed")
-    say(
-        "\nA skill is instructions the agent will follow in later runs. Install only skills "
-        "whose text you have read or whose author you trust."
-    )
     if not yes and not typer.confirm("Install it?", default=False):
         say("Not installed.")
         raise typer.Exit(1)

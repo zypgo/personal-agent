@@ -1,5 +1,4 @@
 import pytest
-from pydantic import ValidationError
 
 from personal_agent.config import PolicyConfig
 from personal_agent.security.policy import HARMLESS, Policy, ToolCall, Verdict, matches
@@ -21,8 +20,6 @@ def call(
 
 
 def policy(**kw) -> Policy:
-    if kw.get("mode") == "autonomous":
-        kw["i_understand_autonomous_risk"] = True
     return Policy(PolicyConfig(**kw))
 
 
@@ -107,12 +104,6 @@ def test_auto_mode_sends_risky_calls_to_the_reviewer_unless_tainted():
 def test_autonomous_mode_allows_without_asking_even_when_tainted():
     p = policy(mode="autonomous")
     assert verdict(p, tainted=True) is Verdict.ALLOW
-
-
-def test_autonomous_mode_needs_an_explicit_acknowledgement():
-    with pytest.raises(ValidationError, match="autonomous"):
-        PolicyConfig(mode="autonomous")
-    assert PolicyConfig(mode="autonomous", i_understand_autonomous_risk=True).mode == "autonomous"
 
 
 @pytest.mark.parametrize(

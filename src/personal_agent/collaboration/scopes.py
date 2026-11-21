@@ -48,7 +48,6 @@ def derive_space_config(root: Config) -> Config:
     data["sandbox"]["extra_read"] = []
     data["sandbox"]["extra_write"] = []
     data["sandbox"]["backend"] = "auto"
-    data["sandbox"]["i_understand_no_sandbox"] = False
     data["secrets"] = {}
     data["mcp"] = {"enabled": False, "servers": []}
     data["plugins"] = {"enabled": [], "settings": {}}

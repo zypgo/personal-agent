@@ -163,7 +163,7 @@ def backup(
         typer.Argument(help="A new file, or a folder. Default: the backups folder of the home."),
     ] = None,
 ) -> None:
-    """Copy the database while the agent runs. The copy can be read by you only."""
+    """Copy the database while the agent runs."""
     with opened() as agent:
         stamp = f"state-{datetime.fromtimestamp(agent.clock.now(), agent.tz):%Y%m%d-%H%M%S}.db"
         if where is None:
@@ -239,18 +239,13 @@ def backup_all(
         say(
             f"Saved {len(result['databases'])} databases and {len(result['files'])} files to {escape(str(where))}."
         )
-        say(
-            "This private backup includes credentials stored under PA_HOME. Keep it on trusted storage."
-        )
         say("Process environment and Railway Variables are not included; retain them separately.")
 
 
 @app.command("restore-all")
 def restore_all(
     snapshot: Annotated[Path, typer.Argument(help="A complete backup-all snapshot.")],
-    to: Annotated[
-        Path, typer.Option("--to", help="A new home directory; never overwrites an existing home.")
-    ],
+    to: Annotated[Path, typer.Option("--to", help="A new home directory (it must not exist yet).")],
 ) -> None:
     """Check every checksum/database and restore into a separate new home."""
     from personal_agent.collaboration.backup import SnapshotError, restore_snapshot

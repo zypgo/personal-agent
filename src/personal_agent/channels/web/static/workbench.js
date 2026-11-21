@@ -482,7 +482,7 @@ function renderTaskEditors(panel, task, jobs) {
     taskField(editor,"input_paths","输入文件",{kind:"textarea",required:false,placeholder:"当前工作区的相对路径，每行一个"});
     taskField(editor,"output_paths","需要保留的输出文件",{kind:"textarea",required:false,placeholder:"例如：report.md"});
     const timeout=taskField(editor,"timeout_s","最长执行时间（秒）",{value:"900"});timeout.type="number";timeout.min="1";timeout.max="3600";
-    editor.append(node("p","每一步单独批准。上一步的成果不会自动变成这一步的输入。","hint"));
+    editor.append(node("p","每一步单独批准。","hint"));
     submitButton(editor,"保存步骤并申请审批");
   }
   const revise=taskEditor(panel,"修改任务目标，建立新版本",async f=>{

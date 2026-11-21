@@ -19,7 +19,7 @@ async def _wait_for_file(path) -> None:
 
 @pytest.mark.parametrize("redirect", ["", ">/dev/null 2>&1"], ids=["open-pipes", "closed-pipes"])
 async def test_background_work_is_stopped_even_after_it_closes_both_pipes(paths, redirect):
-    box = NoSandbox(paths, SandboxConfig(backend="none", i_understand_no_sandbox=True))
+    box = NoSandbox(paths, SandboxConfig(backend="none"))
     command = f"sh -c 'sleep 0.3; echo leaked > child.marker' {redirect} & echo started"
     result = await box.execute(command, timeout_s=3)
     assert result.exit_code == 0 and result.stdout.strip() == "started"

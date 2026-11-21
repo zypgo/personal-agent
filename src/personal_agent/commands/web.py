@@ -1,8 +1,6 @@
 """`pa web`: the chat page, and which browsers may open it.
 
-Getting a browser in happens here, at the computer, and nowhere else: `pa web pair` makes a link
-that works once. Nobody who can only reach the page can make themselves a link, and neither can
-anything the agent reads.
+A browser is let in from here, at the computer: `pa web pair` makes a link that works once.
 """
 
 from __future__ import annotations
@@ -31,7 +29,7 @@ app = typer.Typer(
 TAILSCALE_HINT = (
     "To connect your phone with private HTTPS:\n"
     "  pa web connect --via tailscale\n"
-    "Or, on the same trusted Wi-Fi: pa web connect --via lan"
+    "Or, on the same Wi-Fi: pa web connect --via lan"
 )
 
 
@@ -102,7 +100,7 @@ def _status(ctx: typer.Context) -> None:
 
 @app.command("principals")
 def principals() -> None:
-    """Local admin: list existing identity IDs for recovery, without credentials."""
+    """List identity IDs, for recovery."""
     from personal_agent.collaboration.models import OWNER_ID, IdentityError
     from personal_agent.collaboration.store import IdentityStore
 
@@ -133,7 +131,7 @@ def pair(
         str | None,
         typer.Option(
             "--principal",
-            help="Local admin: pair a device for this existing active identity (no role changes).",
+            help="Pair a device for this existing identity.",
         ),
     ] = None,
 ) -> None:
@@ -175,10 +173,7 @@ def _pair_link(agent: App, label: str, qr: bool, *, principal: str | None = None
         say(f"[yellow]That address only works on this computer.[/yellow]\n{escape(TAILSCALE_HINT)}")
     if daemon_state(agent).kind != "daemon":
         say("[yellow]Nothing is serving the page yet:[/yellow] run `pa serve`.")
-    say(
-        "[dim]Anyone who opens the link first gets in: do not post it anywhere. "
-        "`pa web sessions` shows who did.[/dim]"
-    )
+    say("[dim]`pa web sessions` shows which browsers are paired.[/dim]")
 
 
 @app.command("connect")
@@ -241,12 +236,10 @@ def connect(
         say(f"Phone access configured: {escape(connection.url)}")
         if via == "lan":
             say(
-                "Use the same trusted Wi-Fi on both devices. This address uses HTTP; use Tailscale for encrypted access and microphone recording."
+                "Use the same Wi-Fi on both devices. This address uses HTTP, so the microphone needs Tailscale."
             )
         else:
-            say(
-                "Connect your phone to the same tailnet. HTTPS is private to devices allowed by your Tailscale policy; browser pairing is still required."
-            )
+            say("Connect your phone to the same tailnet.")
         say(
             "Apply the settings: restart `pa serve`, or run `pa service restart` if the service is installed."
         )

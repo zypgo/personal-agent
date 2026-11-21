@@ -145,7 +145,7 @@ def review_resolve(
         typer.Option("--keep-current", help="Accept current memory without undoing any files."),
     ] = False,
 ) -> None:
-    """Explicitly accept current memory and close a review; never force an overwrite."""
+    """Accept the current memory and close the review."""
     from personal_agent.harness.dreaming import Dreamer
 
     with opened() as agent:

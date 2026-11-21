@@ -68,19 +68,18 @@ def test_a_broken_config_is_always_a_config_error(paths, payload):
 
 
 @pytest.mark.parametrize(
-    ("section", "needs"),
+    ("section", "extra"),
     [
-        ("[sandbox]\nbackend = 'none'\n", "sandbox.i_understand_no_sandbox"),
-        ("[policy]\nmode = 'autonomous'\n", "policy.i_understand_autonomous_risk"),
+        ("[sandbox]\nbackend = 'none'\n", "i_understand_no_sandbox = true\n"),
+        ("[policy]\nmode = 'autonomous'\n", "i_understand_autonomous_risk = true\n"),
     ],
     ids=["no-sandbox", "autonomous"],
 )
-def test_a_setting_that_removes_a_protection_must_say_so_where_it_is_set(paths, section, needs):
+def test_these_settings_need_no_second_line_and_the_old_line_still_loads(paths, section, extra):
     paths.config_file.write_text(section)
-    with pytest.raises(ConfigError, match=needs):
-        load_config(paths)
+    assert load_config(paths) is not None
 
-    paths.config_file.write_text(section + needs.split(".")[1] + " = true\n")
+    paths.config_file.write_text(section + extra)
     assert load_config(paths) is not None
 
 

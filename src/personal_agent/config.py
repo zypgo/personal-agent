@@ -206,16 +206,15 @@ class PolicyConfig(_Section):
     """Allow patterns that stay allowed after the run has read untrusted content."""
     approval_timeout_hours: float = Field(12.0, gt=0)
     """An approval request nobody answers within this time counts as a refusal."""
-    i_understand_autonomous_risk: bool = False
 
-    @model_validator(mode="after")
-    def _autonomous_must_be_acknowledged(self) -> PolicyConfig:
-        if self.mode == "autonomous" and not self.i_understand_autonomous_risk:
-            raise ValueError(
-                'policy.mode = "autonomous" lets the agent act without asking; '
-                "set policy.i_understand_autonomous_risk = true to confirm"
-            )
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def _ignore_the_old_acknowledgement(cls, data: Any) -> Any:
+        """`mode = "autonomous"` used to need `i_understand_autonomous_risk = true` as well. It
+        does not now; a config file that still has the line keeps loading."""
+        if isinstance(data, dict) and "i_understand_autonomous_risk" in data:
+            return {k: v for k, v in data.items() if k != "i_understand_autonomous_risk"}
+        return data
 
 
 class BudgetConfig(_Section):
@@ -290,29 +289,25 @@ class SchedulerConfig(_Section):
 class SandboxConfig(_Section):
     backend: Literal["auto", "seatbelt", "docker", "none"] = "auto"
     """Where shell commands run. `auto` picks seatbelt on macOS, else docker. If neither works the
-    shell tool is simply not offered (we never quietly run commands unprotected)."""
-    i_understand_no_sandbox: bool = False
-    """Required for `backend = "none"`: commands then run as you, with all your files and network."""
+    shell tool is not offered. `none` runs commands directly, as you."""
     image: str = "python:3.13-slim"
-    """Docker image for the docker backend. We never pull it for you: `docker pull` it yourself."""
+    """Docker image for the docker backend. Run `docker pull` for it yourself."""
     memory_mb: int = Field(512, ge=64)
     default_timeout_s: float = Field(60.0, gt=0)
     max_timeout_s: float = Field(600.0, gt=0)
     extra_read: list[str] = []
     """Extra directories commands may read (for example a toolchain in your home directory)."""
     extra_write: list[str] = []
-    """Extra directories commands may write. Think twice before adding anything here."""
+    """Extra directories commands may write."""
 
-    @model_validator(mode="after")
-    def _no_sandbox_must_be_acknowledged(self) -> SandboxConfig:
-        """Said at once, where the setting is: left to the choice of a sandbox it would only show
-        as a shell tool that is never offered, with nothing pointing at the setting."""
-        if self.backend == "none" and not self.i_understand_no_sandbox:
-            raise ValueError(
-                'sandbox.backend = "none" runs every command as you, with all your files and '
-                "network; set sandbox.i_understand_no_sandbox = true to confirm"
-            )
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def _ignore_the_old_acknowledgement(cls, data: Any) -> Any:
+        """`backend = "none"` used to need `i_understand_no_sandbox = true` as well. It does not
+        now; a config file that still has the line keeps loading."""
+        if isinstance(data, dict) and "i_understand_no_sandbox" in data:
+            return {k: v for k, v in data.items() if k != "i_understand_no_sandbox"}
+        return data
 
 
 class NetConfig(_Section):
@@ -499,7 +494,7 @@ class WebConfig(_Section):
     not implement streaming. The final answer is still delivered through the durable outbox."""
     host: str = "127.0.0.1"
     """Where to listen. 127.0.0.1 is this computer only. To use the page from a phone, keep this
-    and put Tailscale Serve (or another HTTPS proxy you trust) in front: `tailscale serve --bg 8765`."""
+    and put Tailscale Serve (or another HTTPS proxy) in front: `tailscale serve --bg 8765`."""
     port: int = Field(8765, ge=1, le=65535)
     public_url: str | None = None
     """The address the phone uses, e.g. "https://my-mac.tailnet-name.ts.net". Pairing links use it,
@@ -550,8 +545,7 @@ class WebhookRoute(_Section):
     secret_env: str
     """Name of the `.env` entry holding the shared secret. Never the secret itself."""
     prompt: str = Field("", max_length=4000)
-    """What to do with this kind of event, in your words. The agent follows it; it never follows
-    anything inside the event itself."""
+    """What to do with this kind of event, in your words."""
     events: list[str] = []
     """Only these event types wake the agent (github: push, pull_request...). Empty: all."""
     tolerance_s: int = Field(300, ge=30, le=3600)
@@ -799,7 +793,7 @@ class McpConfig(_Section):
 class PluginsConfig(_Section):
     enabled: list[str] = []
     """Installed Python packages that may add tools (entry point group `personal_agent.plugins`).
-    A plugin runs inside the agent with full access to this machine: list only code you trust."""
+    A plugin runs inside the agent process."""
     settings: dict[str, dict[str, Any]] = {}
     """Settings a plugin reads for itself: `[plugins.settings.NAME]`. No secrets here."""
 
@@ -843,7 +837,7 @@ class Config(_Section):
 
 
 DEFAULT_CONFIG_TOML = """\
-# personal-agent configuration. Secrets do NOT go here: put OPENAI_API_KEY etc. in .env.
+# personal-agent configuration. Keys such as OPENAI_API_KEY go in .env.
 
 [agent]
 name = "Assistant"
@@ -861,10 +855,9 @@ reasoning_effort = "medium"      # none | minimal | low | medium | high | xhigh 
 # api_key_env = "OPENAI_API_KEY"  # variable name, not its value; use a provider-specific name when needed
 # api = "chat_completions"       # for compatible servers without the Responses API
 # capabilities = { hosted_web_search = false }  # auto by default: only the native OpenAI endpoint
-store = false                    # request stateless Responses mode; context still leaves this machine
+store = false                    # ask the API not to keep responses
 # reasoning_item_ids = "omit"    # fallback if `pa doctor --live` says replayed reasoning is rejected
-# prompt_cache_retention = "24h" # keep the prompt's static start cached for a day: much cheaper runs after
-#                                # pauses, but OpenAI then holds data derived from the prompt that long
+# prompt_cache_retention = "24h" # keep the prompt's static start cached for a day: much cheaper runs after pauses
 timeout_s = 180
 max_retries = 3
 
@@ -930,14 +923,14 @@ min_interval_s = 300             # shortest allowed gap between firings of a rec
 max_timers = 50
 
 [sandbox]
-backend = "auto"                 # auto | seatbelt | docker | none  (none also needs i_understand_no_sandbox = true; the shell is off if nothing works)
+backend = "auto"                 # auto | seatbelt | docker | none (none runs commands directly); the shell is off if nothing works
 # image = "python:3.13-slim"     # docker backend: `docker pull` it yourself
-# extra_read = ["~/.local/share/uv"]   # more directories commands may read (never write)
+# extra_read = ["~/.local/share/uv"]   # more directories commands may read
 
 [tools]
 files = true                     # list/read/write/edit files in the workspace
 shell = true                     # needs a working sandbox
-web_fetch = true                 # read web pages; never reaches your own network (see [net])
+web_fetch = true                 # read web pages (your own network is only reachable if listed in [net])
 html_extractor = "auto"           # auto | basic | trafilatura; parsing stays on this machine
 http_request = true              # call APIs; anything but GET/HEAD asks first
 web_search = "auto"              # OpenAI hosted search; auto | cached | off
@@ -960,7 +953,6 @@ transcribe_model = "gpt-transcribe"
 # Chat with the agent from Telegram. Create a bot with @BotFather, put its token in .env as
 # TELEGRAM_BOT_TOKEN, set enabled = true and run `pa serve`. Message the bot once: it answers
 # with a code that you approve here, on your computer: `pa channels approve telegram CODE`.
-# Strangers get nothing but a code and never reach the model.
 # [telegram]
 # enabled = true
 # proxy = "socks5://127.0.0.1:1080"    # if Telegram is not reachable directly
@@ -972,7 +964,7 @@ transcribe_model = "gpt-transcribe"
 # enabled = true
 # corp_id = "ding-your-organization"   # optional organization restriction
 
-# Files published from the workspace are private, immutable snapshots with authenticated downloads.
+# Files the agent hands you from its workspace.
 # [artifacts]
 # max_file_bytes = 10485760             # 10 MiB per file
 # max_total_bytes = 209715200           # 200 MiB of unexpired results
@@ -980,15 +972,15 @@ transcribe_model = "gpt-transcribe"
 
 # A chat page for any browser, installable on a phone's home screen. It listens on this computer
 # only; `pa web connect --via tailscale` sets up private HTTPS and a one-time pairing QR.
-# Use `pa web connect --via lan` on trusted Wi-Fi, or `pa web pair` to pair another browser.
+# Use `pa web connect --via lan` on your Wi-Fi, or `pa web pair` to pair another browser.
 # [web]
 # enabled = true
 # stream_responses = true              # false for model endpoints without streaming support
 # public_url = "https://my-mac.tailnet-name.ts.net"   # where your phone reaches it
 
 # Let other programs wake the agent (GitHub, a monitoring tool, your own script). Each route needs
-# a secret in .env; the event is treated as outside data, and `prompt` says what to do with it.
-# This listener is separate from the chat page so that only this one needs to face the internet.
+# a secret in .env, and `prompt` says what to do with the event. This listener is separate from the
+# chat page.
 # [webhooks]
 # enabled = true
 # [webhooks.routes.github]
@@ -997,9 +989,8 @@ transcribe_model = "gpt-transcribe"
 # prompt = "Tell me only about failing checks and reviews requested from me."
 # events = ["check_suite", "pull_request_review"]
 
-# MCP servers add tools (files, GitHub, a database, ...). They run with your privileges, outside the
-# shell sandbox, so add only servers you trust. Nothing is offered until `pa mcp trust NAME` has
-# shown you what the server's tools say about themselves. Credentials go in .env as ${NAME}.
+# MCP servers add tools (files, GitHub, a database, ...). A server's tools are offered after you run
+# `pa mcp trust NAME`. Credentials go in .env as ${NAME}.
 # [[mcp.servers]]
 # name = "filesystem"
 # command = "npx"
@@ -1022,8 +1013,8 @@ transcribe_model = "gpt-transcribe"
 # max_response_bytes = 2000000
 # max_redirects = 5
 
-# Secrets the agent can *use* but never *see*: it writes {{secret:github}} in an http_request,
-# and the value is filled in only for the listed hosts. The value itself stays in .env.
+# Secrets the agent can use without seeing them: it writes {{secret:github}} in an http_request
+# and the value is filled in for the listed hosts. The value itself stays in .env.
 # [secrets.github]
 # env = "GITHUB_TOKEN"
 # hosts = ["api.github.com"]
@@ -1031,8 +1022,7 @@ transcribe_model = "gpt-transcribe"
 
 
 DEFAULT_ENV = """\
-# Secrets for personal-agent. This file is private (mode 600) and never leaves this machine.
-# Put your key after the equals sign. Do not paste it into chat or commit it.
+# Keys for personal-agent. Put your key after the equals sign.
 OPENAI_API_KEY=
 
 # Optional: an OpenAI-compatible endpoint instead of api.openai.com

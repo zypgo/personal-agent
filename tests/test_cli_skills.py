@@ -124,7 +124,7 @@ def test_install_shows_the_review_and_asks_first(wired, tmp_path):
     accepted = invoke("skills", "install", str(source), input="y\n")
     out = flat(accepted.output)
     assert accepted.exit_code == 0, accepted.output
-    assert "Contains scripts" in out and "Install only skills whose text you have read" in out
+    assert "Contains scripts" in out and "Install it?" in out
     assert "Installed pdf-tools" in out
     assert (app.paths.skills_dir / "pdf-tools" / "scripts" / "run.py").is_file()
 
