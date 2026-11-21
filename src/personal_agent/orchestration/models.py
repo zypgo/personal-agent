@@ -1,4 +1,7 @@
-"""Bounded wire values and validation; provider reports are never acceptance."""
+"""Size-limited fields exchanged with remote agents, and their validation.
+
+An agent reporting a result is not the same as the owner accepting it.
+"""
 
 from __future__ import annotations
 

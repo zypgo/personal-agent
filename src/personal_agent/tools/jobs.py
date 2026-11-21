@@ -1,4 +1,4 @@
-"""Save/review background jobs without occupying a conversation worker."""
+"""Submit and check background jobs without tying up a chat worker."""
 
 from __future__ import annotations
 

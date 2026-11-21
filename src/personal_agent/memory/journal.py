@@ -1,11 +1,13 @@
-"""SQLite is the commit point; editable memory files are a recoverable projection.
+"""SQLite is the source of truth; the editable memory files are a copy of it (a "projection").
 
-Every change stores the complete desired bytes, not an operation such as "append". Replaying
-after a crash therefore cannot append twice. Reads inside an outer transaction see staged
-changes; files change only after COMMIT. An owner edit to a clean projection is imported. If
-the owner edits while a committed projection is pending, their different content wins and is
-versioned instead of overwritten. A file still equal to the old or desired snapshot is safe to
-replay, including a crash after replacement but before marking the projection complete.
+If the process crashes, the copy can be rebuilt. Every change stores the complete new content of
+the file, not an instruction like "append", so replaying a change after a crash cannot append
+twice. Reads inside a transaction see the changes made so far; the files themselves change only
+after COMMIT. If the owner edits a file that has no pending change, that edit is imported. If the
+owner edits a file while a committed change to it is still waiting to be written, the owner's
+content wins and is saved as a new version instead of being overwritten. A file that still matches
+either the old or the new content is safe to write again, even after a crash that came after the
+file was replaced but before the change was marked as done.
 """
 
 from __future__ import annotations

@@ -1,7 +1,9 @@
-"""One process, physically separate space data, one authenticated directory.
+"""One process serves every space.
 
-No mutable "current space": every request/run keeps its own App. Legacy owner data remains at
-the original path. New spaces never read that path's memory, workspace, skills or database.
+Each space keeps its data in its own folder, and a single directory of identities decides who may
+do what. There is no shared "current space" variable: every request or run has its own App. The
+owner's data from before spaces existed stays where it was. New spaces never read that location's
+memory, workspace, skills or database.
 """
 
 from __future__ import annotations

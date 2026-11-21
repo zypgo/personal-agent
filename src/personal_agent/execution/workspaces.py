@@ -1,4 +1,7 @@
-"""Bounded, no-link file snapshots shared by file tools and remote execution."""
+"""Size-limited file snapshots that never follow links.
+
+Shared by the file tools and remote execution.
+"""
 
 from __future__ import annotations
 

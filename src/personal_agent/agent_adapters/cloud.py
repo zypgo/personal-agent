@@ -1,4 +1,6 @@
-"""Wake an existing cloud agent without confusing delivery with task completion.
+"""Wake a cloud agent that already exists.
+
+A successful wake-up request does not mean the task is done.
 
 Grok Bot routines use Bearer authentication and HTTP 200. Grok Automations' HMAC/202
 interface is a different product. Muse has no assumed generic webhook: a hook is usable

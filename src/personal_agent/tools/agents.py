@@ -1,4 +1,7 @@
-"""Propose and inspect remote collaboration without giving the model worker authority."""
+"""Lets the model propose work for remote agents and look at its progress.
+
+The model never gets the powers of a remote worker.
+"""
 
 from __future__ import annotations
 

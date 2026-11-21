@@ -65,16 +65,16 @@ flowchart TB
 **日常使用**
 - [使用指南](docs/PERSONAL_AGENT.md)：打开后怎么用，卡片怎么处理。
 - [手机和浏览器连接](docs/MOBILE.md)：局域网、Tailscale、配对和排错。
-- [钉钉](docs/DINGTALK.md) · [模型与语音服务配置](docs/PROVIDERS.md) · [文件成果与下载](docs/ARTIFACTS.md)
+- [钉钉](docs/DINGTALK.md) · [模型、语音和搜索服务](docs/PROVIDERS.md) · [把文件发给你](docs/ARTIFACTS.md)
 
 **协作和执行**
 - [个人与小团队协作](docs/COLLABORATION.md)
 - [多 Agent 协作](docs/MULTI_AGENT.md) · [Grok / Muse 接入](docs/CLOUD_AGENTS.md) · [Grok Bot 配置指南](docs/GROK_BOT_SETUP.md) · [Muse 示例](examples/muse/README.md)
-- [自己的电脑（节点和 Runner）](docs/NODES.md) · [任务怎样可靠地执行](docs/EXECUTION.md)
+- [自己的电脑（节点和 Runner）](docs/NODES.md) · [在你自己的电脑上运行任务](docs/EXECUTION.md)
 
 **部署和维护**
 - [部署到 Railway](docs/RAILWAY.md)
-- [可靠性与手机访问](docs/RELIABILITY.md) · [故障后的恢复](docs/RECOVERY.md) · [记忆与上下文恢复](docs/memory-and-context-recovery.md)
+- [可靠性与手机访问](docs/RELIABILITY.md) · [崩溃之后，什么还在](docs/RECOVERY.md) · [记忆和上下文的恢复](docs/memory-and-context-recovery.md)
 - [开源组件、备份与升级](docs/OPEN_SOURCE_ADAPTERS.md)
 
 **设计和调研**
@@ -312,7 +312,7 @@ uv run pa db vacuum                    # 把删掉的空间还给磁盘（要先
 
 钉钉、Telegram 和模型服务都要你自己配置。自动化测试验证了协议和故障时的表现；真实的企业应用权限、手机网络和模型兼容性，仍要按文档自己验收。
 
-[功能、架构与升级](docs/V0_2.md) · [钉钉](docs/DINGTALK.md) · [文件交付](docs/ARTIFACTS.md) · [模型与语音服务配置](docs/PROVIDERS.md)
+[功能、架构与升级](docs/V0_2.md) · [钉钉](docs/DINGTALK.md) · [把文件发给你](docs/ARTIFACTS.md) · [模型、语音和搜索服务](docs/PROVIDERS.md)
 
 ## 版本记录
 

@@ -1,84 +1,83 @@
-# Sending files to you
+# 把文件发给你
 
-`publish_artifact(path, name=None, description="")` takes a finished file from the workspace and turns it into a private snapshot that can't be changed. It then queues one notification. The tool returns a queue receipt. Only the existing dispatcher confirms delivery and records the file in the conversation history.
+`publish_artifact(path, name=None, description="")` 会把工作区里一个已经写好的文件，做成一份不能再改的私有快照，然后排一条通知。工具返回的是入队回执（queue receipt）。送达由原有的投递器（Dispatcher）确认，文件也由它记进对话历史。
 
-## How to use it
+## 怎么用
 
-Ask the agent to create a report, spreadsheet, archive or any other file inside its workspace, and then publish it. For example:
+让 agent 在它的工作区里生成报告、表格、压缩包或别的文件，再发布出来。例如：
 
 ```text
-Create workspace/reports/summary.csv and publish reports/summary.csv with the caption
-"The requested summary."
+创建 workspace/reports/summary.csv，再把 reports/summary.csv 发布出来，附言写“你要的汇总。”
 ```
 
-Paths are relative to `PA_HOME/workspace`. Absolute paths inside that directory also work. Publishing rejects `..` paths, symbolic links, hard links, directories, pipes and devices. The file must be fully written before you publish it. With this tool, the agent can't publish memory, credentials, arbitrary files from your home directory, or installed skills.
+路径相对于 `PA_HOME/workspace`。这个目录里的绝对路径也可以用。发布时会拒绝带 `..` 的路径、符号链接、硬链接、目录、管道和设备文件。发布之前，文件必须已经完整写完。用这个工具，agent 发布不了记忆、凭据、你主目录里的任意文件，也发布不了已安装的技能。
 
-The tool is available to owner runs and scheduled runs when file tools and artifacts are turned on. It uses the existing `net_write` policy category, so the usual approval and taint rules still apply. It isn't available to untrusted runs or memory-maintenance runs.
+文件工具和成果文件功能都打开时，主人发起的 run 和定时 run 可以用这个工具。它属于现有的 `net_write` 策略类别，所以平时的审批规则和污点规则照样适用。不可信的 run，和做梦（整理记忆）的 run，用不了它。
 
-Policy checks use the canonical path relative to the workspace. So `private/report.txt`, `./private/report.txt` and its absolute path in the workspace all match a rule like `publish_artifact:private/*`. Deny and always-ask rules also look at the original spelling and the canonical absolute path. These checks only compare text. They never read the file before authorization.
+策略检查用的是相对工作区的规范路径。所以 `private/report.txt`、`./private/report.txt`，以及它在工作区里的绝对路径，都能匹配 `publish_artifact:private/*` 这样的规则。`deny` 和 `always_ask` 规则，还会看原始写法和规范后的绝对路径。这些检查只比较文字，授权之前从不读文件。
 
-## How it's delivered
+## 怎么送到你手上
 
-| Channel | Result |
+| 渠道 | 结果 |
 | --- | --- |
-| Web | A file card in the conversation history. Downloading needs the existing paired browser session. |
-| Telegram | One `sendDocument` multipart upload, with the notification text as the caption. The recipient must still be paired. |
-| Other channels, including DingTalk | A text notice points the owner to the signed-in Web conversation. If Web is turned off, the notice says to turn it on. No public link, and no link with a token in it, is made up. |
+| Web | 对话历史里出现一张文件卡片。下载要用已经配对的浏览器会话。 |
+| Telegram | 一次 `sendDocument` multipart 上传，通知文字作为附言。收件人必须仍然是配对过的。 |
+| 其他渠道，包括钉钉 | 发一条文字通知，指引主人去已登录的 Web 对话里取文件。如果 Web 关着，通知里会说要先把它打开。不会编造公开链接，也不会生成带令牌的链接。 |
 
-All paired Web devices belong to the same owner, just like the existing conversation history. This isn't a system for sharing between several users. Knowing an artifact ID is never enough to download the file.
+所有配对过的 Web 设备，都属于同一个主人，和现有的对话历史一样。这不是给多个用户共享文件用的系统。只知道文件 ID，永远下载不了文件。
 
-`GET /api/artifacts/{id}` returns `401` without a valid Web session, `404` for a snapshot that isn't available, and `410` after it has expired. Downloads use `Content-Disposition: attachment`, `application/octet-stream`, `nosniff`, a sandbox CSP and `private, no-store`. HTML and SVG are downloaded as files. They're never shown under the application's own origin.
+`GET /api/artifacts/{id}`：没有有效的 Web 会话，返回 `401`；快照不可用，返回 `404`；过期之后，返回 `410`。下载一律带 `Content-Disposition: attachment`、`application/octet-stream`、`nosniff`、一份沙箱 CSP 和 `private, no-store`。HTML 和 SVG 也是当文件下载，绝不会在应用自己的源（origin）下显示。
 
-The history format stays stable:
+历史记录的格式保持稳定：
 
 ```json
 {
   "kind": "artifact",
   "meta": {
-    "run_id": "the-producing-run",
+    "run_id": "产生这个文件的 run",
     "artifacts": [{
-      "id": "32-lowercase-hex-characters",
+      "id": "32 位小写十六进制",
       "name": "summary.csv",
       "mime": "text/csv",
       "size": 1234,
-      "sha256": "64-lowercase-hex-characters",
+      "sha256": "64 位小写十六进制",
       "expires_at": 1800000000
     }]
   }
 }
 ```
 
-The server builds this metadata from its own store. Clients work out the authenticated download path from `id`. They never receive a workspace path, a storage path or an access token. The MIME type is a display hint based on the file name. It doesn't prove what the content really is. History rebuilds file metadata from the snapshot tied to the Outbox ID. Attachment fields that a plugin supplies can't create or rename a file card.
+这份元数据是服务端从自己的存储里生成的。客户端用 `id` 自己拼出需要登录的下载路径，拿不到工作区路径、存储路径或访问令牌。MIME 类型只是按文件名给出的显示提示，不能证明内容真的是这种类型。历史记录里的文件元数据，是根据发件箱 ID 对应的快照重新生成的。插件自带的附件字段，创建不了文件卡片，也改不了文件卡片的名字。
 
-## Limits and how long files are kept
+## 大小限制和保留时间
 
 ```toml
 [artifacts]
 enabled = true
-max_file_bytes = 10485760      # 10 MiB; configurable up to 50 MiB
-max_total_bytes = 209715200    # 200 MiB of unexpired snapshots
-max_active_files = 1000       # empty files also consume a slot
+max_file_bytes = 10485760      # 10 MiB；最多可以调到 50 MiB
+max_total_bytes = 209715200    # 没过期的快照，一共 200 MiB
+max_active_files = 1000        # 空文件也占一个名额
 retention_days = 30
 ```
 
-Descriptions are limited to 500 characters. A download file name can't contain path separators or control characters, and can't be longer than 240 UTF-8 bytes. The total quota must have room for at least one file of the maximum size. If you go over a limit, you get an error and nothing is queued.
+说明文字最多 500 个字符。下载文件名里不能有路径分隔符或控制字符，也不能超过 240 个 UTF-8 字节。总配额至少要能装下一个最大尺寸的文件。超过任何一项限制，都会报错，什么也不会入队。
 
-Names and captions that contain known configured credentials, or anything that looks like a credential, are rejected before publishing. That includes values that show up after invisible characters are normalized. Safe captions use the same display normalization as review text. Approval can't override this check. It only checks metadata. It isn't general file-content DLP: the binary content is neither scanned nor rewritten, and the owner is responsible for the files they ask to export.
+名字和附言里，如果带有已配置的凭据，或者任何看起来像凭据的内容，发布前就会被拒绝；把不可见字符规整之后才露出来的值，也算在内。通过检查的附言，和审批文字用同一套显示规整。批准也绕不过这项检查。它只检查元数据，不是通用的文件内容防泄露（DLP）：二进制内容既不扫描，也不改写，要导出哪些文件，由主人自己负责。
 
-Expired bytes can't be accessed right away. The daily daemon upkeep, startup recovery and new publications clean up expired blobs and ones that never committed. The metadata stays in SQLite for history and deduplication. The byte quota doesn't limit how long database history is kept. Files the owner already saved from the browser or Telegram are outside the local retention.
+过期的内容，马上就读不到了。守护进程每天的整理、启动时的恢复、新的发布，会清掉过期的内容块（blob），和没提交成功的内容块。元数据留在 SQLite 里，用于历史记录和去重。字节配额不限制数据库里的历史记录保留多久。主人已经从浏览器或 Telegram 里存下来的文件，不受本地的保留时间管。
 
-## Crashes and retries
+## 崩溃和重试
 
-The store opens each part of the source path with directory descriptors and `O_NOFOLLOW`, including the workspace root. It checks the open inode before and after a bounded read. Snapshots live outside the writable workspace, in a directory only the owner can access, with `0600` files. Downloads and uploads check the stored length and SHA-256 before handing the bytes to a channel.
+存储在打开源路径的时候，路径里的每一级，包括工作区根目录，都用目录描述符加 `O_NOFOLLOW` 打开。在有上限的读取前后，它都会检查打开的 inode。快照放在可写工作区之外、只有主人能进的目录里，文件权限是 `0600`。下载和上传在把字节交给渠道之前，都会核对存下来的长度和 SHA-256。
 
-The blob is written and fsynced first. After that, its metadata and the Outbox message are committed in one SQLite transaction. If something fails, the notification is rolled back. If the process crashes before the commit, it can leave a blob that isn't listed, and recovery removes it. A committed publication survives a restart and doesn't depend on the original workspace file. This is about recovering from process crashes. It isn't a claim that every filesystem and SQLite setup survives a power loss.
+先写内容块，并 fsync。然后，它的元数据和发件箱消息，在同一个 SQLite 事务里提交。出了错，通知会跟着回滚。如果进程在提交之前崩了，可能留下一个没有登记的内容块，恢复的时候会把它删掉。已经提交的发布，重启之后依然有效，也不再依赖工作区里的原文件。这里说的，是从进程崩溃中恢复；不是说每种文件系统和 SQLite 配置，都扛得住断电。
 
-Deduplication uses `(session_key, work_id, source_path)`. Retrying a task returns its original snapshot and notification, even if the workspace file was changed or deleted. Different paths in one task are separate results. To publish a corrected version in the same task, use a new path. A later task has a new work ID and can publish the original path again.
+去重的键是 `(session_key, work_id, source_path)`。重试同一个任务，返回的是原来的快照和通知，就算工作区里的文件已经被改过或删掉。同一个任务里，不同的路径，是不同的结果。要在同一个任务里发布修正后的版本，请换一个新路径。之后的任务有新的 work ID，可以再次发布原来的路径。
 
-Files the owner asks for ignore quiet hours. Scheduled files respect them. If an upload's outcome is uncertain, it's always parked as `maybe_sent`. That includes interactive uploads and uploads cut off by a process crash. A Telegram connection failure before sending, or an explicit rate limit, can be retried. Permanent refusals fail. Read or write failures that happen late, and server errors, aren't replayed automatically. `pa outbox` shows deliveries that are still unresolved. The owner can check the chat and ask for a fresh publication if needed. The protocol doesn't claim that external delivery happens exactly once.
+主人主动要的文件，不受静默时段限制；定时任务发的文件，要遵守静默时段。上传结果不确定的，一律停在 `maybe_sent`，主人主动发起的上传，和被进程崩溃打断的上传，也一样。Telegram 在发送之前连接失败，或者明确被限流，可以重试。被永久拒绝的，就是失败。发生得比较晚的读写失败，和服务器错误，不会自动重发。`pa outbox` 会列出还没有结论的投递。主人可以去聊天里看一眼，需要的话，再让它重新发布一次。整套协议不承诺外部投递恰好发生一次。
 
-Telegram checks the pairing and the selected recipient again after it reads and verifies the snapshot, right before the upload. If access is revoked during that read, nothing is uploaded.
+Telegram 在读完并验证快照之后、上传之前，会再检查一次配对和选中的收件人。如果读取期间权限被撤销，就什么也不上传。
 
-## Tests
+## 测试
 
-`tests/test_artifacts.py` covers workspace boundaries, path swaps, concurrent writes, immutable snapshots, quota, expiry, transaction rollback, restart and concurrent duplicate publication. `tests/test_artifacts_delivery.py` covers authenticated downloads, active content, history, real multipart encoding over a fake HTTP transport, recipient checks, Telegram error classes, quiet hours and crash recovery. The tests make no external API calls. `tests/test_artifacts_policy.py` covers path aliases, restrictive policy rules and credential checks at the approval and publication boundaries.
+`tests/test_artifacts.py` 覆盖：工作区边界、路径被调包、并发写入、不可变的快照、配额、过期、事务回滚、重启，和并发的重复发布。`tests/test_artifacts_delivery.py` 覆盖：需要登录的下载、会执行的内容（active content）、历史记录、在假的 HTTP 传输上做真实的 multipart 编码、收件人检查、Telegram 的错误类别、静默时段，和崩溃恢复。这些测试不调用任何外部 API。`tests/test_artifacts_policy.py` 覆盖：路径别名、限制性的策略规则，以及审批和发布这两道边界上的凭据检查。

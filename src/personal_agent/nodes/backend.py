@@ -1,4 +1,8 @@
-"""Docker execution with retained containers and verifiable, fixed resource ownership."""
+"""Runs jobs in Docker.
+
+Finished containers are kept, each with a fixed name, so a container can be checked to really
+belong to its job.
+"""
 
 from __future__ import annotations
 

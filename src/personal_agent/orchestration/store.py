@@ -1,4 +1,7 @@
-"""Durable plans, grants and fenced attempts for remote personal agents."""
+"""Saved plans, grants and attempts for remote personal agents.
+
+An attempt is "fenced" (made unusable) once a newer authorization replaces it.
+"""
 
 from __future__ import annotations
 
@@ -1448,9 +1451,10 @@ class OrchestrationStore:
                         "This attempt already has a different stop confirmation."
                     )
             elif attempt["state"] == "accepted":
-                # An accepted result is not proof that its native execution stopped.
-                # Record only the owner's explicit attestation. Preserve acceptance,
-                # result eligibility and downstream work, including after token rotation.
+                # Accepting a result does not prove the agent's own process has stopped. All we
+                # record is the owner saying "I checked, it stopped". The acceptance, the result's
+                # eligibility and the work that depends on it stay as they were, even after the
+                # agent's token has been rotated.
                 self.db.execute(
                     """UPDATE orchestration_attempts SET stopped_by=?,stopped_at=?,stop_note=?
                        WHERE id=?""",
@@ -1471,9 +1475,10 @@ class OrchestrationStore:
                         "Only an accepted, revoked, uncertain or cancellation-pending attempt needs confirmation."
                     )
                 now = self.clock.now()
-                # Configuration changes fence a reported result as revoked. An explicit
-                # owner attestation can release its native worker without restoring the
-                # result's eligibility or changing when that result was received.
+                # A configuration change marks a result that was already reported as revoked.
+                # The owner can still confirm the agent's process has stopped, which frees it.
+                # That does not make the result usable again, and it does not change when the
+                # result was received.
                 finished_at = (
                     attempt["finished_at"]
                     if attempt["state"] == "revoked" and attempt["finished_at"] is not None

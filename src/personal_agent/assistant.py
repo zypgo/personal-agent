@@ -553,9 +553,9 @@ def _proposal_card(record: dict[str, Any]) -> dict[str, Any]:
         "id": record["id"],
         "kind": "workspace_action",
         "title": spec.title,
-        "summary": "请核对表单后确认。尚未执行。"
+        "summary": "请核对表单。你确认之前不会执行。"
         if pending
-        else "已记录一次执行意图。请核对实际结果。不要重复发送。",
+        else "这个操作已经提交过一次。结果还不确定。请先确认实际结果。不要重复提交。",
         "status": record["status"],
         "space_id": record["space_id"],
         "data": {
@@ -595,10 +595,10 @@ def resource_reviews(
     principal, _ = _identity(app, actor_id)
     if not principal.is_admin:
         return []
-    # A resource owner's browser may review another person's execution plan, but
-    # that grant must never copy private plans into this space's model/tool history.
-    # Cross-space review requires an explicit browser-only request in the viewer's
-    # own private space. The model-facing default remains this physical App only.
+    # The owner of a computer may review another person's execution plan in their browser, but
+    # that plan must never be copied into this space's model or tool history. Reviewing across
+    # spaces takes an explicit request made from the browser, in the reviewer's own private
+    # space. By default the model only ever sees this space's data.
     spaces = [app]
     if include_cross_space_reviews:
         assert app.identities is not None
@@ -650,7 +650,7 @@ def action_cards(
                 "job:" + job["id"],
                 "execution_approval",
                 review["title"],
-                "请审查完整命令、输入快照和输出范围后决定。",
+                "批准之前请看清完整命令、输入文件的快照和允许输出的文件。",
                 job["state"],
                 {
                     "space_id": review["space_id"],
@@ -682,7 +682,7 @@ def action_cards(
                     "task:" + task["id"],
                     "task_status",
                     task["title"],
-                    "电脑任务的持久状态与成果。",
+                    "电脑任务的进度和结果。",
                     task["state"],
                     {"task": task, "execution_kind": "execution"},
                     [],
@@ -701,7 +701,7 @@ def action_cards(
                         "agent-plan:" + task["id"],
                         "agent_plan",
                         task["title"],
-                        "请核对每个执行端将收到的内容及可见范围。",
+                        "请先看清每个助手会收到什么内容、能看到哪些信息。",
                         task["state"],
                         {"task": task},
                         actions,
@@ -724,7 +724,7 @@ def action_cards(
                             "agent-result:" + attempt["id"],
                             "agent_result",
                             task["title"],
-                            "结果已回传。请按验收标准核对。",
+                            "助手已交回结果。请对照验收标准检查。",
                             attempt["state"],
                             {"task": task, "step": step, "attempt": attempt},
                             actions,
@@ -749,7 +749,7 @@ def action_cards(
                         "agent-task:" + task["id"],
                         "task_status",
                         task["title"],
-                        "Agent 协作任务的持久状态与成果。",
+                        "协作任务的进度和结果。",
                         task["state"],
                         {"task": task, "execution_kind": "agent"},
                         [],

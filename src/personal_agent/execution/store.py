@@ -1,7 +1,8 @@
-"""Durable tasks and execution receipts; transport failures never authorize a replay.
+"""Saved tasks and execution receipts. A network failure never gives permission to run a job again.
 
-A store is confined to one physical collaboration-space database. API/tool entry points must
-check the current membership and node resource grants, then pass the authenticated actor/node.
+A store works on one space's database only. Whoever calls it (an API route or a tool) must first
+check the person's current membership or the node's resource grants, then pass in the verified
+person or node.
 """
 
 from __future__ import annotations

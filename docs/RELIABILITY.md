@@ -1,54 +1,54 @@
-# Reliability and phone access
+# 可靠性与手机访问
 
-This round fixes the fourteen findings from the review of `38cd5f7`. It then adds recovery and phone-setup features around the existing single-user design. It doesn't replace the inbox, the scheduler or the Agents SDK.
+这一轮先修了对 `38cd5f7` 做代码复盘时发现的 14 个问题，然后在现有的单用户设计的基础上，加了恢复和手机配置方面的功能。收件箱、调度器和 Agents SDK 都没有换。
 
-## Review findings
+## 复盘发现的问题
 
-| Finding | Change | Regression coverage |
+| 问题 | 改动 | 回归测试 |
 |---|---|---|
-| R01: a header placeholder lets extra data through | Only fixed credential header templates keep the read exemption. Other headers supplied by the model count as outbound writes | `test_web_tools.py` |
-| R02: MCP errors lose their source | `ToolResult` keeps the error status and the untrusted status apart. Error text from a remote server still taints later actions | `test_tool_results.py`, MCP tests |
-| R03: a failed dream skips undo | Persistent review receipts cover success, budget stops, exceptions, cancellation, timeouts and restarts. A suspended dream keeps its receipt | `test_dreaming.py`, `test_dream_approval_recovery.py` |
-| R04: a stale approval event resumes a newer round | The snapshot and the resume event share a generation. A pending approval stays pending. Stale events can't abandon newer rounds | `test_durability_recovery.py` |
-| R05: replacing a run leaves half-done state | Closing approvals, tool results, audit, snapshot removal and ending the run share one transaction | `test_durability_recovery.py` |
-| R06: writing the file and the database separately duplicates memory | The desired content and the versions are committed in SQLite. File writes that are safe to repeat run after the commit and recover after an interruption | `test_memory_journal.py` |
-| R07: costs across midnight disappear | Every usage update records its real timestamp. Daily budgets read this ledger | `test_durability_recovery.py` |
-| R08: retrying a summary loses earlier usage | Each response is counted right away, even if a later attempt fails | `test_compaction_failures.py` |
-| R09: the compaction timeout isn't used | Compaction has its configured deadline and also uses up the run's overall deadline | `test_compaction_failures.py` |
-| R10: the final failure notice needs another event | Dead-event receipts are saved atomically. The daemon handles them without waiting for new work | `test_durability_recovery.py` |
-| R11: the response size cap is applied after decompression | Responses with a body and a non-identity encoding are rejected before automatic decompression | `test_ssrf.py` |
-| R12: detached output leaves child processes running | Every exit path cleans up the process group. Cancelling also cleans up Docker containers | `test_process_lifecycle.py` |
-| R13: voice dedup runs after paid work | Durable ingress receipts claim the message before transcription, cache the words once transcribed, and prevent automatic re-billing after an uncertain interruption | `test_ingress_receipts.py` |
-| R14: semantic counterexamples falsely pass | Graders check the stated language and length, old and new facts, and the state of unfinished tasks. Adversarial negative cases must fail | evaluation tests |
+| R01：请求头里的占位符，会让额外的数据混出去 | 只有固定的凭据请求头模板，才继续享受读请求的豁免。模型自己写的其他请求头，按对外写入算 | `test_web_tools.py` |
+| R02：MCP 的错误丢了来源 | `ToolResult` 把“出错”和“不可信”这两个状态分开记。远端服务器返回的错误文字，仍然会让后面的动作带上污点 | `test_tool_results.py`、MCP 相关测试 |
+| R03：做梦失败，就跳过了撤销 | 持久的复核回执，覆盖成功、预算用完而停止、异常、取消、超时和重启这些情形。挂起的做梦，会留着它的回执 | `test_dreaming.py`、`test_dream_approval_recovery.py` |
+| R04：过期的审批事件，恢复了更新的一轮 | 快照和恢复事件，用同一个 generation。还在等待的审批，保持等待。过期的事件，放弃不了更新的轮次 | `test_durability_recovery.py` |
+| R05：替换一个 run，留下做了一半的状态 | 关闭审批、补工具结果、写审计、删快照，和结束这个 run，在同一个事务里 | `test_durability_recovery.py` |
+| R06：文件和数据库分开写，会让记忆重复 | 目标内容和版本，在 SQLite 里提交。可以放心重复的文件写入，在提交之后才执行，被打断之后，也能恢复 | `test_memory_journal.py` |
+| R07：跨过午夜的费用，不见了 | 每次用量更新，都记下它真实的时间戳。每日预算读的，就是这本账 | `test_durability_recovery.py` |
+| R08：重试摘要的时候，丢了前面的用量 | 每次响应一到，就立刻计数，哪怕后面的尝试失败了 | `test_compaction_failures.py` |
+| R09：压缩的超时没有生效 | 压缩有自己配置的期限，同时也会消耗这个 run 的总期限 | `test_compaction_failures.py` |
+| R10：彻底失败的通知，还得再等另一个事件 | dead 事件的回执，是原子保存的。守护进程处理它们，不用等新的活 | `test_durability_recovery.py` |
+| R11：响应大小的上限，是在解压之后才检查的 | 有正文、编码又不是 identity 的响应，在自动解压之前，就被拒绝 | `test_ssrf.py` |
+| R12：脱离的输出，会让子进程一直跑着 | 每条退出路径，都会清理进程组。取消的时候，也会清理 Docker 容器 | `test_process_lifecycle.py` |
+| R13：语音去重，在花钱的转写之后才做 | 持久的接收回执，在转写之前就把消息占住；转写完成后，缓存转出来的文字；结果不确定的中断之后，不会自动再扣一次钱 | `test_ingress_receipts.py` |
+| R14：语义上的反例，被误判为通过 | 判分器会检查：说明的语言和长度、新旧事实，以及没做完的任务的状态。刁钻的反面用例，必须判为失败 | 评测相关测试 |
 
-## What's new underneath
+## 底层新增了什么
 
-- **Memory that recovers after a crash.** SQLite records the logical edits. The Markdown files stay readable and editable. Owner edits are imported, and recovery never quietly overwrites a later edit. The task indexes read the committed content even while a file write is pending.
-- **Conflict review you can see.** If a dream can't safely undo later owner edits, it keeps its evidence and queues one review notice, without blocking unrelated work. `pa dream review` lists the conflicts. `pa dream review resolve RUN_ID --keep-current` closes a review explicitly, without rewriting files and without treating the interrupted input as successfully processed.
-- **Usage history for every call.** Costs follow the timestamp of the call across approval pauses and midnight, and the per-run totals are kept.
-- **Incoming-message preprocessing that survives failures.** A transcription that already finished can be reused after a failure that happens before the message goes into the inbox. Deliveries that arrive at the same time can't start a second transcription. If the outcome of an external call is unknown, you have to send a new message.
-- **Looking up original tool results.** `search_tool_history` gives limited, paged access to the original results, with run, call and source metadata, after the context has been compacted. Results it returns are scrubbed and treated as untrusted. It's separate from the conversation search you can see.
-- **What's going on.** `/api/activity` and the phone's Recent tasks view tell these states apart: pending, waiting for approval, paused by the budget, delayed retry, and final failure. This view never shows raw internal exceptions or tool arguments.
-- **Phone setup and checking.** `pa web connect --via lan|tailscale` checks the endpoints, keeps the comments in your configuration and prints a one-time pairing QR code. `pa web check` verifies a signed, fresh challenge from the current agent home, so an unrelated HTTP 200 doesn't count.
+- **崩溃之后能恢复的记忆。** SQLite 记录逻辑上的编辑。Markdown 文件仍然可读、可改。主人的编辑会被导入，恢复也绝不会悄悄覆盖后来的编辑。文件写入还没完成的时候，任务索引读的是已提交的内容。
+- **看得见的冲突复核。** 如果做梦没法安全地撤销主人后来的编辑，它会留着证据，并排一条复核通知，不会挡住不相干的工作。`pa dream review` 列出这些冲突。`pa dream review resolve RUN_ID --keep-current` 明确地关闭一次复核：不改写任何文件，也不把被打断的输入当成处理成功。
+- **每一次调用的用量历史。** 费用跟着调用的时间戳走，不管中间隔了审批暂停还是午夜；每个 run 的合计也保留。
+- **收到消息之后的预处理，出了故障也不白做。** 消息进入收件箱之前出了故障，已经转写完成的结果，可以重用。同时到达的重复投递，启动不了第二次转写。如果外部调用的结果不明，你得重新发一条消息。
+- **查找原始的工具结果。** 上下文被压缩之后，还可以用 `search_tool_history` 分页取回原始的工具结果，每条都带着 run、调用和来源信息。取回的内容会先去掉密钥，并被当作不可信。它和你能看到的对话搜索，是两回事。
+- **现在在发生什么。** `/api/activity` 和手机上的“最近任务”视图，会区分这几种状态：等待中、等待审批、被预算暂停、延迟重试、最终失败。这个视图从不显示内部的原始异常或工具参数。
+- **手机配置和检查。** `pa web connect --via lan|tailscale` 会检查各个端点，保留你配置文件里的注释，并打印一次性的配对二维码。`pa web check` 会校验一个由当前 agent home 签发的、新鲜的挑战，所以不相干的 HTTP 200，不算数。
 
-See [RECOVERY.md](RECOVERY.md) for the design of transactions and recovery, [memory-and-context-recovery.md](memory-and-context-recovery.md) for conflict review, and [MOBILE.md](MOBILE.md) for setup.
+事务和恢复的设计，见 [RECOVERY.md](RECOVERY.md)；冲突复核，见 [memory-and-context-recovery.md](memory-and-context-recovery.md)；配置方法，见 [MOBILE.md](MOBILE.md)。
 
-## Upgrading and rolling back
+## 升级与回滚
 
-Before you upgrade an existing installation, stop the agent and back up the whole `PA_HOME` directory. `pa db backup` also makes a consistent copy of the database. That copy alone doesn't include the configuration, media or Markdown files you edited by hand.
+升级现有的安装之前，先停掉 agent，再备份整个 `PA_HOME` 目录。`pa db backup` 也能做出一份一致的数据库副本。但光是这份副本，不包括配置、媒体，或者你手工编辑过的 Markdown 文件。
 
-The database migration only goes forward. It adds approval generations, per-call usage, terminal notification receipts, memory write records and ingress receipts. Existing memory files are imported lazily. Existing aggregate costs are migrated once and keep their old start-time attribution, because the timestamps of the individual earlier calls aren't available.
+数据库迁移只能往前走。它会加上：审批的 generation、逐次调用的用量、终态通知的回执、记忆写入记录，和接收回执。已有的记忆文件，是惰性导入的。已有的汇总费用，只迁移一次，保留原来按开始时间归属的记法，因为更早的每一次调用的时间戳，已经找不到了。
 
-When the engine recovers, committed memory writes are settled before interrupted dreams are reviewed. An interrupted voice preprocessing claim is marked uncertain. Words that were already transcribed stay available for a retry, with no new transcription call. Pending terminal notices survive a restart and are kept until they're queued. Completed receipts and usage history follow the existing retention windows. Pending memory writes are never pruned as old history. Pending dream receipts, including conflicts waiting for review, also keep their runs, approvals and memory version chains until the review is resolved.
+引擎恢复的时候，会先结算已提交的记忆写入，再复核被打断的做梦。已经占住消息、却被打断的语音预处理，会标成“不确定”。已经转写出来的文字，留着供重试用，不会再发起新的转写调用。待发的终态通知，重启之后依然在，一直留到被排进队列。已完成的回执和用量历史，遵循现有的保留窗口。待处理的记忆写入，绝不会当作旧历史清理掉。待处理的做梦回执，包括等着复核的冲突，也会留着它们的 run、审批和记忆版本链，直到复核解决。
 
-If you may need to roll back, keep the old executable together with its matching whole-home backup. Older code refuses a newer schema. Don't lower the schema version by hand.
+如果你可能要回滚，就把旧的可执行文件，和与它配套的整个 home 备份，一起留着。旧代码会拒绝较新的 schema。不要手工降低 schema 版本。
 
-## Checks, and what's still not covered
+## 检查，以及还没覆盖的
 
-`scripts/check.sh` runs formatting, lint, strict types, all the offline Python tests and Node's TAP tests. `scripts/check.sh --python 3.11` tests with the oldest supported Python. The PR workflow runs on Linux and macOS with Python 3.11/3.13 and Node 24. It never turns on paid live tests.
+`scripts/check.sh` 会跑格式检查、lint、严格的类型检查、全部离线的 Python 测试，和 Node 的 TAP 测试。`scripts/check.sh --python 3.11` 用支持的最老的 Python 来测。PR 的工作流，在 Linux 和 macOS 上，用 Python 3.11/3.13 和 Node 24 运行。它从不打开要花钱的实时测试。
 
-The new tests combine persistence boundaries with retries, cancellation, owner edits and multi-round approvals. They prove fixed, repeatable properties. They don't prove that a real model will always read every instruction correctly. The improved evaluation checks cover the counterexamples they name. They still aren't a general proof that natural-language answers are correct.
+新增的测试，把持久化的各个边界，和重试、取消、主人的编辑、多轮审批组合起来测。它们能证明的，是那些固定、可重复的行为；证明不了真实的模型每次都能读懂每一条指令。改进之后的评测检查，覆盖了它们点名的那些反例，但也证明不了自然语言的回答一定正确。
 
-These are choices we're keeping on purpose: single-user deployment, SQLite `synchronous=NORMAL`, a credential broker in the same process, and trusted installed Python/MCP programs. These changes don't claim to survive a power loss, to isolate an arbitrary plugin, to track memory provenance across every run, or to deliver exactly once when a remote service can't confirm the outcome.
+这些是我们有意保留的选择：单用户部署、SQLite 的 `synchronous=NORMAL`、同进程里的凭据代理，和可信的、已安装的 Python/MCP 程序。这些改动不承诺：扛得住断电、隔离任意插件、跨每一个 run 追踪记忆的来源，或者在远端服务无法确认结果的时候，做到恰好投递一次。
 
-Phone HTTPS/Tailscale setup is covered by command and protocol tests. Real iOS/Android devices, a live tailnet, a real Docker daemon and paid model behavior still need testing in your deployment. The PWA has no background Web Push. Telegram remains the option for proactive alerts when the browser is closed. The host computer has to stay awake and connected.
+手机的 HTTPS/Tailscale 配置，由命令测试和协议测试覆盖。真实的 iOS/Android 设备、真正的 tailnet、真实的 Docker daemon，以及要花钱的模型行为，仍需要在你自己的部署里测。PWA 没有后台的 Web Push。浏览器关着的时候，要主动提醒，仍然靠 Telegram。主机电脑得一直醒着，并保持联网。

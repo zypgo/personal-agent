@@ -28,8 +28,8 @@
 
       <main id="login" class="login" hidden>
         <p class="eyebrow">欢迎回来</p>
-        <h1>从你的空间开始。</h1>
-        <p class="muted">新成员使用项目邀请加入。已有账号请先配对设备或使用恢复码，避免建立重复账号。</p>
+        <h1>进入你的空间</h1>
+        <p class="muted">新成员请用项目邀请加入。已经有账号的，先配对这台设备，或者用恢复码登录，不要重复建账号。</p>
         <div class="two-columns">
           <section class="card">
             <h2>接受项目邀请</h2>
@@ -76,7 +76,7 @@
                 <label>需要保留的输出文件<textarea name="output_paths" rows="2" placeholder="例如：report.md"></textarea></label>
               </div>
               <label class="short-field">最长执行时间（秒）<input name="timeout_s" type="number" min="1" max="3600" value="900" required></label>
-              <p class="hint">任务使用独立文件快照，默认无网络。提交后由资源审批人确认；电脑离线时等待上线。</p>
+              <p class="hint">任务只能用输入文件的快照（一份副本），默认没有网络。提交后，要由批准使用这台电脑的人确认；电脑不在线的话，会等它上线。</p>
               <button class="primary" type="submit">提交任务</button>
             </form>
           </details>
@@ -121,7 +121,7 @@
           <div class="actions footer-actions"><a href="/" class="button ghost" id="device-chat-link">返回对话</a><button id="logout-button" type="button" class="danger ghost">退出当前设备</button></div>
         </section>
       </main>
-      <footer class="footer">Personal Agent · 把心思留给重要的事</footer>
+      <footer class="footer">Personal Agent · 你的个人助理</footer>
     </div>
 
     <dialog id="secret-dialog" aria-labelledby="secret-title">

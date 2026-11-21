@@ -1,87 +1,72 @@
-# Reference review, 2026-11-16
+# 参考项目复核（2026-11-16）
 
-Before changing Personal Agent, we read three outside projects. Everything in Personal Agent was written
-independently, and no code from these projects was imported. The comparison base for Personal Agent is
-`215358b6ce2b6e66315552ecbd156f263234aa8b`.
+改 Personal Agent 之前，我们读了三个外部项目。Personal Agent 里的所有代码，都是独立写的，没有从这些项目里引入任何代码。Personal Agent 的对比基线是 `215358b6ce2b6e66315552ecbd156f263234aa8b`。
 
-A branch snapshot, a release tag and a reconstruction are three different kinds of evidence.
-So the table below says exactly what was read for each project.
+分支快照、发布标签和重建版本，是三种不同的证据。所以下面的表格，把每个项目到底读了什么，写得很明确。
 
-## What we looked at
+## 我们看了什么
 
-| Reference | Release or version | What we read |
+| 参考项目 | 发布版本 | 我们读了什么 |
 | --- | --- | --- |
-| OpenClaw | Stable `v2026.11.4`, released 2026-11-16; release commit `d843d6af39a42cd3c30084edbeabeece732fd93a` | A newer `main` snapshot, [`6f5d3b399b31855501cc3f38f1221f7165554c59`](https://github.com/openclaw/openclaw/tree/6f5d3b399b31855501cc3f38f1221f7165554c59). The claims below are about this snapshot, not automatically about the stable release. |
-| DeepSeek Harness | Latest release seen: `dsh-v0.2.2-rc.3` (2026-11-13), marked prerelease | `master` at [`39163dd30f703a79079e2d2446545cff3c453738`](https://github.com/deepseek-ai/deepseek-harness/tree/39163dd30f703a79079e2d2446545cff3c453738). The project calls itself a developer preview. |
-| Grok Bot reconstruction | An unofficial reconstruction of the shipped `0.18.0`. The original repository was archived on 2026-08-28. | [`b-nnett/grok-bot-0.18-reconstructed@a9f633e09d49a85829b8236331b9e21f7e612634`](https://github.com/b-nnett/grok-bot-0.18-reconstructed/tree/a9f633e09d49a85829b8236331b9e21f7e612634). It is not an official xAI release, and it is not the complete original source. |
+| OpenClaw | 稳定版 `v2026.11.4`，2026-11-16 发布；发布提交 `d843d6af39a42cd3c30084edbeabeece732fd93a` | 一份更新的 `main` 快照，[`6f5d3b399b31855501cc3f38f1221f7165554c59`](https://github.com/openclaw/openclaw/tree/6f5d3b399b31855501cc3f38f1221f7165554c59)。下面的结论，说的是这份快照，不自动适用于稳定版。 |
+| DeepSeek Harness | 看到的最新发布：`dsh-v0.2.2-rc.3`（2026-11-13），标为预发布 | `master` 分支，在 [`39163dd30f703a79079e2d2446545cff3c453738`](https://github.com/deepseek-ai/deepseek-harness/tree/39163dd30f703a79079e2d2446545cff3c453738)。这个项目自称是开发者预览版。 |
+| Grok Bot 重建版 | 对已发布的 `0.18.0` 的非官方重建。原仓库已于 2026-08-28 归档。 | [`b-nnett/grok-bot-0.18-reconstructed@a9f633e09d49a85829b8236331b9e21f7e612634`](https://github.com/b-nnett/grok-bot-0.18-reconstructed/tree/a9f633e09d49a85829b8236331b9e21f7e612634)。它不是 xAI 的官方发布，也不是完整的原始源码。 |
 
-Release sources: [OpenClaw release](https://github.com/openclaw/openclaw/releases/tag/v2026.11.4),
-[DeepSeek release](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3).
+发布来源：[OpenClaw 发布页](https://github.com/openclaw/openclaw/releases/tag/v2026.11.4)、[DeepSeek 发布页](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.3)。
 
-## What the comparison tells us
+## 对比说明了什么
 
-| Area | What the references do well | What it means for Personal Agent |
+| 方面 | 参考项目做得好的地方 | 对 Personal Agent 意味着什么 |
 | --- | --- | --- |
-| Swapping runtimes and providers | OpenClaw registers several runtimes and picks one. DeepSeek registers LLM adapters, the agent factory, persistence and many other services through Cordis. | Clear provider contracts and capability checks are useful now. We keep the SDK runner and the SQLite stores tightly coupled on purpose. Having an endpoint URL does not make something a replaceable agent runtime. |
-| Long-running work | OpenClaw can recover sessions and outbound deliveries. DeepSeek keeps schedules, goal state and session logs on disk. | Other projects store this reliably too, so it is not something only we do. Keep the small Inbox/Outbox state machine, and test where it meets each channel. |
-| What "recovery" means | DeepSeek's scheduler recovers pending inbox deliveries. Restored goals start disarmed and need an authorized resume. Local in-process jobs do not become durable just because session history exists. | Keep three things apart: replaying history, recovering a pending task, and not repeating an action in the outside world. Do not treat them as the same thing. |
-| Channels and delegation | OpenClaw has more channel plugins and supports subagent lifecycles. DeepSeek offers several subagent providers, SDK/ACP integration and a richer desktop/Web setup. | A declared channel capability contract lets us add channels gradually. This PR does not add a new distributed multi-agent scheduler. |
-| Output and interaction | Grok's reconstructed protocol spells out file attachments and other typed outputs. DeepSeek and OpenClaw expose more runtime and UI state. | Add real artifact delivery and limited, temporary streaming. The saved final messages stay the official history. |
-| Isolation | DeepSeek has OS sandbox implementations on top of plugin scopes. OpenClaw's larger plugin surface means more trust and operating boundaries. | Plugin lifecycle, scope and type declarations do not isolate processes or untrusted code by themselves. The existing sandbox, approval and egress checks are still needed. |
-| Cost of adopting | The bigger frameworks have more extension points and integrations, and more configuration and recovery paths to learn. DeepSeek warns about breaking changes during the preview. | Start with small interfaces around what already exists. Moving to a whole framework would need its own compatibility and recovery tests. |
+| 替换运行时和服务商 | OpenClaw 注册了多个运行时，并从中选一个。DeepSeek 通过 Cordis，注册 LLM 适配器、agent 工厂、持久化，和许多别的服务。 | 清晰的服务商契约和能力检查，现在就有用。我们有意让 SDK runner 和 SQLite 存储紧密耦合。有一个端点 URL，并不等于它是个可以替换的 agent 运行时。 |
+| 长时间运行的工作 | OpenClaw 能恢复会话和待发送的投递。DeepSeek 把定时、目标状态和会话日志，存在磁盘上。 | 别的项目也能可靠地存这些，所以这不是只有我们才有的。保留小而清楚的收件箱/发件箱状态机，并在它和每个渠道的衔接处做测试。 |
+| “恢复”指什么 | DeepSeek 的调度器，会恢复待处理的收件箱投递。恢复出来的目标，一开始是“未启用”的，要有权限的人来恢复运行。本地、进程内的作业，不会因为有会话历史，就变成持久的。 | 把三件事分开：重放历史、恢复待处理的任务，和不在外部世界重复做一个动作。不要把它们当成同一件事。 |
+| 渠道和委派 | OpenClaw 有更多的渠道插件，并支持子 agent 的生命周期。DeepSeek 提供多种子 agent 服务商、SDK/ACP 集成，以及更丰富的桌面/Web 配置。 | 声明出来的渠道能力契约，让我们能逐步加渠道。这个 PR 没有新增分布式的多 agent 调度器。 |
+| 输出和交互 | Grok 重建出来的协议，把文件附件和其他有类型的输出，写得很明确。DeepSeek 和 OpenClaw 暴露了更多运行时和界面的状态。 | 加上真正的文件交付，和有限的、临时的流式输出。保存下来的最终消息，仍然是正式的历史。 |
+| 隔离 | DeepSeek 在插件作用域之上，还有操作系统级的沙箱实现。OpenClaw 更大的插件面，意味着更多的信任和运维边界。 | 插件的生命周期、作用域和类型声明，本身并不能隔离进程或不可信的代码。现有的沙箱、审批和出站检查，仍然需要。 |
+| 采用的成本 | 更大的框架，有更多的扩展点和集成，也有更多要学的配置和恢复路径。DeepSeek 警告，预览期间会有破坏性变更。 | 先围绕已有的东西，做小的接口。整个换成某个框架，需要它自己的兼容性和恢复测试。 |
 
-### OpenClaw: files worth reading
+### OpenClaw：值得读的文件
 
-- [Runtime registry](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/agents/harness/registry.ts) and [runtime selection](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/agents/harness/selection.ts).
-- [Session delivery recovery](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/infra/session-delivery-queue-recovery.ts) and [SQLite outbound queue](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/infra/delivery-queue-sqlite.ts).
-- [Channel catalog registry](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/plugins/channel-catalog-registry.ts).
+- [运行时注册表](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/agents/harness/registry.ts)和[运行时选择](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/agents/harness/selection.ts)。
+- [会话投递恢复](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/infra/session-delivery-queue-recovery.ts)和 [SQLite 出站队列](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/infra/delivery-queue-sqlite.ts)。
+- [渠道目录注册表](https://github.com/openclaw/openclaw/blob/6f5d3b399b31855501cc3f38f1221f7165554c59/src/plugins/channel-catalog-registry.ts)。
 
-### DeepSeek: files worth reading, and its limits
+### DeepSeek：值得读的文件，和它的局限
 
-- [LLM service](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/llm/llm/src/index.ts), [agent service](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/core/agent/src/index.ts), and [architecture](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/docs/architecture.md).
-- [Persistence](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/session/session-persistence/src/index.ts), [schedule recovery](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/schedule/schedule/src/runtime.ts), and [goal activation](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/goal/goal/src/index.ts).
-- The [experimental webhook documentation](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/docs/subsystems/webhook.md) describes a different delivery model from a durable Inbox. Do not assume it deduplicates or replays automatically.
-- Cordis's reversible effects clean up registrations, listeners and lifecycle resources. They do not undo a network request that was already sent, or an arbitrary file write. Agent and plugin scopes are not OS sandboxes. See the [safety notice](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/SAFETY.md).
+- [LLM 服务](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/llm/llm/src/index.ts)、[agent 服务](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/core/agent/src/index.ts)和[架构文档](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/docs/architecture.md)。
+- [持久化](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/session/session-persistence/src/index.ts)、[定时恢复](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/schedule/schedule/src/runtime.ts)和[目标激活](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/goal/goal/src/index.ts)。
+- [实验性的 webhook 文档](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/docs/subsystems/webhook.md)，描述的投递模型，和持久的收件箱不一样。不要以为它会自动去重或重放。
+- Cordis 的可逆副作用，清理的是注册、监听器和生命周期资源。它撤销不了已经发出的网络请求，也撤销不了任意的文件写入。agent 和插件的作用域，不是操作系统沙箱。见[安全声明](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/SAFETY.md)。
 
-## Where the Grok code comes from, and which version it is
+## Grok 的代码从哪里来，是哪个版本
 
-The [README](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/README.md)
-separates three parts: reconstructed runtime and control-plane code, a shipped renderer that was kept as it was,
-and a partly readable frontend. It says plainly that the shipped frontend did not include the original source or
-source maps. So it would be wrong to describe the repository as a full source-map recovery.
+[README](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/README.md) 把项目分成三部分：重建出来的运行时和控制面代码、原样保留的已发布渲染器，以及一部分能读懂的前端。它明确说了，已发布的前端，没有带原始源码或 source map。所以，把这个仓库说成是“从 source map 完整还原”，是不对的。
 
-Its [NOTICE](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/NOTICE.md)
-does not give a license to the upstream source code. We took only architectural ideas and observable protocol boundaries
-from it. We did not copy or run any reconstructed source, renderer assets, installers, account cookies or authentication transport.
+它的 [NOTICE](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/NOTICE.md) 没有授予上游源码的许可证。我们只借鉴了架构上的想法，和能观察到的协议边界。我们没有复制或运行任何重建出来的源码、渲染器资源、安装程序、账号 cookie 或认证传输。
 
-The reconstruction defines how files are returned as output, and it stores a record when a send is accepted:
-[send-message schema](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/source/host/runner/tools/send-message-schema.ts),
-[acceptance records](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/source/host/extensions/transcript/send-acceptance.ts).
-The inference router for Cursor/Claude Code/Codex/OpenRouter, routed MCP tools, local usage tracking, the optional local Docker
-connector and the router-settings UI are described by the author as later experiments. They are not evidence that official
-Grok Bot 0.18 shipped those features.
+这个重建项目，定义了文件作为输出怎么返回，并且在一次发送被接受的时候，存一条记录：[send-message 的 schema](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/source/host/runner/tools/send-message-schema.ts)、[接受记录](https://github.com/b-nnett/grok-bot-0.18-reconstructed/blob/a9f633e09d49a85829b8236331b9e21f7e612634/source/host/extensions/transcript/send-acceptance.ts)。
 
-We also checked two follow-up repositories:
+面向 Cursor/Claude Code/Codex/OpenRouter 的推理路由、被路由的 MCP 工具、本地用量跟踪、可选的本地 Docker 连接器，和路由设置界面，作者自己说是后来的实验。它们不能证明，官方的 Grok Bot 0.18 发布时带有这些功能。
 
-| Repository | Fixed commit | What we found |
+我们还查了两个后续的仓库：
+
+| 仓库 | 固定的 commit | 我们的发现 |
 | --- | --- | --- |
-| `ElizantOS/ant-bots` | [`1378374adf12e10cb4871c0d2bdac3343049ad6e`](https://github.com/ElizantOS/ant-bots/tree/1378374adf12e10cb4871c0d2bdac3343049ad6e) | Still built on the 0.18 reconstruction. Its later activity does not show a new upstream reconstruction. |
-| `smartyua/Grok-Bot-reconstruction-` | [`2beb2f9409ed507385c09753d33977591aa59963`](https://github.com/smartyua/Grok-Bot-reconstruction-/tree/2beb2f9409ed507385c09753d33977591aa59963) | Its mention of 0.43 is about comparing against an installed app. The reconstructed base is still 0.18. |
+| `ElizantOS/ant-bots` | [`1378374adf12e10cb4871c0d2bdac3343049ad6e`](https://github.com/ElizantOS/ant-bots/tree/1378374adf12e10cb4871c0d2bdac3343049ad6e) | 仍然建立在 0.18 的重建版上。它后来的动静，没有显示出有新的上游重建。 |
+| `smartyua/Grok-Bot-reconstruction-` | [`2beb2f9409ed507385c09753d33977591aa59963`](https://github.com/smartyua/Grok-Bot-reconstruction-/tree/2beb2f9409ed507385c09753d33977591aa59963) | 它提到的 0.43，是拿一个已安装的应用做对比。重建的基础，仍然是 0.18。 |
 
-We did not find a newer reconstruction that ties back to a newer shipped version we could verify.
-That is the result of a limited search. It does not prove that none exists.
+我们没有找到更新的重建，能和我们可以核实的更新的已发布版本对上。这只是一次有限的搜索的结果，并不能证明不存在。
 
-## What we took, and what we left for later
+## 我们采纳了什么，留到以后的是什么
 
-This PR takes the useful boundaries and applies them to the existing Python system:
+这个 PR 采纳了其中有用的边界，用在现有的 Python 系统上：
 
-- explicit provider and channel capabilities;
-- separate speech settings;
-- streamed progress kept apart from the committed history;
-- file delivery through the existing Outbox, where the file cannot change after it is created and downloading needs authentication.
+- 明确的服务商和渠道能力；
+- 单独的语音设置；
+- 流式的进度，和已提交的历史分开；
+- 通过现有的发件箱交付文件，文件创建之后不能改，下载需要认证。
 
-The [artifact contract](ARTIFACTS.md) describes its limits, how long files are kept, and what happens when delivery is uncertain.
+[产物约定](ARTIFACTS.md)写了它的限制、文件保留多久，以及投递结果不确定的时候怎么办。
 
-Possible later work: acceptance obligations (an idea from Grok), durable background-job state, structured questions, and priority lanes.
-None of these is implemented here. This PR does not replace the SDK agent loop, migrate storage, promise to roll back effects in
-the outside world, or give the agent any new permission to run unattended.
+以后可能做的：验收义务（来自 Grok 的想法）、持久的后台作业状态、结构化的提问，和优先级通道。这些，这里都没有实现。这个 PR 不替换 SDK 的 agent 循环，不迁移存储，不承诺回滚外部世界里的效果，也没有给 agent 任何无人值守运行的新权限。

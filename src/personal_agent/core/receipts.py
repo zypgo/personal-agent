@@ -1,4 +1,6 @@
-"""Durable claims around paid inbound preprocessing, before an inbox event exists.
+"""Saved claims on paid preprocessing of incoming messages (such as voice transcription).
+
+The claim is made before the inbox event exists.
 
 An interrupted external call has an unknown outcome. A repeated delivery must not silently
 pay for it again: the owner can send a new message to explicitly start another attempt.

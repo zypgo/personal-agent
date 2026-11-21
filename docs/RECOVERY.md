@@ -1,33 +1,63 @@
-# What survives a crash
+# 崩溃之后，什么还在
 
-This change closes gaps in cases where several failures happen together. The tests for the individual pieces didn't cover those cases.
+这次改动，补的是“几种故障同时发生”的情形。以前针对各个部件的测试，没有覆盖这些情形。
 
-## Approval rounds
+## 审批轮次
 
-`run_states.generation` says which pause an `approval_response` is allowed to resume. The generation is copied into the event payload and into the existing event id. If an answer from an earlier round is sent again, it's acknowledged and the current round isn't touched. An approval that's still pending is never treated as a refusal. During the transition, old-style response ids are still read.
+- `run_states.generation` 记的是：一条 `approval_response`，能恢复的是哪一次暂停。这个 generation 会写进事件的 payload，也写进现有的事件 id。
+- 上一轮的答复如果又被发了一遍，系统只回一个“收到”，当前这一轮不受影响。
+- 还在等待的审批，绝不会被当成拒绝。
+- 过渡期间，旧格式的响应 id 仍然读得懂。
 
-Replacing a paused run with a newer one is a single database transaction. It closes the approvals, fills in the missing tool results, records the outcomes, removes the snapshot and ends the run. Results from an earlier completed approval round aren't appended a second time.
+用一个更新的 run 去替换一个暂停的 run，是一个数据库事务：关闭这些审批、补上缺失的工具结果、记下结果、删掉快照、结束这个 run。更早、已经完成的审批轮次里的结果，不会被第二次追加。
 
-## Memory: commit first, then write the files
+## 记忆：先提交，再写文件
 
-`memory_documents` stores, for each path: the kind and bytes it should have, its revision, the last revision written to disk, and the previous file snapshot. A change and its `memory_versions` entry are committed together. File writes are registered through `Database.after_commit()` and only start after the outermost transaction commits. A savepoint rollback also drops its callbacks. Reads inside the transaction see the staged bytes, so a later edit can use a file created earlier in the same `after_sent` batch.
+### 怎么存
 
-`MemoryStore.recover()` writes out the rows that are still waiting. It writes the complete content with an atomic replacement, and then acknowledges the revision. If the process crashes on either side, repeating the step can't append again. The Outbox delivery state, the transcript and the memory content that should be on disk share one database transaction. So after a commit, the dispatcher doesn't resend just because a file write isn't finished. Recovery must run before interrupted dreams are recovered. The open-task index and the directory listings also use these logical snapshots: a task stays visible when its file write fails, and reads inside a transaction see the staged task changes.
+- `memory_documents` 给每个路径存：它应有的种类和内容、版本号、最后一次写到磁盘上的版本号，以及上一份文件快照。
+- 一次改动，和它在 `memory_versions` 里的记录，一起提交。
+- 文件的写入，通过 `Database.after_commit()` 登记，等最外层事务提交之后才开始。保存点（savepoint）回滚的时候，它登记的回调也一起丢掉。
+- 事务里的读取，看到的是还没写出去的内容。所以同一批 `after_sent` 里，后面的编辑，可以用前面刚创建的文件。
 
-You can still edit the files. Changes to a file that's already been written are imported and versioned as owner edits. If a pending write finds content that differs from both the previous and the desired snapshot, it keeps that owner edit and imports it. A symlink that points outside the memory root is refused. An unexpected file in a directory stops the directory from being removed. Recovery never wipes out new owner files recursively. If an I/O failure happens, the committed write stays pending and is logged for retry.
+### 崩溃之后
 
-`revert_run()` is one atomic logical operation. It raises `MemoryRestoreError` instead of reporting a partial rollback as a success, and it refuses to overwrite later edits made by the owner or other runs. Callers must keep their recovery receipt until this succeeds. Bootstrap respects deletions it knows about, so a restart doesn't re-create a deleted template before a pending dream can restore its original contents. Retention keeps the run and approval records of every pending dream, plus the whole memory version sequence from the earliest pending edit onward. Later owner edits in that sequence are also needed to spot an unsafe rollback conflict. Finishing or resolving the review removes its receipt and releases those records to normal retention. Older, unrelated history can still expire.
+- `MemoryStore.recover()` 把还在等待的行写出来：用原子替换写入完整的内容，然后确认这个版本。进程不管崩在哪一边，把这一步再做一遍，都不会重复追加。
+- 发件箱的投递状态、对话记录，和该写到磁盘上的记忆内容，在同一个数据库事务里。所以提交之后，Dispatcher 不会因为文件还没写完，就重新发送。
+- 这个恢复，必须先于被打断的做梦的恢复。
+- 未完成任务的索引和目录列表，用的也是这些逻辑快照：文件写失败的时候，任务照样看得见；事务里的读取，也看得到还没写出去的任务改动。
 
-Existing files are imported lazily. A complete backup still copies the whole home directory, including configuration, media and memory files. A database-only backup doesn't replace that. The guarantees tested here are about the process being killed. They don't claim to survive a power loss for SQLite's existing `synchronous=NORMAL` setting or for every filesystem.
+### 你自己改文件
 
-## Usage accounting
+- 你仍然可以直接编辑这些文件。对已经写好的文件做的改动，会作为主人的编辑被导入，并记版本。
+- 如果一次待写入发现，文件内容既不同于上一份快照，也不同于目标快照，它会保留这份主人的编辑，并把它导入。
+- 指向记忆根目录之外的符号链接，会被拒绝。目录里出现意料之外的文件，这个目录就不会被删。恢复从不会递归地清掉主人新建的文件。
+- 如果出现 I/O 失败，已提交的写入仍然是待办，并记入日志，等着重试。
 
-`RunStore.add_usage()` keeps its API. Now it also adds a row to `usage_events` with the actual call time, in the same transaction that updates the per-run totals. Daily limits read that ledger. So if you resume yesterday's run, today's calls are charged to today. The old aggregate totals were migrated once and kept their original start-time attribution, because the historical call times can't be rebuilt.
+### 撤销一次做梦
 
-## Notices for events that failed for good
+- `revert_run()` 是一次原子的逻辑操作。它要么成功，要么抛出 `MemoryRestoreError`，不会把部分回滚报告成成功，也拒绝覆盖主人或别的 run 在这之后做的编辑。
+- 调用方必须留着它的恢复回执，直到这次操作成功。
+- 初始化（bootstrap）会尊重它已知的删除。所以重启的时候，不会在待处理的做梦恢复原内容之前，把一个被删掉的模板重新建出来。
+- 保留策略会留下：每个待处理的做梦的 run 记录和审批记录，以及从最早的待处理编辑开始的整个记忆版本序列。主人后来的编辑，也在这个序列里，得留着，才能发现不安全的回滚冲突。
+- 复核完成或者解决之后，它的回执被删掉，这些记录回到正常的保留策略。更早的、不相关的历史，仍然可以过期。
 
-When an event moves to `dead`, a `dead_event_notices` receipt is written in the same transaction. The worker removes the receipt only in the transaction that queues the owner's notice and, if needed, abandons a suspended run. The daemon also wakes up for these receipts when no runnable event is left. Retention must keep the events that unprocessed receipts point to.
+### 备份和断电
 
-## Regression tests
+- 已有的文件，是惰性导入的（用到时才导入）。
+- 完整的备份，仍然要复制整个 home 目录，包括配置、媒体和记忆文件。只备份数据库，替代不了它。
+- 这里测试过的保证，针对的是进程被杀掉。对于 SQLite 现有的 `synchronous=NORMAL` 设置，或者每一种文件系统，我们不声称扛得住断电。
 
-`test_durability_recovery.py` combines multi-round approvals with crash replay, interrupts a replacement, crosses midnight during a run, and interrupts the settling of a terminal notice. `test_memory_journal.py` exercises transaction and savepoint rollback, both sides of a file write, owner edits, path safety during recovery, atomic undo and Outbox commit recovery. The existing crash and real-subprocess suites remain part of the gate. No paid model or external service is needed.
+## 用量记账
+
+`RunStore.add_usage()` 的接口不变。现在，它在更新每个 run 合计的同一个事务里，还会往 `usage_events` 加一行，记下调用的实际时间。每日上限读的就是这本账。所以，你恢复昨天的 run，今天的调用，记在今天名下。旧的汇总，迁移了一次，保留了原来按开始时间归属的记法，因为历史上的调用时间，已经没法重建了。
+
+## 彻底失败的事件，怎么通知
+
+事件进入 `dead` 的时候，同一个事务里，会写一张 `dead_event_notices` 回执。worker 只会在这样一个事务里删掉回执：这个事务排队发出给主人的通知，并且在需要的时候，放弃一个挂起的 run。没有可运行的事件时，守护进程也会因为这些回执醒来。保留策略必须留着没处理的回执所指向的事件。
+
+## 回归测试
+
+- `test_durability_recovery.py`：把多轮审批和崩溃重放结合起来，打断一次替换，让一个 run 跨过午夜，并打断一个终态通知的结算。
+- `test_memory_journal.py`：检查事务和保存点的回滚、一次文件写入的前后两侧、主人的编辑、恢复过程中的路径安全、原子的撤销，以及发件箱提交的恢复。
+- 已有的崩溃测试和真实子进程的测试，仍然是提交前检查的一部分。不需要付费的模型，也不需要外部服务。

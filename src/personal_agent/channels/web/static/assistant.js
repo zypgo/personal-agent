@@ -113,14 +113,14 @@ export function createAssistantWelcome({ document: doc, onPrompt, now = () => ne
   scene.setAttribute("aria-hidden", "true");
   scene.append(createAgentMark(doc, "", "idle"), makeNode(doc, "span", "", "assistant-orbit"), makeNode(doc, "span", "", "assistant-spark"));
   const title = makeNode(doc, "h2");
-  title.append(makeNode(doc, "span", "想做的事，"), makeNode(doc, "span", "从这里开始。", "assistant-title-finish"));
-  welcome.append(scene, makeNode(doc, "p", greeting(now().getHours()), "assistant-eyebrow"), title, makeNode(doc, "p", "一个念头、一份资料，或一件惦记的事。说给我听，我们一起往前走。", "assistant-muted"));
+  title.append(makeNode(doc, "span", "想让我做点什么，"), makeNode(doc, "span", "直接说就行。", "assistant-title-finish"));
+  welcome.append(scene, makeNode(doc, "p", greeting(now().getHours()), "assistant-eyebrow"), title, makeNode(doc, "p", "可以是一个想法、一份资料，或者一件还没办的事。", "assistant-muted"));
   const prompts = makeNode(doc, "div", "", "assistant-shortcuts");
   for (const [kind, label, detail, prompt, symbol] of [
-    ["organize", "理清眼前的事", "一起看看待办", "帮我看看现在有哪些需要我处理的事情。", "tasks"],
-    ["remind", "留意重要时刻", "安排一个提醒", "帮我安排一个提醒：", "remind"],
-    ["collect", "接住零散想法", "整理一份资料", "帮我整理一份资料：", "collect"],
-    ["begin", "让计划往前走", "交办一项任务", "我想交办一项任务，请先帮我拟好计划：", "begin"],
+    ["organize", "看看待办", "有哪些事等你处理", "帮我看看现在有哪些需要我处理的事情。", "tasks"],
+    ["remind", "设个提醒", "到点给你发消息", "帮我安排一个提醒：", "remind"],
+    ["collect", "整理资料", "把零散的想法记下来", "帮我整理一份资料：", "collect"],
+    ["begin", "交办任务", "先拟计划，你确认后再做", "我想交办一项任务，请先帮我拟好计划：", "begin"],
   ]) {
     const button = makeNode(doc, "button", "", "assistant-shortcut");
     button.type = "button";
@@ -511,7 +511,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
         return;
       }
       try { await api(`${base}/complete`, { method: "POST", json: { execution_id: execution.execution_id, outcome: "succeeded" } }); }
-      catch { if (alive) onNotice("操作已完成，待办回执暂未同步。请核对状态，无需重复操作。"); }
+      catch { if (alive) onNotice("操作已经完成，但待办列表还没更新。请刷新看看，不用再操作一次。"); }
       if (alive) { suppressed.add(entry.card.id); onContextChanged(); await refresh(); }
     } catch (error) {
       if (!alive || error?.name === "AbortError") return;
@@ -617,7 +617,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
         const command = field("command", "执行内容", draft.command, { ...required, multiline: true, rows: 4 });
         const inputs = field("input_paths", "读取的文件 · 每行一个路径", lines(draft.input_paths), { multiline: true }), outputs = field("output_paths", "保留的成果文件 · 每行一个路径", lines(draft.output_paths), { multiline: true });
         const timeout = field("timeout_s", "最长执行时间（秒）", draft.timeout_s || 900, { ...required, type: "number", min: 1, max: 3600 });
-        note("先形成电脑执行计划，仍须资源审批人批准才会执行。输入文件使用独立快照，默认无网络。");
+        note("这里先生成电脑任务的计划，还要由批准使用这台电脑的人批准，才会执行。输入文件会先做一份快照，默认没有网络。");
         read = () => { const fields = { command: command.read(), input_paths: inputs.read(), output_paths: outputs.read(), timeout_s: timeout.read() }; return title ? buildTaskRequest({ ...fields, title: title.read() }, `assistant:${entry.card.id}`) : buildStepRequest(fields, draft.expected_revision, draft.step_id); }; label = title ? "提交待批准计划" : "补充执行步骤"; break;
       }
       case "revise_execution_task": {

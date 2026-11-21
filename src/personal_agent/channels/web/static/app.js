@@ -212,8 +212,8 @@ function showPairing(problem = "") {
       { class: "pair" },
       createAgentMark(document, "pair-brand-mark", "idle"),
       h("p", { class: "assistant-eyebrow", text: "Personal Agent" }),
-      h("h1", { text: "把日常，交给你的助理。" }),
-      h("p", { class: "lede", text: "聊天、整理资料、安排提醒，也把需要执行的事交办好。连接账号，从这里继续。" }),
+      h("h1", { text: "连接你的个人助理" }),
+      h("p", { class: "lede", text: "可以和它聊天、整理资料、设提醒，也可以把要做的事交给它去办。先连接你的账号。" }),
       h(
         "ol",
         { class: "steps" },
@@ -899,7 +899,7 @@ function buildComposer() {
   const actions = h("div", { class: "row-actions" }, mic, audio, send);
   const row = h("div", { class: "row" }, attach, input, actions);
   const recording = h("div", { class: "recording", hidden: true });
-  const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker, voicePicker, h("p", { class: "composer-note" }, "先聊想法，再做决定。需要确认时，我会等你。", h("span", { class: "keys", text: "按 Enter 发送，Shift + Enter 换行。" })));
+  const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker, voicePicker, h("p", { class: "composer-note" }, "需要你确认的操作，我会先问你。", h("span", { class: "keys", text: "按 Enter 发送，Shift + Enter 换行。" })));
   const composer = { element, input, files, chips, hints, send, mic, row, recording, picker, voice: null, voiceStarting: false, pendingImages: 0, pendingAudio: 0, disposed: false };
   const current = () => !composer.disposed && ui?.composer === composer;
 

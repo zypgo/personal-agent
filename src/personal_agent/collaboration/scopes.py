@@ -1,4 +1,4 @@
-"""Separate physical data roots and deliberately restricted configuration for new spaces."""
+"""Each new space gets its own data folder and a deliberately limited configuration."""
 
 from __future__ import annotations
 

@@ -1,7 +1,8 @@
-"""Hash-only node credentials and explicit resource grants.
+"""Node credentials are stored only as hashes, and what each node may use is granted explicitly.
 
-HTTP/CLI callers authorize the administrator before creating an invitation. The resulting
-token can access only the registered node and its granted spaces; it is never an owner login.
+Whoever calls this (an HTTP route or the CLI) must first check that the person is an administrator
+before creating an invitation. The token that results can reach only that registered node and the
+spaces granted to it; it never works as an owner login.
 """
 
 from __future__ import annotations

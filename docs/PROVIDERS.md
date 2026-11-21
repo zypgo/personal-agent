@@ -1,26 +1,26 @@
-# Model, speech and search providers
+# 模型、语音和搜索服务
 
-The agent runs on your own computer. Three things go out to services you choose: the model, speech transcription and hosted web search. This guide shows how to set up each one, and which settings they still share.
+agent 跑在你自己的电脑上。有三样东西会发到你选的服务：模型、语音转文字，和托管的联网搜索。这份指南讲怎么配这三样，以及它们还共用哪些设置。
 
-## If you already have a working setup
+## 已经有能用的配置怎么办
 
-Nothing changes unless you add new settings:
+除非你加了新的设置，否则什么都不会变：
 
-- The text model's address comes from `[model] base_url`. If that is not set, `OPENAI_BASE_URL`. If that is not set either, the OpenAI default.
-- The key comes from `OPENAI_API_KEY`.
-- Speech uses the same address and key as the text model. Its model name still comes from `[media] transcribe_model`.
-- `model.main`, `model.fast` and `context.model` only pick model names at the same address. They do not pick a different provider.
+- 文本模型的地址，来自 `[model] base_url`；没设的话，用 `OPENAI_BASE_URL`；再没有，就用 OpenAI 的默认地址。
+- 密钥来自 `OPENAI_API_KEY`。
+- 语音转文字，用和文本模型相同的地址和密钥。它的模型名，仍然来自 `[media] transcribe_model`。
+- `model.main`、`model.fast` 和 `context.model`，只是在同一个地址上选模型名，不会换成别的服务商。
 
-Two checks are stricter than before:
+有两项检查，比以前更严：
 
-- If you write the native OpenAI URL yourself, a key is now required.
-- Hosted search is no longer offered to every server that merely implements the Responses API.
+- 如果你自己写了 OpenAI 官方的地址，现在必须有密钥。
+- 托管搜索，不再提供给每一个只是实现了 Responses API 的服务器。
 
-Both stop the agent from sending requests that the service never said it could handle.
+这两条，都是为了防止 agent 发出服务端从没说过自己能处理的请求。
 
-## Choose the model's key
+## 选择模型的密钥
 
-`api_key_env` is the **name** of an environment variable. It is never the secret itself:
+`api_key_env` 是环境变量的**名字**，绝不是密钥本身：
 
 ```toml
 [model]
@@ -31,13 +31,13 @@ main = "your-main-model"
 fast = "your-fast-model"
 ```
 
-Put `MODEL_GATEWAY_KEY` in the agent's own `.env` file, or in the process environment. If you name a custom variable and it is missing, that is an error. The agent never quietly falls back to `OPENAI_API_KEY`. `pa doctor`, `pa service install` and `pa eval run --live` all find the key the same way.
+把 `MODEL_GATEWAY_KEY` 放进 agent 自己的 `.env` 文件，或者进程的环境变量里。如果你指定了自定义的变量名，但它没设，就是错误：agent 绝不会悄悄退回去用 `OPENAI_API_KEY`。`pa doctor`、`pa service install` 和 `pa eval run --live`，找密钥的办法都一样。
 
-For compatibility, a custom endpoint that still uses the default key name can run without a key. The agent then sends `not-needed`, which local servers can ignore. If your local server needs no login but you also have cloud keys, give the local server its own variable with a dummy value. That keeps an unrelated cloud key out of its requests.
+为了兼容，用默认密钥名的自定义地址，可以不带密钥运行。这时 agent 发送的是 `not-needed`，本地服务器可以不理它。如果你的本地服务器不需要登录，但你又有云端的密钥，就给本地服务器单独起一个变量，值随便填。这样，不相干的云端密钥，不会跟着请求发给它。
 
-A key name uses uppercase letters, digits and underscores, is at most 64 characters long, and cannot start with a digit. Any key value you configure is hidden from the agent's output and logs, even if its name does not contain `KEY`, `TOKEN` or `SECRET`. `pa service install --pass-env` also refuses these variables. Keys belong in the agent's `.env`, not in a LaunchAgent job file or in its dry-run output.
+密钥名只能用大写字母、数字和下划线，最长 64 个字符，不能以数字开头。你配置的任何密钥值，都会从 agent 的输出和日志里藏起来，哪怕它的名字里没有 `KEY`、`TOKEN` 或 `SECRET`。`pa service install --pass-env` 也会拒绝这些变量。密钥属于 agent 的 `.env`，不要放进 LaunchAgent 的任务文件，也不要出现在它的 dry-run 输出里。
 
-## A local text model with a separate speech service
+## 本地文本模型，加单独的语音服务
 
 ```toml
 [model]
@@ -54,28 +54,28 @@ transcribe_api_key_env = "OPENAI_API_KEY"
 transcribe_model = "gpt-transcribe"
 ```
 
-In the agent's `.env`:
+agent 自己的 `.env` 里：
 
 ```dotenv
-# A dummy is suitable only when your local server does not require authentication.
+# 只有本地服务器不需要认证的时候，才能填个假值。
 LOCAL_MODEL_AUTH=not-needed
 OPENAI_API_KEY=put-your-speech-service-key-here
 ```
 
-Replace the model names and addresses with the ones your services really offer. The speech model above is this project's default. It does not mean every account or compatible service has it.
+把模型名和地址，换成你的服务真正提供的。上面的语音模型，是本项目的默认值，不代表每个账号或兼容服务都有它。
 
-How the speech settings combine:
+语音设置怎么组合：
 
-- `transcribe_base_url` wins over the model URL and over `OPENAI_BASE_URL`.
-- `transcribe_api_key_env` separately overrides the model's key name.
-- A setting you leave out inherits the matching model setting, so existing installs keep working.
-- When the two providers differ, set **both** overrides so the link between them is explicit.
+- `transcribe_base_url` 优先于模型的地址，也优先于 `OPENAI_BASE_URL`。
+- `transcribe_api_key_env` 单独覆盖模型的密钥名。
+- 没写的设置，继承对应的模型设置，所以已有的安装照常工作。
+- 两个服务商不一样的时候，**两项**覆盖都要写，这样两者的对应关系才一目了然。
 
-An OpenAI-compatible speech service must implement `POST /audio/transcriptions` and return the transcribed `text`. Pointing the text model at a new server does not give that server speech recognition. `pa doctor` reports the speech route and any missing key without sending audio. It does not claim to have tested speech compatibility.
+兼容 OpenAI 的语音服务，必须实现 `POST /audio/transcriptions`，并返回转写出来的 `text`。把文本模型指向一台新服务器，并不会让这台服务器有语音识别。`pa doctor` 会报告语音走哪条路、缺不缺密钥，但不会发送音频，也不声称测过语音兼容性。
 
-## Say whether hosted search is supported
+## 告诉它托管搜索能不能用
 
-Hosted search needs both the model endpoint and the tool settings to allow it:
+托管搜索，要模型端点和工具设置都允许才行：
 
 ```toml
 [model]
@@ -90,23 +90,23 @@ hosted_web_search = true
 web_search = "auto"
 ```
 
-| `model.capabilities.hosted_web_search` | What happens |
+| `model.capabilities.hosted_web_search` | 效果 |
 | --- | --- |
-| Not set | Turned on automatically only for the native `https://api.openai.com/v1` endpoint, including the default setup. |
-| `true` | You are telling the agent that this Responses-compatible service supports the hosted `web_search` tool. The agent does not test this. |
-| `false` | Hosted search is never offered at this endpoint. |
+| 没设 | 只对 OpenAI 官方的 `https://api.openai.com/v1` 自动打开，默认配置也算在内。 |
+| `true` | 你是在告诉 agent：这个兼容 Responses 的服务，支持托管的 `web_search` 工具。agent 不会去测。 |
+| `false` | 这个端点永远不提供托管搜索。 |
 
-The automatic check looks at the final address, including `OPENAI_BASE_URL`. Lookalike domains, other ports and arbitrary gateway paths do not count as OpenAI. Chat Completions never gets this tool, which exists only in the Responses API, even if you set the capability to `true`.
+自动判断看的是最终地址，包括 `OPENAI_BASE_URL`。长得像的域名、别的端口、随便什么网关路径，都不算 OpenAI。Chat Completions 永远拿不到这个工具，它只存在于 Responses API 里，就算你把这项能力设成 `true`，也一样。
 
-The usual limits still apply. `tools.web_search = "off"`, deny rules and the run's tool profile can all remove search. `cached` still queries the provider's search index; it is not an offline cache on your machine. The `web_fetch` and `http_request` tools are separate local HTTP clients, and they stay on when hosted search is unavailable. To add another search provider, use an MCP server or a Python tool plugin. There is no general `SearchProvider` registry yet.
+平时的限制，照样有效。`tools.web_search = "off"`、`deny` 规则和这次 run 的工具画像（profile），都能让搜索消失。`cached` 仍然会去查服务商的搜索索引，不是你本机上的离线缓存。`web_fetch` 和 `http_request` 是另外两个本地的 HTTP 客户端，托管搜索用不了的时候，它们照样开着。想加别的搜索服务，用 MCP 服务器，或者 Python 工具插件。现在还没有通用的 `SearchProvider` 注册表。
 
-## Data, cost and compatibility
+## 数据、费用和兼容性
 
-- The model endpoint receives what a request needs: instructions, history, remembered context and tool results. Images in the current context are uploaded with the request.
-- Speech sends the audio bytes to the speech endpoint you chose. The transcribed text then goes into the model conversation. Converting audio locally with `ffmpeg` does not make the transcription local.
-- `store = false` asks for stateless Responses handling, and SDK tracing is off. Neither setting means the data stays on your computer, and neither decides how long a provider keeps it.
-- The main and fast models still share one provider setup. Model failover, per-provider pricing and moving checkpoints between providers are not covered. If a model's price is unknown, the agent keeps the cautious estimate that `pa doctor` describes. So a free local model can still use up the agent's estimated budget.
-- A URL that looks compatible is not a guarantee. The endpoint you choose has to support tools, history replay, reasoning parameters, images and Guardian's structured output. `pa doctor --live` makes two paid model requests to try tools and replay. It does not test every speech, image or approval-resume path.
-- Interactive web chats can ask for a streaming preview of the answer. If your compatible endpoint only returns complete responses, set `[web] stream_responses = false`. Final answers still go through the durable delivery path.
+- 模型端点会收到一次请求需要的东西：指令、历史、记住的上下文，和工具结果。当前上下文里的图片，随请求一起上传。
+- 语音转写，会把音频字节发给你选的语音端点。转写出来的文字，再进入和模型的对话。在本地用 `ffmpeg` 转换音频，并不会让转写变成本地的。
+- `store = false` 是要求用无状态的 Responses 处理方式，SDK 的追踪是关的。这两项，都不意味着数据留在你的电脑上，也决定不了服务商把数据保留多久。
+- 主模型和快速模型，仍然共用一套服务商设置。模型故障切换、按服务商分别定价，以及在服务商之间搬检查点，都不在范围内。如果一个模型的价格未知，agent 沿用 `pa doctor` 里说明的保守估价。所以，一个免费的本地模型，也可能用光 agent 估算出来的预算。
+- 地址看起来兼容，不是保证。你选的端点，必须支持工具、历史回放、推理参数、图片，以及 Guardian（`auto` 模式的审阅模型）的结构化输出。`pa doctor --live` 会发两次要花钱的模型请求，来试工具和回放。它不会测遍每一条语音、图片或审批恢复的路径。
+- 网页上的交互聊天，可以请求答案的流式预览。如果你的兼容端点只会返回完整的响应，就设 `[web] stream_responses = false`。最终答案仍然走可靠的投递路径。
 
-If your speech service uses another protocol, implement the public `Transcriber` interface (`async transcribe(data, *, mime, name) -> str`) and pass it in with `build_app(transcriber=...)`. If you add an `async aclose()`, it is called when services stop. This is a code-level hook. You cannot yet install a speech provider and pick it in the settings.
+如果你的语音服务用别的协议，就实现公开的 `Transcriber` 接口（`async transcribe(data, *, mime, name) -> str`），再用 `build_app(transcriber=...)` 传进去。如果你再加一个 `async aclose()`，服务停止的时候会调用它。这是代码层面的接入点；还不能安装一个语音服务，再在设置里选它。

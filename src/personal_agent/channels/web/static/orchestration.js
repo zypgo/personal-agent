@@ -26,8 +26,8 @@ export function connectionStatus(agent, now=Date.now()/1000) {
 
 export function wakeStatus(wake) {
   if(wake.claimed_at!=null)return {label:"已领取",message:"Agent 已领取任务。",attention:false};
-  if(wake.state==="stopped")return {label:"已确认触发结束",message:"已记录远端停止或未执行的确认。原任务不会重派。",attention:false};
-  if(wake.state==="uncertain")return {label:"触发待核查",message:"未确认 Routine 是否收到触发。请先在 Grok 核对，系统不会自动重复触发；触发回执不能证明任务已执行。",attention:true};
+  if(wake.state==="stopped")return {label:"已确认触发结束",message:"已记录你的确认：远端已经停止，或者根本没有执行。这个任务不会再派一遍。",attention:false};
+  if(wake.state==="uncertain")return {label:"触发待核查",message:"未确认 Routine 是否收到触发。请先到 Grok 里确认。系统不会自动重复触发。就算收到了触发，也不代表任务已经做完。",attention:true};
   if(wake.state==="failed")return {label:"触发未成功",message:"Routine 触发未能完成。请检查连接配置和服务器环境变量，也可在远端手动领取。",attention:true};
   if(wake.state==="sent")return {label:"已触发，等待领取",message:"Routine 触发请求已送达，仍在等待 Agent 领取。",attention:false};
   return {label:"正在交接触发",message:"正在交接 Routine 触发，尚未确认领取。",attention:false};
@@ -203,14 +203,14 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
           secretDialog(data,data.agent || agent);await loadAgents();
         }));
         actions.append(action(node("button","撤销连接","ghost danger"),async()=>{
-          if(!confirmAction(`撤销 ${agent.name}？它将无法继续领取任务；已运行的执行仍需等待停止确认。`))return;
+          if(!confirmAction(`撤销 ${agent.name}？它以后不能再领任务。已经在跑的任务，还要等你确认它们停了。`))return;
           await request(`/api/v4/agents/${encodeURIComponent(agent.id)}/revoke`,{method:"POST",body:{}});notice("已撤销连接；进行中的执行请继续核对停止状态。");await loadAgents();
         }));card.append(actions);
       }
       list.append(card);
     }
     if(!state.agents.length) {
-      const empty=node("section","","empty");empty.append(node("h3","让你的助手一起做事"),node("p","连接已有的 Grok、Muse 或其他 Agent，再把任务分给它们。"));
+      const empty=node("section","","empty");empty.append(node("h3","还没有连接助手"),node("p","把你已有的 Grok、Muse 或其他 Agent 连进来，就可以把任务分给它们做。"));
       if(canWrite()) empty.append(action(node("button","连接第一个助手","primary"),async()=>{get("agent-create").open=true;get("agent-create-content").querySelector("input")?.focus?.();}));
       list.append(empty);
     }
@@ -228,7 +228,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     }
     function render() {
       const data=state.occupancies.get(agent.id);content.replaceChildren();
-      content.append(node("p","这里只显示本连接的运行占用，不包含其他成员私人任务的正文。停止确认必须以你实际核对的远端状态为准。","hint"));
+      content.append(node("p","这里只显示这个连接正在占用的任务，看不到其他成员私人任务的内容。确认“已停止”之前，请先到远端实际看一眼。","hint"));
       if(!data){content.append(node("p","正在读取占用状态…","hint"));return;}
       if(!data.attempts.length && !data.wakes.length)content.append(node("p","没有待处理的占用。","hint"));
       for(const [kind,rows] of [["attempt",data.attempts],["wake",data.wakes]])rows.forEach((row,index)=>{
@@ -243,7 +243,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
           if(!consent.control.checked || !note.value.trim())throw new Error("请先实际核对远端状态，并填写确认说明。");
           const base=`/api/v4/tasks/${encodeURIComponent(row.task_id)}`;
           await request(isWake ? `${base}/wakes/${encodeURIComponent(row.wake_id)}/stopped` : `${base}/stopped`,{method:"POST",body:isWake ? {note:note.value.trim()} : {step_id:row.step_id,attempt_id:row.attempt_id,note:note.value.trim()}});
-          notice("已记录确认并释放对应占用。原任务不会重派，需要继续时请新建计划。");await refreshOccupancy();
+          notice("已记录你的确认，占用已释放。这个任务不会再派一遍；想继续的话，请重新建一个计划。");await refreshOccupancy();
         });record.append(form);content.append(record);
       });
       content.append(action(node("button","刷新占用状态","ghost"),refreshOccupancy));
@@ -261,7 +261,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     const content=node("div");details.append(node("summary","接入指引与地址"),content);
     const render=()=>{
       const connection=state.connections.get(agent.id);content.replaceChildren();
-      content.append(node("p","在 Agent 所在的执行环境里选择一种支持的连接方式，并将一次性凭据保存为 Bearer Token。仅能聊天、不能调用外部工具的会话无法领取任务。","hint"));
+      content.append(node("p","在 Agent 运行的环境里，选一种它支持的连接方式，把这个一次性凭据存成 Bearer Token。只能聊天、不能调用外部工具的会话，领不了任务。","hint"));
       content.append(node("p",wakeDescription(agent),"hint"));
       if(!connection){content.append(node("p","正在读取接入地址…","hint"));return;}
       const copyField=(title,text)=>{
@@ -277,7 +277,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       const schemaPath=`/api/v4/agents/${encodeURIComponent(agent.id)}/openapi.json`;
       if(connection.openapi_download_path===schemaPath && downloadArtifact) {
         content.append(action(node("button","下载 OpenAPI 定义","ghost"),async()=>downloadArtifact(schemaPath,`${agent.name}-openapi.json`)));
-        content.append(node("p","机器读取 OpenAPI 地址需要 Bearer 凭据；可先下载定义文件，再上传到 Muse 等支持导入的工具配置中。定义文件不包含连接密钥。","hint"));
+        content.append(node("p","工具读取这个 OpenAPI 地址时，需要 Bearer 凭据。也可以先下载定义文件，再上传到 Muse 这类支持导入的工具里。定义文件里没有连接密钥。","hint"));
       }
       if(connection.bridge_url)content.append(node("p","Python Bridge 只负责领取与回传，运行任务的仍是你自己的 Agent。下载后用 python bridge.py --help 查看接入方法；凭据通过安全输入或环境变量提供。","hint"));
       if(typeof connection.instructions === "string") {
@@ -398,7 +398,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       if(focusedTask===task.id) button.focus?.({preventScroll:true});
     }
     if(!tasks.length) {
-      const empty=node("section","","empty");empty.append(node("h3","下一件事，交给助手"),node("p","说清楚目标，选好协作方式。确认计划后，进度和成果会留在这里。"));
+      const empty=node("section","","empty");empty.append(node("h3","还没有协作任务"),node("p","写清楚目标，选好让谁来做。你确认计划之后，进度和结果会显示在这里。"));
       if(canWrite()) {
         const available=state.agents.some(agent=>!agent.revoked_at && agent.state!=="revoked");
         empty.append(action(node("button",available ? "交办第一项任务" : "先连接一个助手","primary"),async()=>{

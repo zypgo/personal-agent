@@ -319,7 +319,7 @@ async function loadTasks(force = false) {
   list.replaceChildren();
   const tasks = data.tasks || [];
   if (!tasks.length) {
-    const box=node("div","","empty");box.append(node("h3","从一件具体的事开始"),node("p","交办给电脑的任务，会在这里留下进度与成果。"));
+    const box=node("div","","empty");box.append(node("h3","还没有电脑任务"),node("p","交给电脑做的任务，进度和结果会显示在这里。"));
     if(state.me?.role!=="viewer") {
       const button=node("button","新建电脑任务","primary");button.type="button";
       button.addEventListener("click",()=>{$("task-compose").open=true;field(form("task-form"),"title").focus?.();});box.append(button);
@@ -560,7 +560,7 @@ function renderTask(task, jobs) {
           actions.append(button);
         }
         section.append(actions);
-      } else section.append(node("p","等待该资源的审批人确认。","hint"));
+      } else section.append(node("p","等批准使用这台电脑的人确认。","hint"));
     }
     renderLogs(section,task,job);
     const result=job.result;

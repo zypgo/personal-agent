@@ -1,41 +1,46 @@
-# Memory and context recovery
+# 记忆和上下文的恢复
 
-## Nightly memory passes
+## 每夜的记忆整理
 
-Before a dream changes memory, it writes a durable `dream:pending:<run_id>` receipt. When a pass succeeds, it's checked for too many deletions. Only then is the receipt removed and its digest cursor moved forward. If a pass fails, runs out of budget, is cancelled or times out, its candidate edits are reverted. If the restore itself fails, the receipt stays so recovery can try again. Later owner edits must never be overwritten just to make recovery look successful. If an owner edit conflicts, the same receipt gets `needs_review` and one durable notification is queued. In that case the success cursor doesn't move, nobody pretends the rollback finished, and startup and unrelated inbox work aren't blocked. Real IO errors stay retryable errors.
+做梦在改记忆之前，会先写一张持久的 `dream:pending:<run_id>` 回执。之后分几种情况：
 
-The receipt spans approval rounds. Waiting for approval isn't a failed night. On startup, a pass with a saved execution checkpoint is kept. After the approval comes back, if the pass fails or is interrupted, that checkpoint is closed, the candidate edits are reverted and a durable notice is queued. The old snapshot can't run after a rollback. A successful resume goes through the same final review as an ordinary pass.
+- **整理成功**：先检查有没有删得太多。通过了，才删掉回执，并把摘要游标往前移。
+- **失败、预算用完、被取消或者超时**：这一遍候选的编辑会被撤回。如果撤回本身也失败，回执就留着，让恢复流程再试。
+- **撤回时，发现和主人后来的编辑冲突**：同一张回执会被标上 `needs_review`，并排一条持久的通知。这时成功游标不动，也不假装回滚已经完成，启动和不相干的收件箱工作，都不会被卡住。绝不能为了让恢复看起来成功，就覆盖主人后来做的编辑。
+- **真正的 IO 错误**：仍然是可以重试的错误。
 
-At startup, `memory.recover()` runs first, then `Dreamer.recover()`, both under the engine lock. `Dreamer.recover()` only handles receipts from this protocol. It doesn't go back over old successful runs. Removing the receipt, updating the memory journal, moving the cursor and queuing notices share one database transaction.
+这张回执能跨过多轮审批。等审批，不算失败的一夜：启动的时候，带着已保存的执行检查点的那一遍，会被保留。审批的答复回来之后，如果这一遍失败或者被打断，就关闭这个检查点，撤回候选的编辑，并排一条持久的通知。回滚之后，旧的快照不能再运行。恢复成功的那一遍，和普通的一遍，走同一道最终复核。
 
-### Resolving an owner-edit conflict
+启动的时候，先运行 `memory.recover()`，再运行 `Dreamer.recover()`，两者都在引擎锁下。`Dreamer.recover()` 只处理这套协议产生的回执，不会回头去翻以前成功的 run。删回执、更新记忆日志、移动游标和排通知，在同一个数据库事务里完成。
 
-Run `pa dream review` (or `pa dream review list`) to see each conflicted pass with its affected paths and version numbers. `pa memory history <path>` shows earlier versions so you can compare. Look over the current notes. Some changes from the unfinished pass may still be there, because its automatic undo was stopped as a whole.
+### 处理主人编辑造成的冲突
 
-Once you've decided to keep the current memory, run:
+运行 `pa dream review`（或者 `pa dream review list`），可以看到每一遍有冲突的整理，以及它涉及的路径和版本号。`pa memory history <path>` 会列出更早的版本，方便对照。看一遍当前的笔记。其中可能还留着那一遍没做完的一些改动，因为它的自动撤销，是整个被停掉的。
+
+决定保留当前的记忆之后，运行：
 
 ```sh
 pa dream review resolve RUN_ID --keep-current
 ```
 
-This is an explicit action by you, and it only closes the review receipt. It never overwrites files, erases versions or moves the successful dream cursor. There's no option to force an overwrite. While a review is open, the receipt keeps protecting the run and the version evidence from normal retention pruning. Recovery and repeated finish calls leave it for you. They don't retry the conflict or send repeated notices.
+这是你自己做的明确操作，它只关闭复核回执。它从不覆盖文件、抹掉版本，或者移动成功的做梦游标。没有强制覆盖的选项。复核还开着的时候，这张回执会继续保护这个 run 和版本证据，不被正常的保留策略清掉。恢复流程和重复的 finish 调用，都会把它留给你，不会重试冲突，也不会重复发通知。
 
-## Context limits and usage
+## 上下文限制和用量
 
-`runtime.run_timeout_s` is one deadline that covers the async preparation, the compaction and the model/tool loop. `context.timeout_s` separately limits one compaction attempt, including its optional second response. If compaction times out, the original visible history stays as it is and the retry cooldown is set. The main run can carry on if its own deadline and budget allow it.
+`runtime.run_timeout_s` 是一个总期限，它同时管着异步准备、压缩，和模型/工具循环。`context.timeout_s` 单独限制一次压缩尝试，包括它可选的第二次响应。压缩超时的话，原来可见的历史保持原样，并设上重试冷却。如果主 run 自己的期限和预算还允许，它可以继续。
 
-Each summary response is counted as soon as it arrives. That includes empty or truncated answers that were rejected, cached input, cache writes and reasoning tokens. Budget checks run before every model request, retries included. If the provider fails, times out or is cancelled, the charge of an earlier response is neither erased nor counted twice. Charges are still estimates based on the usage the provider sent back. If a request is interrupted and no usage came back, it can't be measured locally.
+每次摘要响应，一到就计数。这包括被拒绝的空回答或被截断的回答、缓存的输入、缓存写入，和推理 token。预算检查在每次模型请求之前运行，重试也不例外。如果服务商出错、超时或者被取消，前面那次响应的费用，既不会被抹掉，也不会被算两次。费用仍然是根据服务商回传的用量估出来的。如果一次请求被打断，没有用量传回来，就没法在本地测出来。
 
-## Finding details after compaction
+## 压缩之后找细节
 
-`search_history` searches the messages exchanged with the owner. `search_tool_history` searches the recorded tool outputs across sessions, including the ones hidden by compaction, a reset or a tombstone. It scans at most 256 log records per search and returns `next_before_id` so you can continue into older history. Each result has a stable `result_id`, which you can read in pages of at most 6,000 characters using `next_offset`. An empty search page doesn't prove that older history has no match.
+`search_history` 搜的是和主人来往的消息。`search_tool_history` 搜的是跨会话记录下来的工具输出，包括被压缩、重置或墓碑标记（tombstone）藏起来的。它每次搜索最多扫 256 条日志记录，并返回 `next_before_id`，方便你接着往更早的历史搜。每条结果有一个稳定的 `result_id`，可以用 `next_offset`，一页最多 6,000 个字符，分页读取。搜到空的一页，不能证明更早的历史里没有匹配。
 
-Each result includes the source tool and the recorded arguments where available, plus the session, run, call ID, timestamp and audit outcome. Missing provenance is labelled unknown. This gets back the recorded output. Bytes that the original tool guard already cut off can't be recovered.
+每条结果包含来源工具，和记录下来的参数（如果有的话），以及会话、run、调用 ID、时间戳和审计结果。缺失的来源信息，标成未知。这个工具取回的，是记录下来的输出。原来的工具守卫已经截掉的字节，恢复不了。
 
-The output is redacted of secrets before it's sliced, and it's size-limited and fenced. All the tool text retrieved this way, including old errors and local reads, taints the current run. Permission from the past is never inherited. Untrusted webhook runs can't use this tool. The existing policy still decides what happens next.
+输出先去掉密钥，再切片，限制大小，并用标签框起来，让模型知道这是资料，不是指令。用这种办法取回的所有工具文字，包括旧的错误和本地读取，都会给当前这个 run 染上污点。过去的许可，永远不会被继承。不可信的 webhook run 用不了这个工具。接下来能做什么，仍由现有的策略决定。
 
-## What the evaluations check
+## 评测检查什么
 
-The built-in cases include counterexamples for: old news bundled into a new message, a Chinese prefix followed by an English answer, too many Chinese sentences, a reply that mentions a task while denying it's open, and a task wrongly marked as completed. The style checks measure the share of Han characters among the letters, the total character count and sentence fragments. Task files also need an open-status pattern.
+内置的用例里，有这些反例：旧新闻夹在新消息里一起发、中文开头后面接英文回答、中文句子太多、回复一边提到某任务一边否认它还开着，以及把任务错误地标成已完成。风格检查，测的是字母里汉字所占的比例、总字符数，和句子片段。任务文件，还得匹配一个“未完成”的状态格式。
 
-These offline scripts check the checks and the harness effects. They're explicit text and status assertions. They aren't general semantic understanding, and they aren't evidence that a real model behaves accurately. Paraphrases, context-dependent negation and other languages still need a person to look at live trial output. These regression tests don't need a paid model call.
+这些离线脚本，检查的是检查本身，和 harness 的效果。它们是明确的文字和状态断言，不是通用的语义理解，也不能证明真实模型的行为准确。换种说法、依赖上下文的否定，和别的语言，仍然需要人去看实时试验的输出。这些回归测试，不需要付费的模型调用。

@@ -1,4 +1,4 @@
-"""A node's private durable receipts. Receiving a lease never means starting it twice."""
+"""The node's own saved receipts. If it is handed the same claim twice, the job starts only once."""
 
 from __future__ import annotations
 
