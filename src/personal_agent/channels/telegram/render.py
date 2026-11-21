@@ -26,7 +26,7 @@ SPLIT_AT = 3500
 # that is cut by a split is written out again at the top of the next piece, and one that could be
 # thousands of characters long would make the pieces no shorter than what they came from.
 _FENCE = re.compile(r"^\s*(`{3,10}|~{3,10})\s*([\w+#.-]{0,30})\s*$")
-_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$")
+_HEADING = re.compile(r"\s{0,3}#{1,6}\s+")
 _BULLET = re.compile(r"^(\s*)[-*+]\s+(.*)$")
 _QUOTE = re.compile(r"^\s{0,3}>\s?(.*)$")
 _RULE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
@@ -41,6 +41,20 @@ _TAG = re.compile(r"</?([a-z]+)(?:\s[^>]*)?>")
 _PLACEHOLDER = re.compile(r"\x00(\d+)\x00")
 _LANGUAGE = re.compile(r"[A-Za-z0-9_+#.-]{1,30}")
 _ALLOWED_TAGS = frozenset({"b", "i", "s", "code", "pre", "a", "blockquote"})
+
+
+def _heading(line: str) -> str | None:
+    """The text of a `# heading` line, without the closing `##` and the spaces around it, or None.
+    Done by hand: one pattern for the closing marks and the spaces is cubic in the length of a
+    line with a long run of spaces in it (a line of 3,000 characters took half a minute)."""
+    opened = _HEADING.match(line)
+    if opened is None:
+        return None
+    text = line[opened.end() :].rstrip()
+    bare = text.rstrip("#")
+    if bare != text and (not bare or bare[-1] in " \t"):  # `C#` keeps its #; `## a ##` loses them
+        text = bare.rstrip()
+    return text
 
 
 @dataclass(frozen=True)
@@ -210,8 +224,8 @@ def to_html(markdown: str) -> str:
             continue
         if _RULE.match(line):
             out.append("──────────")
-        elif heading := _HEADING.match(line):
-            out.append(f"<b>{_inline(heading.group(1))}</b>")
+        elif (heading := _heading(line)) is not None:
+            out.append(f"<b>{_inline(heading)}</b>")
         elif bullet := _BULLET.match(line):
             out.append(f"{bullet.group(1)}• {_inline(bullet.group(2))}")
         else:

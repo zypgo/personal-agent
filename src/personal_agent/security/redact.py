@@ -52,7 +52,9 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     (
         "fake system text",
-        re.compile(r"(?i)<\|?(?:im_start|system|endoftext)\|?>|\[/?INST\]|^\s*system\s*:", re.M),
+        re.compile(
+            r"(?i)<\|?(?:im_start|system|endoftext)\|?>|\[/?INST\]|^[ \t]*system[ \t]*:", re.M
+        ),
     ),
     (
         "secrecy demand",

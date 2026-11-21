@@ -99,6 +99,15 @@ test("a note's properties are not part of what is read", () => {
 test("links between notes read as names, with the alias when there is one", () => {
   assert.equal(withLinksShown("见 [[张三]] 和 [[预算|预算表]]，还有 [[计划#第二节]] 与 ![[图]]。"), "见 「张三」 和 「预算表」，还有 「计划」 与 「图」。");
   assert.equal(withLinksShown("没有链接 [x](y)"), "没有链接 [x](y)");
+  assert.equal(withLinksShown("没合上的 [[a 后面有 [[b]]"), "没合上的 [[a 后面有 「b」");
+});
+
+test("a note full of unclosed links is still read at once", () => {
+  for (const text of ["[[a".repeat(40000), `[[a#${"#".repeat(60000)}`, `[[a|${"b".repeat(60000)}`, "![[a".repeat(30000)]) {
+    const started = performance.now();
+    assert.equal(withLinksShown(text), text);
+    assert.ok(performance.now() - started < 1000);
+  }
 });
 
 test("a new note's name becomes a path inside the knowledge base", () => {

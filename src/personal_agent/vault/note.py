@@ -120,6 +120,27 @@ def render(front: dict[str, Any], body: str) -> str:
     return f"---\n{block}\n---\n{body.lstrip(chr(10))}"
 
 
+def truthy(value: Any) -> bool:
+    """A property that means yes: `true`, `yes`, `1`, `是`, or a real boolean."""
+    if isinstance(value, str):
+        return value.strip().casefold() in {"true", "yes", "1", "是"}
+    return bool(value)
+
+
+_PRIVATE_LINE = re.compile(
+    r"^[ \t]*private[ \t]*:[ \t]*[\"']?(?:true|yes|on|1|是)[\"']?[ \t]*(?:#.*)?$", re.I | re.M
+)
+
+
+def declares_private(parsed: Parsed) -> bool:
+    """Whether the note's properties mark it private. When the properties cannot be read (a typo
+    in another line, a colon in a title), a line that says `private: true` still counts: a slip
+    elsewhere in the block must not open the note up."""
+    if truthy(parsed.front.get("private")):
+        return True
+    return bool(parsed.front_error and parsed.front_raw and _PRIVATE_LINE.search(parsed.front_raw))
+
+
 def as_list(value: Any) -> list[str]:
     """A property that may be a list or one string ("a, b") as a list of words."""
     if value is None:
@@ -137,7 +158,10 @@ def as_list(value: Any) -> list[str]:
 
 # ---- code-aware scanning -------------------------------------------------------------
 _FENCE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
-_INLINE_CODE = re.compile(r"(`+)(?!`)(.+?)(?<!`)\1(?!`)")
+# A code span opens at the start of a run of backticks and closes at a run of the same length.
+# Without the first `(?<!`)` a long run was tried again from every one of its backticks, which
+# made a line of 60 000 backticks take minutes.
+_INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 _COMMENT = re.compile(r"%%.*?%%", re.S)
 
 
@@ -175,15 +199,31 @@ class Heading:
     """Line number inside the body, from 0."""
 
 
-_HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
+_ATX_OPEN = re.compile(r"(#{1,6})[ \t]+")
+
+
+def _atx(line: str) -> tuple[int, str] | None:
+    """`(level, text)` of a heading line such as `## 标题 ##`, else None.
+
+    The text is cut by hand: one regular expression for "the text, then optional spaces and
+    closing hashes" has to try every way of splitting a long line, and takes minutes on a line of
+    a few thousand spaces."""
+    opened = _ATX_OPEN.match(line)
+    if opened is None:
+        return None
+    text = line[opened.end() :].rstrip()
+    bare = text.rstrip("#")
+    if bare != text and (not bare or bare[-1] in " \t"):
+        text = bare.rstrip()  # a closing run of hashes; a # glued to the last word is part of it
+    return (len(opened.group(1)), text) if text else None
 
 
 def headings(body: str) -> list[Heading]:
     found = []
     for number, line in enumerate(mask_code(body).split("\n")):
-        match = _HEADING.match(line)
-        if match:
-            found.append(Heading(len(match.group(1)), match.group(2).strip(), number))
+        parts = _atx(line)
+        if parts:
+            found.append(Heading(parts[0], parts[1], number))
     return found
 
 
@@ -269,12 +309,15 @@ def title_of(parsed: Parsed, stem: str) -> str:
     return stem
 
 
-_MD_LINK = re.compile(r"\[([^\]\n]*)\]\([^)\n]*\)")
-_WIKI_SHOWN = re.compile(r"\[\[(?:[^\]|\n]*\|)?([^\]\n]*)\]\]")
+# Neither pattern lets a text run over another `[`, so an unclosed one costs only the way to the
+# next, not the way to the end of the line.
+_MD_LINK = re.compile(r"\[([^\[\]\n]*)\]\([^)\n]*\)")
+_WIKI_SHOWN = re.compile(r"\[\[(?:[^\[\]|\n]*\|)?([^\[\]\n]*)\]\]")
+_PLAIN_CHARS = 4_000
 
 
 def _plain_text(text: str) -> str:
-    text = _WIKI_SHOWN.sub(r"\1", text)
+    text = _WIKI_SHOWN.sub(r"\1", text[:_PLAIN_CHARS])
     text = _MD_LINK.sub(r"\1", text)
     text = re.sub(r"[*_`~]+", "", text)
     return re.sub(r"\s+", " ", text).strip()

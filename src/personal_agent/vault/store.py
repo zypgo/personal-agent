@@ -33,6 +33,7 @@ from personal_agent.clock import Clock
 from personal_agent.db import Database
 from personal_agent.memory.store import Actor
 from personal_agent.security.redact import find_secrets, injection_hints, redact
+from personal_agent.security.sanitize import scrub_surrogates
 from personal_agent.vault import note as md
 from personal_agent.vault.index import OUTSIDE_ORIGINS, Entry, Hit, VaultIndex, origin_of
 
@@ -46,6 +47,9 @@ _ASSISTANT = (Actor.AGENT, Actor.DREAM)
 INDEX_NOTE = "wiki/index.md"
 LOG_NOTE = "wiki/log.md"
 GENERATED = frozenset({INDEX_NOTE, LOG_NOTE})
+_GENERATED_ANY_CASE = frozenset(path.casefold() for path in GENERATED)
+"""On a Mac `wiki/Log.md` is the file `wiki/log.md`, so the notes the product writes are
+protected by name in any case."""
 MAX_READ_BYTES = 2_000_000
 MAX_DEPTH = 6
 _RESERVED = re.compile(r'[\x00-\x1f\x7f<>:"|?*]')
@@ -116,7 +120,7 @@ def clean_path(rel: str, *, strict: bool = False) -> str:
     """A note's path inside the vault, in one form: `folder/name.md`, Unicode-normalised."""
     if not isinstance(rel, str):
         raise VaultError("路径要写成文字。")
-    raw = unicodedata.normalize("NFC", rel).strip().replace("\\", "/")
+    raw = unicodedata.normalize("NFC", scrub_surrogates(rel)).strip().replace("\\", "/")
     if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw):
         raise VaultError("路径要从知识库里面算起，比如 wiki/张三.md。")
     parts = [p for p in raw.split("/") if p not in ("", ".")]
@@ -173,8 +177,7 @@ class Vault:
         return here
 
     def _check_open(self, rel: str) -> None:
-        top = rel.split("/")[0]
-        if top in {unicodedata.normalize("NFC", e).strip("/") for e in self.cfg.exclude}:
+        if self.index.excludes(rel):
             raise VaultError("这个文件夹被设为不让助手看。")
 
     @contextlib.contextmanager
@@ -222,7 +225,7 @@ class Vault:
         self.index.refresh()
         parsed = md.parse(text)
         entry = self.index.entry(path)
-        private = entry.private if entry else _private(parsed.front)
+        private = bool(entry and entry.private) or md.declares_private(parsed)
         if private and actor in _ASSISTANT:
             raise VaultError("这篇笔记标了私密，助手不读。")
         stem = path.rsplit("/", 1)[-1].removesuffix(".md")
@@ -347,7 +350,7 @@ class Vault:
         top = path.split("/")[0]
         if "/" not in path or top not in AREAS:
             raise VaultError("助手只写 wiki/、raw/、threads/、daily/ 这几个文件夹。")
-        if path in GENERATED:
+        if path.casefold() in _GENERATED_ANY_CASE:
             raise VaultError("这个文件是系统自动生成的，会被覆盖。想补充内容请写在别的笔记里。")
         if top == "raw" and action != "create":
             raise VaultError("raw/ 里的原始资料只能新增，不能修改。")
@@ -437,6 +440,7 @@ class Vault:
         history: bool,
     ) -> Written:
         full = self._full(path)
+        new = scrub_surrogates(new)  # whatever came in, it can be written as UTF-8
         version = self._record(path, action, actor, run_id, old, new) if history else None
         try:
             self._write_file(full, new)
@@ -469,11 +473,14 @@ class Vault:
         path = clean_path(rel, strict=True)
         self._check_open(path)
         self._allowed(path, mode, actor)
+        text, heading = scrub_surrogates(text), scrub_surrogates(heading)
         if not text.strip() and mode in ("create", "append"):
             raise VaultError("没有要写的内容。")
         notice = self._check_text(text, actor)
         with self._locked():
             old = self._read_file(path)
+            if old is not None and actor in _ASSISTANT and md.declares_private(md.parse(old)):
+                raise VaultError("这篇笔记标了私密，助手不碰。")
             if mode == "create":
                 if old is not None:
                     raise VaultError(f"{path} 已经有了。要改它请用 append、section 或 replace。")
@@ -505,7 +512,12 @@ class Vault:
             self._check_text(new, Actor.SYSTEM)
             result = self._save(path, mode, actor, run_id, old, new, history=True)
             if path.startswith(("wiki/", "raw/")):
-                self.note_change(path, "新增" if old is None else "改了", actor)
+                try:
+                    self.note_change(path, "新增" if old is None else "改了", actor)
+                except (VaultError, OSError):
+                    # The note is saved; a line that could not be added to the log must not make
+                    # the caller think it was not (and write it a second time).
+                    log.warning("could not add %s to the log", path, exc_info=True)
         return Written(result.path, result.rev, result.created, result.version, notice)
 
     @staticmethod
@@ -572,6 +584,7 @@ class Vault:
     def put(self, rel: str, text: str, *, history: bool = False) -> Written:
         """Write a note the product generates (index, thread, day). No area rules, no undo history."""
         path = clean_path(rel)
+        text = scrub_surrogates(text)
         with self._locked():
             old = self._read_file(path)
             if old == text:
@@ -622,6 +635,7 @@ class Vault:
 
         The same `key` always names the same note, so saving twice saves once. Credentials in the
         text are cut out. Returns the note's path and whether it was new."""
+        title, body = scrub_surrogates(title), scrub_surrogates(body)
         slug = md.slugify(title, limit=36)
         short = re.sub(r"[^A-Za-z0-9]", "", key)[-8:] or revision(key)[:8]
         parts = [md.slugify(p, limit=40) for p in folder.split("/") if p]
@@ -652,6 +666,7 @@ class Vault:
         self.append_log(f"## [{self._stamp()}] {what} | {detail}")
 
     def append_log(self, line: str) -> None:
+        line = scrub_surrogates(line)
         with self._locked():
             old = self._read_file(LOG_NOTE)
             if old is None:
@@ -831,10 +846,3 @@ class Vault:
 
     def _stamp(self) -> str:
         return datetime.fromtimestamp(self.clock.now(), self.tz).strftime("%Y-%m-%d %H:%M")
-
-
-def _private(front: dict[str, Any]) -> bool:
-    value = front.get("private")
-    if isinstance(value, str):
-        return value.strip().casefold() in {"true", "yes", "1", "是"}
-    return bool(value)

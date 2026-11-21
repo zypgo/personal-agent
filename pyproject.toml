@@ -1,6 +1,6 @@
 [project]
 name = "personal-agent"
-version = "0.9.0"
+version = "0.9.1"
 description = "Qixu: a personal AI assistant for everyday tasks, lasting memory, and trusted agent collaboration."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -29,7 +29,8 @@ export function bodyOf(text) {
 
 /** `[[张三|老张]]` reads as 「老张」: a link by name, which the list below the note makes usable. */
 export function withLinksShown(text) {
-  return String(text || "").replace(/!?\[\[([^\]\n|#]+)(?:#[^\]\n|]*)?(?:\|([^\]\n]+))?\]\]/g, (_all, target, alias) => `「${(alias || target).trim()}」`);
+  // No class below takes a `[`: text with many unclosed `[[` would otherwise be rescanned to its end from each one.
+  return String(text || "").replace(/!?\[\[([^[\]\n|#]+)(?:#[^[\]\n|]*)?(?:\|([^[\]\n]+))?\]\]/g, (_all, target, alias) => `「${(alias || target).trim()}」`);
 }
 
 /** Where a new note goes: a bare name lands in `wiki/`, a path is taken as written. */

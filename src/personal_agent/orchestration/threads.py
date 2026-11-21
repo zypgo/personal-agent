@@ -20,9 +20,9 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from personal_agent.collaboration.models import OWNER_SPACE, AccessDenied
 from personal_agent.core.sessions import DEFAULT_SESSION
@@ -45,7 +45,11 @@ log = logging.getLogger(__name__)
 
 WATERMARK = "threads.event"
 SAID = "threads.said:"
-"""Nudges that went out inside a combined message, so they are not said again on their own."""
+"""Nudges that have been said, alone or inside a combined message, so that none is said again, and
+none is counted into a later combined message that is meant for what is new."""
+RETRIES = 3
+"""A batch of events that fails is looked at again this many times in a row, then left behind: one
+record that cannot be handled must not hold back every task after it."""
 SLEEP_S = 120.0
 """No heartbeat for this long means the service was off or the machine asleep."""
 PATROL_S = 30.0
@@ -91,6 +95,8 @@ class ThreadKeeper:
         self._indexed = 0.0
         self._signature = ""
         self._pruned_day = -1
+        self._tidied_day = -1
+        self._failures = 0
 
     # ---- the pieces ----------------------------------------------------------------------
     @property
@@ -150,24 +156,31 @@ class ThreadKeeper:
 
     # ---- called every few seconds by the daemon ------------------------------------------
     def tick(self) -> int:
-        """Handle what happened since last time. Never raises: it must not stop the heartbeat."""
+        """Handle what happened since last time. Never raises: it must not stop the heartbeat, and
+        a problem in one part (following events, looking in on tasks, the notes) must not stop
+        the others."""
         if self.app.orchestration is None:
             return 0
-        queued = 0
         now = self._now()
         if now < self._beat or now - self._beat > SLEEP_S:
             self._resumed = now  # just started, or woke up: the time away is not the agents' doing
         self._beat = now
-        try:
-            queued += self.follow()
-            now = self._now()
-            if now - self._patrolled >= PATROL_S or now < self._patrolled:
-                self._patrolled = now
-                queued += self.patrol()
-                self.keep_notes()
-        except Exception:
-            log.exception("the thread keeper hit a problem")
+        queued = self._guarded("follow the tasks", self.follow)
+        now = self._now()
+        if now - self._patrolled >= PATROL_S or now < self._patrolled:
+            self._patrolled = now
+            queued += self._guarded("look in on the tasks", self.patrol)
+            self._guarded("keep the notes", self.keep_notes)
+            self._guarded("forget what is finished", self._daily)
         return queued
+
+    @staticmethod
+    def _guarded(what: str, step: Callable[[], int | None]) -> int:
+        try:
+            return step() or 0
+        except Exception:
+            log.exception("the thread keeper could not %s", what)
+            return 0
 
     # ---- following what happens ----------------------------------------------------------
     def follow(self) -> int:
@@ -188,14 +201,23 @@ class ThreadKeeper:
         for row in rows:
             grouped[row["task_id"]].append(row)
         queued = 0
+        failed = False
         for task_id, events in grouped.items():
             task = self.db.one("SELECT * FROM orchestration_tasks WHERE id=?", (task_id,))
             if task is None or not self._tracked(task):
                 continue
-            self.adopt(task_id)
-            self.record(task)
-            queued += self._speak(task, events)
-            self._day(task, events)
+            try:
+                self.adopt(task_id)
+                queued += self._speak(task, events)  # what the owner needs to hear comes first
+                self.record(task)
+                self._day(task, events)
+            except Exception:
+                failed = True
+                log.exception("the thread keeper could not follow task %s", task_id)
+        if failed and self._failures < RETRIES - 1:
+            self._failures += 1  # look at this batch again next time: what failed may be passing
+            return queued
+        self._failures = 0
         self.db.kv_set(WATERMARK, str(rows[-1]["id"]), now=self._now())
         return queued
 
@@ -225,7 +247,7 @@ class ThreadKeeper:
             if said is None:
                 continue
             key, text = said
-            if self._tell(task, text, key):
+            if self._tell(task, text, key) == "sent":
                 queued += 1
         return queued
 
@@ -295,12 +317,14 @@ class ThreadKeeper:
             return row["channel"], row["recipient"], row["session_key"] or DEFAULT_SESSION
         return self.app.notify_channel(), None, DEFAULT_SESSION
 
-    def _tell(self, task: sqlite3.Row, text: str, key: str) -> bool:
+    def _tell(self, task: sqlite3.Row, text: str, key: str) -> Literal["sent", "known", "denied"]:
+        """Queue a message once: `sent` now, `known` when this key was queued before, `denied`
+        when the owner may no longer be told (nothing is queued)."""
         channel, recipient, session = self._route(task)
         try:
             authority = self.app.actor_snapshot(task["actor_id"]) if self.app.identities else {}
         except AccessDenied:
-            return False
+            return "denied"
         sent = self.app.outbox.enqueue(
             session_key=session,
             channel=channel,
@@ -310,7 +334,7 @@ class ThreadKeeper:
             dedupe_key=key,
             extra={"interactive": False, "principal_id": task["actor_id"], **authority},
         )
-        return sent is not None
+        return "sent" if sent is not None else "known"
 
     # ---- looking in on tasks -------------------------------------------------------------
     def _facts(self, actor_id: str, *, limit: int = SHOWN) -> list[words.Facts]:
@@ -395,16 +419,27 @@ class ThreadKeeper:
             if task is not None:
                 due.append((nudge, task))
         if len(due) < words.BUNDLE_AT:
-            return sum(1 for nudge, task in due if self._tell(task, nudge.text, nudge.key))
+            queued = 0
+            for nudge, task in due:
+                told = self._tell(task, nudge.text, nudge.key)
+                if told == "denied":
+                    continue
+                # Said now or before: it must not be counted into a later combined message,
+                # which is for what has not been said yet.
+                self.db.kv_set(SAID + nudge.key, "1", now=self._now())
+                if told == "sent":
+                    queued += 1
+            return queued
         # Several at once: one message, and none of them again on its own.
         keys = sorted(nudge.key for nudge, _ in due)
         digest = hashlib.sha256("|".join(keys).encode()).hexdigest()[:16]
         text = words.bundle([nudge for nudge, _ in due])
-        if not self._tell(due[0][1], text, f"thread:all:{digest}"):
+        told = self._tell(due[0][1], text, f"thread:all:{digest}")
+        if told == "denied":
             return 0
         for key in keys:
             self.db.kv_set(SAID + key, "1", now=self._now())
-        return 1
+        return 1 if told == "sent" else 0
 
     # ---- putting away --------------------------------------------------------------------
     def archive(self, task_id: str) -> bool:
@@ -417,9 +452,39 @@ class ThreadKeeper:
             "UPDATE threads SET archived_at=COALESCE(archived_at, ?) WHERE task_id=?",
             (self._now(), task_id),
         )
+        self._forget(task_id)
         self.record(task)
         self.app.live.publish({"type": "agents_changed"})
         return True
+
+    def _forget(self, task_id: str) -> None:
+        """A task that is put away is not nudged any more, so what was said about it is forgotten."""
+        prefix = f"{SAID}thread:{task_id}:"
+        self.db.execute("DELETE FROM kv WHERE substr(key, 1, ?) = ?", (len(prefix), prefix))
+
+    def _daily(self) -> None:
+        day = int(self._now() // 86400)
+        if day != self._tidied_day:
+            self._tidied_day = day
+            self._forget_finished()
+
+    def _forget_finished(self) -> None:
+        """The same for tasks that ended without being put away, or that are gone."""
+        said = self.db.query("SELECT key FROM kv WHERE key LIKE ?", (SAID + "thread:%",))
+        if not said:
+            return
+        marks = ",".join("?" for _ in TASK_TERMINAL)
+        open_tasks = {
+            row["id"]
+            for row in self.db.query(
+                f"SELECT id FROM orchestration_tasks WHERE state NOT IN ({marks})",
+                tuple(TASK_TERMINAL),
+            )
+        }
+        for row in said:
+            task_id = row["key"][len(SAID) :].split(":")[1]
+            if task_id not in open_tasks:
+                self._forget(task_id)
 
     def unarchive(self, task_id: str) -> bool:
         row = self._row(task_id)
@@ -679,7 +744,7 @@ class ThreadKeeper:
                 },
                 day=day,
             )
-        except (VaultError, OSError):
+        except Exception:  # the note is a side effect: whatever goes wrong, nothing else stops
             log.warning("could not keep a result in the knowledge base", exc_info=True)
             return None
         return path
@@ -716,7 +781,7 @@ class ThreadKeeper:
                 },
                 day=datetime.fromtimestamp(when, self.app.tz).strftime("%Y-%m-%d"),
             )
-        except (VaultError, OSError):
+        except Exception:
             log.warning("could not keep a question in the knowledge base", exc_info=True)
             return None
         return path
@@ -745,7 +810,7 @@ class ThreadKeeper:
                     "UPDATE threads SET note_path=? WHERE task_id=?", (path, task["id"])
                 )
             return path
-        except (VaultError, OSError):
+        except Exception:
             log.warning("could not update a task note", exc_info=True)
             return None
 
@@ -786,10 +851,10 @@ class ThreadKeeper:
                 existing = vault.read_text(path)
                 if existing is None:
                     vault.put(path, notes.daily_text(day, self.app.tz, when))
-                elif mark in existing:
+                elif f"<!-- {mark} -->" in existing:  # whole, so ev:12 is not found in ev:123
                     continue
                 vault.edit(path, append={notes.TODAY: line})
-            except (VaultError, OSError):
+            except Exception:
                 log.warning("could not add to the day's note", exc_info=True)
 
     def keep_notes(self) -> None:

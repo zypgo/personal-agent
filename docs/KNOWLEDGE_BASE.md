@@ -52,7 +52,7 @@ aliases: [报销流程]
 ```
 
 - `[[笔记名]]` 按文件名链接，不用写路径。Obsidian 的反向链接、关系图直接能用。
-- `private: true` 的笔记，栖序和其他助手看不到。整个文件夹不想给它们看，在 `config.toml` 里写 `[vault] exclude = ["私人"]`。
+- `private: true` 的笔记，栖序和其他助手既看不到，也不能往里写。属性块里别处写错了（比如少了个括号），它照样算私密。整个文件夹不想给它们看，在 `config.toml` 里写 `[vault] exclude = ["私人"]`；只想挡某个文件夹里的，写 `"wiki/私人"`。文件夹里面的东西一起不给看，大小写不分。
 - `origin` 记着这篇是谁的话：`owner`（你）、`assistant`（栖序）、`agent`（别的助手）、`web`（网页）、`tainted`（栖序读了外面的内容之后写的）、`system`（系统生成）。栖序写的笔记会自己带上，它没法冒充你。
 
 ## 栖序怎么用它
@@ -108,7 +108,7 @@ pa vault undo 运行号            # 撤回某一轮写的全部
 [vault]
 enabled = true          # false 关掉整个知识库
 path = ""               # 空则用 ~/.personal-agent/vault
-exclude = []            # 栖序不看的文件夹名，如 ["私人"]
+exclude = []            # 栖序不看的文件夹，如 ["私人"] 或 ["wiki/私人"]
 capture_results = true  # 助手交回的结果、它问的问题和你的回答，存进 raw/agents/
 max_note_bytes = 262144 # 栖序写的单篇上限
 max_files = 5000        # 最多搜多少篇，更多时取最新的

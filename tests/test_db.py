@@ -180,3 +180,74 @@ def test_a_database_that_cannot_be_migrated_is_not_left_open(tmp_path):
     with watching_for_leaks() as leaks:
         attempt()
     assert leaks == []
+
+
+# ---- an upgrade keeps what the older version stored ---------------------------------------------
+def _database_at(path, version: int) -> sqlite3.Connection:
+    """A database as the program left it at `version`: only the migrations up to it have run."""
+    conn = sqlite3.connect(path)
+    for number in range(1, version + 1):
+        script = MIGRATIONS[number - 1]
+        if callable(script):
+            conn.execute("BEGIN IMMEDIATE")
+            script(conn)
+            conn.execute(f"PRAGMA user_version = {number}")
+            conn.execute("COMMIT")
+        else:
+            conn.executescript(
+                f"BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version = {number};\nCOMMIT;"
+            )
+    return conn
+
+
+def _one_row_in_every_table(conn: sqlite3.Connection) -> dict[str, int]:
+    """A row with a plausible value in each column of each table that takes one this way."""
+    conn.execute("PRAGMA foreign_keys = OFF")
+    tables = [
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            " AND name NOT LIKE '%_fts%'"
+        )
+    ]
+    filled: dict[str, int] = {}
+    for table in tables:
+        columns = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        values: list[object] = []
+        for _, name, kind, *_rest in columns:
+            kind = (kind or "").upper()
+            if "INT" in kind:
+                values.append(1)
+            elif "REAL" in kind or "FLOA" in kind:
+                values.append(1.5)
+            elif "BLOB" in kind:
+                values.append(b"x")
+            else:
+                values.append("{}" if name in {"data", "payload", "result", "extra"} else "x")
+        names = ",".join(c[1] for c in columns)
+        try:
+            conn.execute(
+                f"INSERT INTO {table} ({names}) VALUES ({','.join('?' * len(columns))})", values
+            )
+        except sqlite3.Error:
+            continue  # a table with a rule a made-up row does not meet
+        filled[table] = 1
+    conn.commit()
+    return filled
+
+
+@pytest.mark.parametrize("version", [1, 5, 8, 9, 14])
+def test_a_database_from_an_older_version_keeps_every_row_when_it_is_upgraded(tmp_path, version):
+    path = tmp_path / "old.db"
+    old = _database_at(path, version)
+    stored = _one_row_in_every_table(old)
+    assert len(stored) >= 6  # the check is only worth something if it has rows to lose
+    old.close()
+    db = open_database(path)
+    try:
+        assert db.version == SCHEMA_VERSION
+        assert db.scalar("PRAGMA integrity_check") == "ok"
+        for table in stored:
+            assert db.scalar(f"SELECT COUNT(*) FROM {table}") >= 1, table  # some are seeded
+    finally:
+        db.close()

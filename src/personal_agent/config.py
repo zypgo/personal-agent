@@ -365,7 +365,8 @@ class VaultConfig(_Section):
     inside an Obsidian vault (for example "~/Documents/笔记/栖序") to read and edit the notes there.
     Only your own space uses it; every other space keeps its notes in its own folder."""
     exclude: list[str] = []
-    """Folders directly inside the vault that the assistant never opens or searches."""
+    """Folders the assistant never opens or searches, by name or path inside the vault (`私人`,
+    `wiki/私人`). Capital letters do not matter, and everything below a folder is left out too."""
     max_note_bytes: int = Field(262_144, ge=4_096, le=4_000_000)
     """The longest a note the assistant writes may be."""
     max_files: int = Field(5_000, ge=100, le=50_000)
@@ -392,7 +393,7 @@ class VaultConfig(_Section):
     def _exclude_are_folder_names(cls, value: list[str]) -> list[str]:
         for name in value:
             if not name.strip() or ".." in name or name.startswith("/"):
-                raise ValueError("exclude lists folder names inside the vault, like 私人")
+                raise ValueError("exclude lists folders inside the vault, like 私人 or wiki/私人")
         return [name.strip().strip("/") for name in value]
 
 
@@ -944,7 +945,7 @@ task_index_lines = 20            # unfinished task files (memory/state/tasks/) l
 [vault]
 enabled = true                   # a folder of notes that Obsidian opens as it is (see docs/KNOWLEDGE_BASE.md)
 # path = "~/Documents/笔记/栖序"  # default: the vault/ folder in this home; point it into your Obsidian vault
-# exclude = ["私人"]             # folders inside it the assistant never opens
+# exclude = ["私人"]             # folders inside it the assistant never opens (also "wiki/私人")
 capture_results = true           # what connected assistants hand in, and what they asked you, is kept under raw/agents/
 
 [threads]

@@ -123,12 +123,6 @@ def origin_of(front: dict[str, Any], path: str) -> str:
     return "owner"
 
 
-def _truthy(value: Any) -> bool:
-    if isinstance(value, str):
-        return value.strip().casefold() in {"true", "yes", "1", "是"}
-    return bool(value)
-
-
 def _entry(path: str, st: os.stat_result, data: bytes) -> Entry:
     truncated = len(data) > INDEX_BYTES
     text = data[:INDEX_BYTES].decode("utf-8", errors="replace")
@@ -148,8 +142,8 @@ def _entry(path: str, st: os.stat_result, data: bytes) -> Entry:
         type=str(parsed.front.get("type") or "").strip(),
         status=str(parsed.front.get("status") or "").strip(),
         origin=origin_of(parsed.front, path),
-        private=_truthy(parsed.front.get("private")),
-        generated=_truthy(parsed.front.get("generated")),
+        private=md.declares_private(parsed),
+        generated=md.truthy(parsed.front.get("generated")),
         tags=tags,
         aliases=aliases,
         links=tuple(md.links(parsed)),
@@ -164,6 +158,12 @@ def _entry(path: str, st: os.stat_result, data: bytes) -> Entry:
 
 def relative(root: Path, full: Path) -> str:
     return unicodedata.normalize("NFC", full.relative_to(root).as_posix())
+
+
+def exclude_key(name: str) -> str:
+    """A folder name as it is compared with the `exclude` list: normalised, and in any case
+    (on a Mac `Private` and `private` are one folder, so they must be one name here too)."""
+    return unicodedata.normalize("NFC", name).replace("\\", "/").strip().strip("/").casefold()
 
 
 @dataclass
@@ -183,7 +183,7 @@ class VaultIndex:
     ) -> None:
         self.root = root
         self.max_files = max_files
-        self.exclude = frozenset(unicodedata.normalize("NFC", e).strip("/") for e in exclude)
+        self.exclude = frozenset(key for key in map(exclude_key, exclude) if key)
         self._entries: dict[str, Entry] = {}
         self._names = _Names()
         self._backlinks: dict[str, list[str]] = {}
@@ -204,8 +204,7 @@ class VaultIndex:
             dirnames[:] = sorted(
                 d
                 for d in dirnames
-                if not d.startswith(".")
-                and unicodedata.normalize("NFC", f"{rel_dir}/{d}".lstrip("/")) not in self.exclude
+                if not d.startswith(".") and exclude_key(f"{rel_dir}/{d}") not in self.exclude
             )
             for name in filenames:
                 if name.startswith(".") or not name.endswith(".md"):
@@ -291,6 +290,13 @@ class VaultIndex:
         by_alias = self._names.by_alias.get(name)
         return by_alias[0] if by_alias else None
 
+    def excludes(self, path: str) -> bool:
+        """Whether a note is inside a folder that is left out, however far down."""
+        parts = path.split("/")[:-1]
+        return any(
+            exclude_key("/".join(parts[:end])) in self.exclude for end in range(1, len(parts) + 1)
+        )
+
     def entry(self, path: str) -> Entry | None:
         return self._entries.get(path)
 
@@ -305,10 +311,12 @@ class VaultIndex:
         found: list[str] = []
         missing: list[str] = []
         for link in entry.links:
-            if _is_attachment(link.target):
-                continue
             target = self.resolve(link.target, path)
             if target is None:
+                # `[[图.png]]` is a file, not a note that is missing. A note whose name has a dot
+                # in it (`Node.js`, `v1.2 计划`) is still a note, so this is asked last.
+                if _is_attachment(link.target):
+                    continue
                 if link.target not in missing:
                     missing.append(link.target)
             elif target not in found and target != path:
@@ -395,9 +403,19 @@ class VaultIndex:
         return Hit(e.path, e.title, e.type, e.status, e.origin, e.tags, e.updated, score, excerpt)
 
 
+_FILE_TYPE = re.compile(
+    r"\.(?:png|jpe?g|gif|webp|svg|bmp|avif|heic|tiff?|ico"
+    r"|pdf|docx?|xlsx?|pptx?|key|pages|numbers|od[tsp]|rtf|epub"
+    r"|mp3|wav|m4a|aac|ogg|flac|mp4|mov|m4v|webm|mkv|avi"
+    r"|zip|gz|tar|7z|rar|csv|tsv|txt|json|xml|ya?ml|toml|log|html?"
+    r"|canvas|base|excalidraw|drawio)$",
+    re.IGNORECASE,
+)
+"""What a `[[link]]` or `![[embed]]` with one of these endings points at: a file, not a note."""
+
+
 def _is_attachment(target: str) -> bool:
-    name = target.rsplit("/", 1)[-1]
-    return "." in name and not name.casefold().endswith(".md")
+    return _FILE_TYPE.search(target.rsplit("/", 1)[-1]) is not None
 
 
 def _has_tag(entry: Entry, tag: str) -> bool:

@@ -8,6 +8,11 @@ Format and meaning: scripts/mutation/run.py.
 
 VS = "src/personal_agent/vault/store.py"
 VT = "src/personal_agent/tools/vault.py"
+VI = "src/personal_agent/vault/index.py"
+VN = "src/personal_agent/vault/note.py"
+TG = "src/personal_agent/channels/telegram/render.py"
+MT = "src/personal_agent/memory/tasks.py"
+SR = "src/personal_agent/security/redact.py"
 NA = "src/personal_agent/orchestration/narration.py"
 TH = "src/personal_agent/orchestration/threads.py"
 PA = "src/personal_agent/channels/pacing.py"
@@ -16,6 +21,9 @@ TV = ["tests/test_vault_store.py", "tests/test_vault_note.py", "tests/test_dream
 TT = ["tests/test_vault_tools.py"]
 TK = ["tests/test_threads.py", "tests/test_daemon_threads.py", "tests/test_thread_api.py"]
 TP = ["tests/test_pacing.py"]
+TR = ["tests/test_telegram_render.py"]
+TI = ["tests/test_task_index.py"]
+TD = ["tests/test_redact.py"]
 
 M = [
     # ---- what a path may name ------------------------------------------------------------
@@ -51,7 +59,7 @@ M = [
     (
         "vs read: a folder the owner shut can be read",
         VS,
-        '        if top in {unicodedata.normalize("NFC", e).strip("/") for e in self.cfg.exclude}:\n',
+        "        if self.index.excludes(rel):\n",
         "        if False:\n",
         TV,
     ),
@@ -101,7 +109,7 @@ M = [
     (
         "vs write: the assistant writes over the index",
         VS,
-        '        if path in GENERATED:\n            raise VaultError("这个文件是系统自动生成的',
+        '        if path.casefold() in _GENERATED_ANY_CASE:\n            raise VaultError("这个文件是系统自动生成的',
         '        if False:\n            raise VaultError("这个文件是系统自动生成的',
         TV,
     ),
@@ -481,5 +489,132 @@ M = [
         "    return min(MAX_PAUSE_S, MIN_PAUSE_S + PER_CHAR_S * len(text))\n",
         "    return MIN_PAUSE_S + PER_CHAR_S * len(text)\n",
         TP,
+    ),
+    # ---- found by the review of 0.9.0 ----------------------------------------------------
+    (
+        "vi exclude: only the folder at the top is left out",
+        VI,
+        '            exclude_key("/".join(parts[:end])) in self.exclude for end in range(1, len(parts) + 1)\n',
+        '            exclude_key("/".join(parts[:end])) in self.exclude for end in range(1, min(len(parts), 1) + 1)\n',
+        TV,
+    ),
+    (
+        "vi exclude: a folder is left out only in the case it was written in",
+        VI,
+        '.strip().strip("/").casefold()\n',
+        '.strip().strip("/")\n',
+        TV,
+    ),
+    (
+        "vi links: a name with a dot in it is taken for a file",
+        VI,
+        '    return _FILE_TYPE.search(target.rsplit("/", 1)[-1]) is not None\n',
+        '    return "." in target\n',
+        TV,
+    ),
+    (
+        "vn private: a slip in the properties opens a private note",
+        VN,
+        "    return bool(parsed.front_error and parsed.front_raw and _PRIVATE_LINE.search(parsed.front_raw))\n",
+        "    return False\n",
+        TV,
+    ),
+    (
+        "vs write: the assistant adds to a note the owner marked private",
+        VS,
+        "            if old is not None and actor in _ASSISTANT and md.declares_private(md.parse(old)):\n",
+        "            if False:\n",
+        TV,
+    ),
+    (
+        "vs path: a lone surrogate in a name breaks the tool",
+        VS,
+        '    raw = unicodedata.normalize("NFC", scrub_surrogates(rel)).strip().replace("\\\\", "/")\n',
+        '    raw = unicodedata.normalize("NFC", rel).strip().replace("\\\\", "/")\n',
+        TV,
+    ),
+    (
+        "vs write: a log line that cannot be written fails a note that was saved",
+        VS,
+        "                except (VaultError, OSError):\n                    # The note is saved;",
+        "                except ZeroDivisionError:\n                    # The note is saved;",
+        TV,
+    ),
+    (
+        "th follow: a task that always fails is looked at for ever",
+        TH,
+        "        if failed and self._failures < RETRIES - 1:\n",
+        "        if failed:\n",
+        TK,
+    ),
+    (
+        "th follow: one task that fails stops the ones after it",
+        TH,
+        "            except Exception:\n                failed = True\n",
+        "            except ZeroDivisionError:\n                failed = True\n",
+        TK,
+    ),
+    (
+        "th tick: a patrol that fails reaches the daemon",
+        TH,
+        '            queued += self._guarded("look in on the tasks", self.patrol)\n',
+        "            queued += self.patrol()\n",
+        TK,
+    ),
+    (
+        "th nudge: one told on its own is told again inside a bundle",
+        TH,
+        '                self.db.kv_set(SAID + nudge.key, "1", now=self._now())\n',
+        "                pass\n",
+        TK,
+    ),
+    (
+        "th day: a longer number counts as a line already written",
+        TH,
+        '                elif f"<!-- {mark} -->" in existing:  # whole, so ev:12 is not found in ev:123\n',
+        "                elif mark in existing:\n",
+        TK,
+    ),
+    (
+        "th forget: what was said about a put-away task is kept",
+        TH,
+        "        self._forget(task_id)\n        self.record(task)\n",
+        "        self.record(task)\n",
+        TK,
+    ),
+    (
+        "th forget: what was said about an ended task is never forgotten",
+        TH,
+        "            self._forget_finished()\n",
+        "            pass\n",
+        TK,
+    ),
+    (
+        "th record: a note that cannot be written breaks the keeper",
+        TH,
+        '        except Exception:\n            log.warning("could not update a task note", exc_info=True)\n',
+        '        except ZeroDivisionError:\n            log.warning("could not update a task note", exc_info=True)\n',
+        TK,
+    ),
+    (
+        "tg heading: a # that touches the word is cut off it",
+        TG,
+        '    if bare != text and (not bare or bare[-1] in " \\t"):  # `C#` keeps its #; `## a ##` loses them\n',
+        "    if bare != text:\n",
+        TR,
+    ),
+    (
+        "mt tasks: an indented or bulleted status line is not found",
+        MT,
+        '_STATUS_LINE = re.compile(r"(?im)^[ \\t]*(?:[-*>][ \\t]*)?\\**status',
+        '_STATUS_LINE = re.compile(r"(?im)^\\**status',
+        TI,
+    ),
+    (
+        "sr hints: a system line that is indented or spaced out is not noticed",
+        SR,
+        '|\\[/?INST\\]|^[ \\t]*system[ \\t]*:"',
+        '|\\[/?INST\\]|^system:"',
+        TD,
     ),
 ]

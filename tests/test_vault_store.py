@@ -116,12 +116,25 @@ def test_a_section_is_replaced_without_touching_the_rest(vault):
 def test_rewriting_a_whole_note_needs_the_revision_that_was_read(vault):
     vault.write("wiki/a", "一")
     note = vault.read("wiki/a")
-    with pytest.raises(VaultError):
+    with pytest.raises(VaultError, match="带上") as asked:  # it says what to bring, not "conflict"
         vault.write("wiki/a", "二", mode="replace")
+    assert not isinstance(asked.value, VaultConflict)
     vault.write("wiki/a", "二", mode="replace", rev=note.rev)
     with pytest.raises(VaultConflict):  # the note moved on since it was read
         vault.write("wiki/a", "三", mode="replace", rev=note.rev)
     assert vault.read("wiki/a").body.strip() == "二"
+
+
+def test_adding_to_a_note_with_a_stale_revision_is_refused_and_without_one_it_is_not(vault):
+    vault.write("wiki/a", "一")
+    stale = vault.read("wiki/a").rev
+    (vault.root / "wiki" / "a.md").write_text("我在 Obsidian 里改了", encoding="utf-8")
+    with pytest.raises(VaultConflict):
+        vault.write("wiki/a", "二", mode="append", rev=stale)
+    assert vault.read("wiki/a").text == "我在 Obsidian 里改了"
+    vault.write("wiki/a", "三", mode="append", rev=vault.read("wiki/a").rev)
+    vault.write("wiki/a", "四", mode="append")  # a revision is optional for adding
+    assert vault.read("wiki/a").text.endswith("三\n\n四\n")
 
 
 # ---- whose words a note holds ------------------------------------------------------------
@@ -264,8 +277,12 @@ def test_in_a_task_note_the_assistant_only_adds_to_its_own_section(vault):
     )
     vault.write("threads/t", "我的想法", mode="append")
     note = vault.read("threads/t")
-    assert md.read_section(note.body, "笔记") == "\n我的想法".strip("\n") or "我的想法" in note.body
+    assert md.read_section(note.body, "笔记") == "我的想法"
     assert md.read_section(note.body, "经过") == "- 一"
+    vault.write("threads/t", "想写进经过", mode="append", heading="经过")  # it picks no other part
+    note = vault.read("threads/t")
+    assert md.read_section(note.body, "经过") == "- 一"
+    assert "想写进经过" in (md.read_section(note.body, "笔记") or "")
     with pytest.raises(VaultError, match="追加"):
         vault.write("threads/t", "x", mode="replace", rev=note.rev)
     with pytest.raises(VaultError, match="没有找到"):
@@ -291,6 +308,19 @@ def test_private_notes_and_excluded_folders_are_not_the_assistants_to_read(vault
     with pytest.raises(VaultError, match="不让助手看"):
         walled.read("私人/x")
     assert walled.search("不给看") == []
+
+
+def test_a_private_note_is_not_listed_to_the_assistant_nor_waiting_to_be_written_up(vault):
+    vault.write("wiki/mine", "---\nprivate: true\n---\n日记里的话", actor=Actor.USER)
+    vault.write("wiki/open", "公开的", actor=Actor.USER)
+    vault.write("raw/clips/secret", "---\nprivate: true\n---\n私下的资料", actor=Actor.USER)
+    vault.write("raw/clips/plain", "公开资料", actor=Actor.USER)
+    for actor in (Actor.AGENT, Actor.DREAM):
+        shown = vault.listing("wiki", actor=actor)["notes"]
+        assert [n["path"] for n in shown] == ["wiki/open.md"]
+    owner = vault.listing("wiki", actor=Actor.USER)["notes"]
+    assert {n["path"]: n["private"] for n in owner} == {"wiki/mine.md": True, "wiki/open.md": False}
+    assert [e.path for e in vault.backlog()] == ["raw/clips/plain.md"]
 
 
 # ---- undo ------------------------------------------------------------------------------
@@ -484,3 +514,130 @@ def test_hidden_folders_and_other_file_types_are_not_notes(vault):
 def test_a_missing_folder_is_an_empty_vault(vault):
     assert not vault.exists() and vault.search("x") == [] and vault.lint() == []
     assert vault.stats()["notes"] == 0
+
+
+# ---- review fixes: folders left out, protected notes, private notes, odd text ------------------
+def put_file(vault: Vault, rel: str, text: str) -> None:
+    full = vault.root / rel
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["Private/a.md", "PRIVATE/a.md", "private/a.md", "wiki/私人/b.md", "wiki/私人/深/c.md"],
+)
+def test_a_folder_left_out_stays_closed_in_any_case_and_at_any_depth(vault, path):
+    put_file(vault, path, "不给看")
+    walled = make(vault, exclude=["Private", "wiki/私人"])
+    with pytest.raises(VaultError, match="不让助手看"):
+        walled.read(path)
+    with pytest.raises(VaultError, match="不让助手看"):
+        walled.write(path.replace("/a.md", "/new.md").replace("/b.md", "/new.md"), "写进去")
+    assert walled.search("不给看") == []
+    assert not any(e.path == path for e in walled.entries().values())
+
+
+def test_a_folder_that_only_looks_like_the_one_left_out_is_not_closed(vault):
+    put_file(vault, "wiki/私人资料/a.md", "可以看")
+    walled = make(vault, exclude=["wiki/私人"])
+    assert "可以看" in walled.read("wiki/私人资料/a.md").text
+    put_file(vault, "私人.md", "文件不是文件夹")
+    assert "文件不是" in make(vault, exclude=["私人"]).read("私人.md").text
+
+
+@pytest.mark.parametrize("name", ["wiki/Index.md", "wiki/INDEX.md", "wiki/Log.md", "wiki/log.MD"])
+def test_the_notes_the_product_writes_are_protected_whatever_their_case(vault, name):
+    vault.write("wiki/a", "一")
+    for mode in ("append", "create"):
+        with pytest.raises(VaultError, match="自动生成"):
+            vault.write(name, "改掉记录", mode=mode)
+    assert "改掉记录" not in (vault.read_text(LOG_NOTE) or "")
+
+
+def test_the_assistant_cannot_add_to_a_note_marked_private_even_without_reading_it(vault):
+    secret = "---\nprivate: true\n---\n日记里的话\n"
+    vault.write("wiki/mine", secret, actor=Actor.USER)
+    for mode, extra in (("append", ""), ("section", "笔记"), ("replace", "")):
+        with pytest.raises(VaultError, match="私密"):
+            vault.write("wiki/mine", "偷偷加一句", mode=mode, heading=extra, actor=Actor.AGENT)
+    assert vault.read_text("wiki/mine.md") == secret
+    vault.write("wiki/mine", "我自己加的", mode="append", actor=Actor.USER)
+    assert "我自己加的" in (vault.read_text("wiki/mine.md") or "")
+
+
+def test_a_note_the_assistant_wrote_is_closed_to_it_once_the_owner_marks_it_private(vault):
+    vault.write("wiki/草稿", "助手写的\n", actor=Actor.AGENT)
+    for actor in (Actor.AGENT, Actor.DREAM):
+        vault.write("wiki/草稿", "还能追加", mode="append", actor=actor)
+    marked = (vault.read_text("wiki/草稿.md") or "").replace(
+        "origin: assistant", "origin: assistant\nprivate: true"
+    )
+    assert "private: true" in marked
+    put_file(vault, "wiki/草稿.md", marked)
+    for actor in (Actor.AGENT, Actor.DREAM):
+        with pytest.raises(VaultError, match="私密"):
+            vault.write("wiki/草稿", "不该进来", mode="append", actor=actor)
+    assert "不该进来" not in (vault.read_text("wiki/草稿.md") or "")
+
+
+def test_a_private_note_with_a_typo_in_its_properties_is_still_private(vault):
+    put_file(vault, "wiki/日记.md", "---\ntitle: 我的日记: 2026\nprivate: true\n---\n秘密的话\n")
+    with pytest.raises(VaultError, match="私密"):
+        vault.read("wiki/日记")
+    assert vault.search("秘密") == []
+    assert [h.path for h in vault.search("秘密", actor=Actor.USER)] == ["wiki/日记.md"]
+    assert vault.read("wiki/日记", actor=Actor.USER).private
+    assert "wiki/日记.md" not in (vault.read_text(INDEX_NOTE) or "")
+
+
+def test_a_link_to_a_note_with_a_dot_in_its_name_is_a_link(vault):
+    vault.write("wiki/Node.js 笔记", "# Node.js 笔记\n", actor=Actor.USER)
+    vault.write("wiki/前端", "见 [[Node.js 笔记]]、[[v1.2 计划]] 和 ![[图.png]]\n")
+    note = vault.read("wiki/前端")
+    assert note.outgoing == ("wiki/Node.js 笔记.md",)
+    assert note.missing == ("v1.2 计划",)  # a note not written yet, not a file
+    assert vault.read("wiki/Node.js 笔记").backlinks == ("wiki/前端.md",)
+
+
+def test_material_with_a_dot_in_its_title_is_written_up_once_a_note_links_it(vault):
+    path, _ = vault.capture(
+        folder="agents/Grok",
+        title="GPT-5.1 评测",
+        body="跑分",
+        key="k-abc12345",
+        front={},
+        day="2026-11-21",
+    )
+    assert [e.path for e in vault.backlog()] == [path]
+    vault.write("wiki/评测", f"见 [[{path.removesuffix('.md')}]]")
+    assert vault.backlog() == []
+    assert not [i for i in vault.lint() if i.kind == "uncompiled"]
+
+
+def test_text_that_cannot_be_written_as_utf8_is_cleaned_not_refused(vault):
+    done = vault.write("wiki/坏字", "前\ud800后\n")
+    assert "前\ufffd后" in (vault.read_text(done.path) or "")
+    path, _ = vault.capture(
+        folder="agents/A\ud800",
+        title="标\ud83d题",
+        body="内\udc00容",
+        key="k-1",
+        front={"agent": "A\ud800"},
+        day="2026-11-21",
+    )
+    assert "\ud800" not in (vault.read_text(path) or "")
+    vault.put("daily/2026-11-21.md", "# 日\ud800记\n")
+    vault.append_log("坏\ud800行")
+    assert "坏\ufffd行" in (vault.read_text(LOG_NOTE) or "")
+
+
+def test_a_note_that_was_saved_is_not_reported_as_failed_when_the_log_cannot_be_written(
+    vault, monkeypatch
+):
+    def broken(*_a, **_k):
+        raise OSError("disk is full")
+
+    monkeypatch.setattr(vault, "append_log", broken)
+    done = vault.write("wiki/记下了", "内容")
+    assert done.created and "内容" in (vault.read_text("wiki/记下了.md") or "")

@@ -307,3 +307,20 @@ async def test_hidden_characters_in_the_memory_index_are_not_passed_on(make_app)
     system = model.calls[0].system_instructions
     assert "- coffee order" in system
     assert not any(0xE0000 <= ord(c) <= 0xE007F for c in system)
+
+
+def test_a_note_that_is_mostly_empty_lines_is_read_at_once():
+    """Blank lines at the start must not be walked again from every line that follows."""
+    from personal_agent.memory.tasks import TaskHead, task_index
+
+    started = time.perf_counter()
+    notes = [TaskHead(f"n{i}.md", "\n" * 4096, 1.0 + i) for i in range(40)]
+    assert task_index(notes, 5, "/memories/state/tasks").count("tasks/n") == 5
+    assert time.perf_counter() - started < 2.0
+
+
+def test_the_status_and_title_are_found_after_blank_and_indented_lines():
+    from personal_agent.memory.tasks import TaskHead, task_index
+
+    note = TaskHead("a.md", "\n\n   # 标题\n\n  - status: 等你回复\n", 1.0)
+    assert task_index([note], 5, "/memories/state/tasks") == "- tasks/a.md: 标题 [status: 等你回复]"

@@ -3,7 +3,7 @@
   "info": {
     "title": "Qixu V3 API",
     "description": "Authenticated collaboration and durable execution. Browser writes also require an allowed Origin and X-PA: 1. Bodies are strictly validated only after authentication; the session and membership are checked again after the body is read. All responses are private and must not be cached persistently.",
-    "version": "0.9.0"
+    "version": "0.9.1"
   },
   "paths": {
     "/api/v3/me": {

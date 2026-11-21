@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import re
+import time
 
 import pytest
 
@@ -214,3 +215,33 @@ def test_random_markdown_always_renders_into_valid_pieces(seed):
         assert len(piece.html) <= LIMIT, (seed, len(piece.html))
         assert len(piece.plain) <= LIMIT
         assert balanced(piece.html), (seed, piece.html[:200])
+
+
+# ---- a heading line is read by hand: the pattern for it was cubic ------------------------------
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("# C#", "<b>C#</b>"),  # a # that touches the word belongs to it
+        ("## Using C# ##", "<b>Using C#</b>"),
+        ("### Sub ###   ", "<b>Sub</b>"),
+        ("#### a  ####", "<b>a</b>"),
+        ("# #", "<b></b>"),
+        ("   # 缩进三格", "<b>缩进三格</b>"),
+        ("    # 缩进四格就不是标题", "    # 缩进四格就不是标题"),
+        ("#标题", "#标题"),
+        ("####### 七个", "####### 七个"),
+    ],
+)
+def test_what_is_a_heading_line_and_what_stays_in_it(markdown, expected):
+    assert to_html(markdown) == expected
+
+
+def test_a_heading_line_with_a_long_run_of_spaces_in_it_is_converted_at_once():
+    started = time.perf_counter()
+    for line in (
+        "# a" + " " * 3400 + "b",
+        "## " + "x " * 1600 + "#" * 300 + " y",
+        "# " + " #" * 1700 + "x",
+    ):
+        assert to_html(line).startswith("<b>")
+    assert time.perf_counter() - started < 1.0

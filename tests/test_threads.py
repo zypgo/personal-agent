@@ -811,3 +811,137 @@ async def test_the_owners_conversation_gets_the_voice_and_the_knowledge_base_ins
     off = make_app(off_model, config=Config(vault=VaultConfig(enabled=False)))
     await run_once(off, owner_message("你好"))
     assert "# The knowledge base" not in off_model.calls[0].system_instructions
+
+
+# ---- review fixes: a keeper that does not stop, repeat itself or hold on to old things ---------
+def hand_in(app, *, name="Grok", key="r1", title="整理 Q3 财报") -> Desk:
+    desk = Desk(app, name=name, key=key, title=title)
+    desk.approve()
+    desk.claim()
+    desk.hand_in()
+    return desk
+
+
+def markers(app) -> list[str]:
+    return [r["key"] for r in app.db.query("SELECT key FROM kv WHERE key LIKE 'threads.said:%'")]
+
+
+def test_a_nudge_said_on_its_own_is_not_counted_into_a_later_bundle(app, clock):
+    hand_in_all(app, 2)
+    app.threads.tick()
+    assert stay_up(app, clock, 50) == 2  # the two are told one by one
+    hand_in(app, name="Grok2", key="r2", title="任务2")
+    app.threads.follow()
+    before = len(said(app))
+    assert stay_up(app, clock, 50) == 1  # the third is the only thing not said yet
+    [message] = said(app)[before:]
+    assert "任务2" in message["text"] and "件事要你看一眼" not in message["text"]
+    assert stay_up(app, clock, 120) == 0
+
+
+def test_a_task_that_cannot_be_followed_does_not_hold_the_others_back(app, monkeypatch):
+    bad, good = desks(app, 2)
+    for desk in (bad, good):
+        desk.approve()
+        desk.claim()
+        desk.hand_in()
+    top = str(app.db.scalar("SELECT MAX(id) FROM orchestration_events"))
+    real = app.threads._speak
+
+    def speak(task, events):
+        if task["id"] == bad.task["id"]:
+            raise RuntimeError("boom")
+        return real(task, events)
+
+    monkeypatch.setattr(app.threads, "_speak", speak)
+    assert app.threads.follow() == 1  # the other one is announced all the same
+    assert [m["text"] for m in said(app) if "任务1" in m["text"]] != []
+    assert app.db.kv_get("threads.event") != top  # looked at again: what failed may pass
+    app.threads.follow()
+    assert app.db.kv_get("threads.event") != top
+    app.threads.follow()
+    assert app.db.kv_get("threads.event") == top  # but not for ever: the keeper is not stuck
+    assert len([m for m in said(app) if "任务1" in m["text"]]) == 1  # and nothing said twice
+    fresh = hand_in(app, name="Grok2", key="r2", title="任务2")
+    assert fresh.task["id"] and app.threads.follow() == 1
+
+
+def test_a_part_that_fails_does_not_stop_the_other_parts_of_the_beat(app, clock, monkeypatch):
+    hand_in_all(app, 1)
+    app.threads.tick()
+
+    def broken() -> int:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(app.threads, "follow", broken)
+    assert stay_up(app, clock, 50) == 1  # looking in on the tasks still works
+    monkeypatch.setattr(app.threads, "patrol", broken)
+    clock.advance(60)
+    assert app.threads.tick() == 0  # and a patrol that breaks is not raised to the daemon
+
+
+def test_a_result_is_told_even_when_its_note_cannot_be_written(app, monkeypatch):
+    def broken(*_a, **_k):
+        raise ValueError("odd data")
+
+    monkeypatch.setattr(app.threads, "_thread", broken)
+    desk = Desk(app)
+    desk.approve()
+    desk.claim()
+    desk.hand_in()
+    assert app.threads.follow() == 1  # the owner hears about it
+    assert app.threads.record(app.db.one("SELECT * FROM orchestration_tasks")) is None
+
+
+def test_a_line_in_the_day_is_not_taken_for_written_because_a_longer_number_starts_alike(
+    app, clock
+):
+    desk = Desk(app)
+    desk.approve()
+    app.threads.follow()
+    task = app.db.one("SELECT * FROM orchestration_tasks")
+    assert app.threads.record(task)
+
+    def event(number: int) -> dict[str, Any]:
+        return {
+            "id": number,
+            "event_type": "question.asked",
+            "data": "{}",
+            "step_id": None,
+            "attempt_id": None,
+            "created_at": clock.now(),
+        }
+
+    app.threads._day(task, [event(200)])
+    app.threads._day(task, [event(20)])  # 20 is not 200
+    app.threads._day(task, [event(20), event(200)])  # and neither is written twice
+    day = app.vault.read_text(TODAY) or ""
+    assert day.count("<!-- ev:200 -->") == 1 and day.count("<!-- ev:20 -->") == 1
+
+
+def test_what_was_said_about_a_task_is_forgotten_once_it_is_put_away(app, clock):
+    desk = hand_in(app)
+    app.threads.follow()
+    app.threads.tick()
+    assert stay_up(app, clock, 50) == 1 and markers(app)
+    desk.accept()
+    app.threads.follow()
+    clock.advance(25 * 3600)
+    app.threads.patrol()
+    assert app.threads.archived(desk.task["id"]) and markers(app) == []
+
+
+def test_what_was_said_about_a_task_that_ended_is_forgotten_the_next_day(make_app, clock):
+    built = make_app(config=Config(threads=ThreadsConfig(archive_after_hours=0)))  # never put away
+    built.threads.follow()
+    desk = hand_in(built)
+    built.threads.follow()
+    built.threads.tick()
+    assert stay_up(built, clock, 50) == 1 and markers(built)
+    desk.accept()
+    built.threads.follow()
+    stay_up(built, clock, 2)
+    assert markers(built)  # the same day: kept for now
+    clock.advance(DAY)
+    built.threads.tick()
+    assert markers(built) == []

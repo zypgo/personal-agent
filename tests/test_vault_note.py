@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -158,3 +160,71 @@ def test_properties_are_rendered_one_to_a_line_and_read_back_the_same():
         "a": {"b": 1},
         "c": [{"d": 1}],
     }
+
+
+# ---- hostile text: reading a note must always come back quickly -------------------------------
+def _within(seconds: float, fn, *args):
+    started = time.perf_counter()
+    result = fn(*args)
+    assert time.perf_counter() - started < seconds
+    return result
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "# a" + " " * 30_000 + "x",  # a heading with a long gap in it
+        "## " + "x " * 15_000 + "#" * 15_000 + " y",
+        "a" + "`" * 60_000 + "b",  # one long run of backticks
+        "[a" * 30_000,  # brackets that never close
+        "[[a" * 30_000,
+        "# " + "[[a" * 30_000,
+    ],
+)
+def test_a_hostile_line_cannot_make_reading_a_note_take_minutes(line):
+    parsed = md.parse(line)
+    _within(2.0, md.headings, parsed.body)
+    _within(2.0, md.mask_code, parsed.body)
+    _within(2.0, md.links, parsed)
+    _within(2.0, md.summary_of, parsed)
+    _within(2.0, md.title_of, parsed, "stem")
+    _within(2.0, md.has_section, parsed.body, "笔记")
+
+
+@pytest.mark.parametrize(
+    ("line", "found"),
+    [
+        ("# 标题", (1, "标题")),
+        ("###### 六级", (6, "六级")),
+        ("## 标题 ##", (2, "标题")),
+        ("### 标题 ###   ", (3, "标题")),
+        ("# C#", (1, "C#")),  # a # that touches the word is part of it
+        ("# 标题 #号", (1, "标题 #号")),
+        ("#标题", None),  # a tag, not a heading
+        ("####### 七级", None),
+        ("# ", None),
+        ("# #", None),
+        ("  # 缩进的不算", None),
+    ],
+)
+def test_what_is_a_heading_and_what_it_says(line, found):
+    heads = md.headings(line)
+    assert [(h.level, h.text) for h in heads] == ([found] if found else [])
+
+
+def test_a_code_span_closes_with_a_run_of_the_same_length():
+    assert [link.target for link in md.links(md.parse("``[[a]]`` [[b]]"))] == ["b"]
+    assert [link.target for link in md.links(md.parse("`` [[a]]` [[b]]"))] == ["a", "b"]
+    assert [link.target for link in md.links(md.parse("`x` [[a]] `y`"))] == ["a"]
+
+
+def test_a_note_marked_private_stays_private_when_its_properties_cannot_be_read():
+    broken = "---\ntitle: 我的日记: 2026\nprivate: true\n---\n正文\n"
+    assert md.parse(broken).front_error
+    assert md.declares_private(md.parse(broken))
+    assert md.declares_private(md.parse("---\nprivate: 是\n---\n"))
+    assert md.declares_private(md.parse("---\nprivate: 'yes'\nbad: [\n---\n"))
+    assert not md.declares_private(md.parse("---\nprivate: false\n---\n"))
+    assert not md.declares_private(md.parse("---\ntitle: 我的日记: 2026\n---\n"))
+    assert not md.declares_private(md.parse("---\nnotes: private: true is a word\nx: [\n---\n"))
+    assert not md.declares_private(md.parse("# 正文里写 private: true 不算\n"))

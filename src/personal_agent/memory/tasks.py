@@ -26,8 +26,10 @@ FINISHED = (
 )
 """A task whose `status:` line starts with one of these words is over; it is not listed any more."""
 _FINISHED_RE = re.compile(r"(?i)(?:" + "|".join(FINISHED) + r")\b")
-_STATUS_LINE = re.compile(r"(?im)^\s*(?:[-*>]\s*)?\**status\**\s*:\s*\**\s*(.+?)\s*$")
-_TITLE_LINE = re.compile(r"(?m)^\s*#+\s*(.+?)\s*$")
+# `^[ \t]*` and not `^\s*`: with the flag for lines, `\s*` runs over every blank line to the end of
+# the text from each line start, which is quadratic in a note that is mostly empty lines.
+_STATUS_LINE = re.compile(r"(?im)^[ \t]*(?:[-*>][ \t]*)?\**status\**\s*:\s*\**\s*(.+?)\s*$")
+_TITLE_LINE = re.compile(r"(?m)^[ \t]*#+\s*(.+?)\s*$")
 
 
 @dataclass(frozen=True)

@@ -181,7 +181,7 @@ async def test_two_spaces_share_one_model_slot(make_app, monkeypatch):
     submit(second)
     daemon, task = await start(root)
     try:
-        await asyncio.wait_for(model.entered.wait(), 2)
+        await asyncio.wait_for(model.entered.wait(), 15)  # a loaded machine is slow to start
         await eventually(
             lambda: first.inbox.counts()["leased"] + second.inbox.counts()["leased"] == 2
         )

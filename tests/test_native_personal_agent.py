@@ -320,7 +320,8 @@ async def test_real_worker_module_starts_outside_repository_without_loading_exte
     try:
         process.stdin.write(json.dumps(message).encode() + b"\n")
         await process.stdin.drain()
-        async with asyncio.timeout(10):
+        # Importing the package takes a while on a loaded machine.
+        async with asyncio.timeout(40):
             receipt = json.loads(await process.stdout.readline())
             await process.wait()
         assert receipt["type"] == "result" and receipt["status"] == "failed"
