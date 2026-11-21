@@ -343,7 +343,7 @@ def test_space_configuration_does_not_inherit_owner_privileges():
         }
     )
     child = derive_space_config(root)
-    assert child.agent.owner_name is None and child.agent.name == "Assistant"
+    assert child.agent.owner_name is None and child.agent.name == "栖序"
     assert not child.tools.shell and not child.skills.enabled
     assert not child.secrets and not child.mcp.enabled and not child.mcp.servers
     assert not child.plugins.enabled and not child.plugins.settings

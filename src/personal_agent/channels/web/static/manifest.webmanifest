@@ -1,13 +1,13 @@
 {
-  "name": "{{agent}}",
-  "short_name": "{{agent}}",
-  "description": "Talk to your personal agent.",
+  "name": "栖序",
+  "short_name": "栖序",
+  "description": "栖序 Qixu：你的个人助理。",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#f5f4ef",
-  "theme_color": "#f5f4ef",
+  "background_color": "#f3f1e5",
+  "theme_color": "#f3f1e5",
   "icons": [
     { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },

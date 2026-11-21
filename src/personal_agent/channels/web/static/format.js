@@ -51,6 +51,15 @@ export function expiresIn(expiresAt, nowSeconds) {
   return `${Math.round(left / 86400)} 天`;
 }
 
+/** The product's name, as the pages show it. */
+export const PRODUCT_NAME = "栖序";
+
+/** The tab's title: the product, with the agent's own name in front when it has one. */
+export function pageTitle(agent, unread = 0) {
+  const name = !agent || agent === PRODUCT_NAME ? PRODUCT_NAME : `${agent} · ${PRODUCT_NAME}`;
+  return (unread ? `(${unread}) ` : "") + name;
+}
+
 /** A pairing code out of whatever the owner pasted: the whole link, or just the code. */
 export function parsePairing(text) {
   const value = String(text ?? "").trim();

@@ -1,7 +1,7 @@
 // One navigation for the assistant and its tools. Only a layout preference is persisted;
 // account, space, credentials and unfinished work remain in their existing owners.
 export const PRODUCT_PAGES = Object.freeze([
-  { id: "chat", label: "个人助理", path: "/", icon: "chat" },
+  { id: "chat", label: "对话", path: "/", icon: "chat" },
   { id: "tasks", label: "任务", path: "/workspace?tab=tasks", icon: "tasks" },
   { id: "knowledge", label: "资料", path: "/workspace?tab=knowledge", icon: "knowledge" },
   { id: "agents", label: "助手与连接", path: "/workspace?tab=agents", icon: "agents" },
@@ -24,14 +24,27 @@ const PATHS = {
   begin: "M5 21V4M5 5h12l-2 4 2 4H5",
 };
 
-// A small, original mark made from four petals; decorative in every context. A state
-// ("idle", "busy", "attention", "offline") lets the same mark show how the assistant is doing.
+// The icon's Q, cut in two so the pieces can move on their own: the arc, and the leaf that is its
+// tail. Decorative in every context. A state ("idle", "busy", "attention", "offline") lets the
+// same mark show how the assistant is doing.
+const SVG_NS = "http://www.w3.org/2000/svg";
+const MARK_PARTS = [
+  ["mark-orbit", "M354 258C379 216 361 164 317 139C264 109 184 125 143 181C99 242 116 319 170 355C203 378 245 385 279 370C287 366 285 359 277 361C242 370 207 355 183 332C145 295 145 238 175 198C203 161 254 149 295 166C330 181 348 217 343 251C342 260 349 266 354 258Z"],
+  ["mark-leaf", "M230 240C263 236 286 256 306 287C327 320 352 340 388 329C373 351 351 369 325 366C286 361 273 305 245 275C235 264 224 257 224 248C224 244 226 241 230 240Z"],
+];
+
 export function createAgentMark(doc, className = "", state = "") {
   const mark = doc.createElement("span");
   mark.className = `product-mark ${className}`.trim();
   mark.setAttribute("aria-hidden", "true");
   if (state) mark.setAttribute("data-state", state);
-  for (let index = 0; index < 4; index++) mark.append(doc.createElement("span"));
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "83 91 312 312"); svg.setAttribute("focusable", "false");
+  for (const [part, path] of MARK_PARTS) {
+    const shape = doc.createElementNS(SVG_NS, "path");
+    shape.setAttribute("class", part); shape.setAttribute("d", path); svg.append(shape);
+  }
+  mark.append(svg);
   return mark;
 }
 
@@ -68,12 +81,12 @@ export function createProductShell({ document: doc = globalThis.document, conten
   let open = !narrow && desktopOpen;
   const element = node("div", "", "product-layout");
   const drawer = node("aside", "", "product-drawer");
-  drawer.id = "product-drawer"; drawer.setAttribute("aria-label", "个人助理导航");
+  drawer.id = "product-drawer"; drawer.setAttribute("aria-label", "栖序导航");
   const toggle = control("打开菜单", "menu", "product-menu-toggle");
   toggle.setAttribute("aria-controls", drawer.id);
   const close = control("收起菜单", "menu", "product-drawer-close");
   const brand = node("a", "", "product-brand");
-  brand.append(createAgentMark(doc), node("span", "Personal Agent"));
+  brand.append(createAgentMark(doc), node("span", "栖序", "product-brand-name"), node("span", "Qixu", "product-brand-latin"));
   brand.setAttribute("href", resolve("/"));
   const head = node("div", "", "product-drawer-head"); head.append(brand, close);
   drawer.append(head);
@@ -113,9 +126,9 @@ export function createProductShell({ document: doc = globalThis.document, conten
     settings.addEventListener("click", () => { if (narrow) setOpen(false); onSettings(); }); foot.append(settings);
   }
   const identity = node("div", "", "product-identity");
-  const avatar = node("span", "P", "product-avatar"); avatar.setAttribute("aria-hidden", "true");
+  const avatar = node("span", "栖", "product-avatar"); avatar.setAttribute("aria-hidden", "true");
   const identityCopy = node("div", "", "product-identity-copy");
-  const name = node("strong", "你的个人助理"), contextName = node("span", "从一句话开始");
+  const name = node("strong", "栖序"), contextName = node("span", "从一句话开始");
   identityCopy.append(name, contextName); identity.append(avatar, identityCopy); foot.append(identity); drawer.append(foot);
   const overlay = node("div", "", "product-drawer-overlay"); overlay.setAttribute("aria-hidden", "true");
   if (content.parentNode) content.before(element);
@@ -158,8 +171,8 @@ export function createProductShell({ document: doc = globalThis.document, conten
     brand.setAttribute("href", resolve("/"));
   }
   function setContext(context = {}) {
-    name.textContent = context.name || "你的个人助理";
-    avatar.textContent = Array.from(context.name || "P")[0];
+    name.textContent = context.name || "栖序";
+    avatar.textContent = Array.from(context.name || "栖")[0];
     contextName.textContent = [context.space, context.role].filter(Boolean).join(" · ") || "从一句话开始";
     setActive(current);
   }

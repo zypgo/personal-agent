@@ -43,7 +43,7 @@ class WorkerMCP:
         token = request.headers["authorization"][7:]
         revalidate = request.state.v3_revalidate
         server = MCPServer(
-            "Personal Agent task connector",
+            "Qixu task connector",
             instructions=(
                 "Claim an explicitly approved task before working. Reuse the same worker_id for "
                 "retries of one native turn; use a new ID only for a new turn. Save its attempt_id, "

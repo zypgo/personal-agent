@@ -64,7 +64,7 @@ def test_a_database_from_a_newer_version_fails_with_the_fix(paths):
     found = database_check(paths)
     assert found.status == "fail"
     assert f"v{SCHEMA_VERSION + 1} is newer than this program" in found.detail
-    assert found.fix == "Upgrade personal-agent."
+    assert found.fix == "Upgrade Qixu."
 
 
 def test_mostly_empty_space_is_a_warning_that_names_the_command(paths, monkeypatch):

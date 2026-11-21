@@ -1,50 +1,53 @@
-/* Shared navigation, and the four-petal mark that tells how the assistant is doing. */
+/* Shared navigation, and the Q mark that tells how the assistant is doing. */
 
-/* ---- the mark: four petals; it breathes at rest, gathers and turns while it works --------------- */
+/* ---- the mark: the icon's arc and leaf; the leaf sways at rest, the arc circles while it works ---- */
 .product-mark {
   --mark-size: 2rem;
   display: inline-grid;
-  grid-template-columns: repeat(2, 1fr);
-  grid-template-rows: repeat(2, 1fr);
-  gap: calc(var(--mark-size) * 0.065);
+  flex: 0 0 auto;
   width: var(--mark-size);
   height: var(--mark-size);
-  flex: 0 0 auto;
-  transform: rotate(-12deg);
-  color: var(--accent);
+  color: var(--mark-ink);
   transition: opacity var(--t-slow) var(--ease-out), filter var(--t-slow) var(--ease-out);
 }
 
-.product-mark > span {
-  background: currentColor;
-  border-radius: 80% 34% 45% 34%;
+.product-mark > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
-.product-mark > span:nth-child(2) {
-  transform: rotate(90deg);
-  opacity: 0.68;
+.mark-orbit {
+  fill: var(--mark-ink);
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
 }
 
-.product-mark > span:nth-child(3) {
-  transform: rotate(-90deg);
-  opacity: 0.48;
-}
-
-.product-mark > span:nth-child(4) {
-  transform: rotate(180deg);
-  opacity: 0.84;
+.mark-leaf {
+  fill: var(--mark-leaf);
+  transform-box: fill-box;
+  transform-origin: 6% 8%; /* where the leaf grows out of the arc */
 }
 
 .product-mark[data-state="idle"] {
-  animation: mark-breathe 6s ease-in-out infinite;
+  animation: mark-breathe 7s var(--ease-sway) infinite;
 }
 
-.product-mark[data-state="busy"] {
-  animation: mark-think 2.4s infinite;
+.product-mark[data-state="idle"] .mark-leaf {
+  animation: leaf-sway 6s var(--ease-sway) infinite;
 }
 
-.product-mark[data-state="attention"] {
-  animation: mark-attention 1.8s ease-in-out infinite;
+.product-mark[data-state="busy"] .mark-orbit {
+  animation: orbit-turn 2.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+.product-mark[data-state="busy"] .mark-leaf {
+  animation: leaf-sway 1.4s var(--ease-sway) infinite;
+}
+
+.product-mark[data-state="attention"] .mark-leaf {
+  animation: leaf-call 1.8s ease-in-out infinite;
 }
 
 .product-mark[data-state="offline"] {
@@ -52,38 +55,51 @@
   filter: grayscale(0.7);
 }
 
+/* The app icon itself, for the places that are a front door: sign-in, the first moment. The
+   tile is dark in both themes, so its colours do not follow them. */
+.product-mark.tile {
+  --mark-ink: #fff6df;
+  --mark-leaf: #b6cf8c;
+  box-sizing: border-box;
+  padding: calc(var(--mark-size) * 0.165); /* a percentage would be of the page, not of the mark */
+  border-radius: 23%;
+  background: linear-gradient(145deg, #304a40, #1b322d 57%, #132622);
+  box-shadow: inset 0 0 0 1px rgb(232 243 214 / 0.14), var(--shadow-2);
+}
+
 @keyframes mark-breathe {
   50% {
-    transform: rotate(-6deg) scale(1.06);
+    transform: scale(1.04);
   }
 }
 
-@keyframes mark-think {
-  0% {
-    transform: rotate(-12deg) scale(1);
-    animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+@keyframes leaf-sway {
+  0%,
+  100% {
+    transform: rotate(-3deg);
   }
 
   50% {
-    transform: rotate(168deg) scale(0.86);
-    animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
-  }
-
-  100% {
-    transform: rotate(348deg) scale(1);
+    transform: rotate(5deg) scale(1.03);
   }
 }
 
-@keyframes mark-attention {
+@keyframes orbit-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes leaf-call {
   0%,
   100% {
-    transform: rotate(-12deg) scale(1);
+    transform: scale(1) rotate(0deg);
     filter: drop-shadow(0 0 0 transparent);
   }
 
   50% {
-    transform: rotate(-12deg) scale(1.1);
-    filter: drop-shadow(0 0 0.45rem color-mix(in srgb, var(--accent) 65%, transparent));
+    transform: scale(1.16) rotate(6deg);
+    filter: drop-shadow(0 0 0.35rem var(--leaf));
   }
 }
 
@@ -162,15 +178,28 @@ body.product-menu-open {
   align-items: center;
   gap: 0.6rem;
   color: var(--ink);
-  font-size: 1.0625rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
   text-decoration: none;
   white-space: nowrap;
 }
 
 .product-brand .product-mark {
-  --mark-size: 1.6rem;
+  --mark-size: 1.75rem;
+}
+
+.product-brand-name {
+  font-size: 1.1875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.product-brand-latin {
+  align-self: flex-end;
+  padding-bottom: 0.2rem;
+  color: var(--ink-3);
+  font-size: 0.625rem;
+  font-weight: 650;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
 .product-icon {

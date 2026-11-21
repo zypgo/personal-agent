@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from personal_agent.collaboration.models import OWNER_SPACE, IdentityError
-from personal_agent.config import Config
+from personal_agent.config import AgentConfig, Config
 from personal_agent.paths import Paths
 
 SPACE_ID = re.compile(r"s_[a-f0-9]{32}\Z")
@@ -43,7 +43,7 @@ def derive_space_config(root: Config) -> Config:
     """
     data = root.model_dump(mode="python")
     data["agent"]["owner_name"] = None
-    data["agent"]["name"] = "Assistant"
+    data["agent"]["name"] = AgentConfig().name  # the product's own name, not the owner's
     data["tools"]["shell"] = False
     data["sandbox"]["extra_read"] = []
     data["sandbox"]["extra_write"] = []

@@ -1,4 +1,4 @@
-"""Run this project's Personal Agent in an explicit, isolated host profile."""
+"""Run Qixu itself in an explicit, isolated host profile."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def native_config(config: Config) -> Config:
         or config.notify.channel not in {"auto", "cli"}
     ):
         raise BridgeError(
-            "Native Personal Agent profiles cannot enable listeners, external channels or plugins."
+            "Native Qixu profiles cannot enable listeners, external channels or plugins."
         )
     return config.model_copy(
         update={
@@ -85,15 +85,13 @@ def load_profile(request: NativeRequest) -> Config:
                 raise BridgeError("The native profile configuration is invalid or too large.")
             raw = tomllib.loads(stream.read(64_001).decode("utf-8"))
     except (OSError, ValueError) as exc:
-        raise BridgeError(
-            "Configure config.toml in this dedicated Personal Agent host profile."
-        ) from exc
+        raise BridgeError("Configure config.toml in this dedicated Qixu host profile.") from exc
     if not isinstance(raw.get("model"), dict) or not raw["model"].get("api_key_env"):
         raise BridgeError("Set model.api_key_env explicitly in the dedicated profile.")
     try:
         return native_config(Config.model_validate(raw))
     except ValueError as exc:
-        raise BridgeError("The dedicated Personal Agent configuration is invalid.") from exc
+        raise BridgeError("The dedicated Qixu configuration is invalid.") from exc
 
 
 def native_environment(config: Config, environ: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -131,14 +129,14 @@ class PersonalAgentProvider:
     ) -> NativeResult:
         if cancel.is_set():
             await callbacks.state({"process_stopped": True, "native_terminal": "cancelled"})
-            return NativeResult("cancelled", "Cancelled before Personal Agent started.")
+            return NativeResult("cancelled", "Cancelled before Qixu started.")
         try:
             config = load_profile(request)
         except (BridgeError, OSError):
             await callbacks.state({"process_stopped": True, "native_terminal": "failed"})
             return NativeResult(
                 "failed",
-                "Configure a dedicated Personal Agent host profile with an explicit model credential reference and no external channels.",
+                "Configure a dedicated Qixu host profile with an explicit model credential reference and no external channels.",
             )
         supervisor = await NativeProcess.start(
             [sys.executable, "-I", "-m", "personal_agent.agent_adapters.native_pa_worker"],
@@ -175,7 +173,7 @@ class PersonalAgentProvider:
                     raise BridgeError("The native protocol response is too large.")
                 value = json.loads(line)
                 if not isinstance(value, dict):
-                    raise BridgeError("Invalid Personal Agent worker response.")
+                    raise BridgeError("Invalid Qixu worker response.")
                 kind = value.get("type")
                 if kind == "state":
                     updates = value.get("data")
@@ -220,19 +218,17 @@ class PersonalAgentProvider:
                     return NativeResult(status, text)
                 else:
                     raise BridgeError("Unknown native protocol response.")
-            return NativeResult(
-                "unknown", "Personal Agent exited without a final execution receipt."
-            )
+            return NativeResult("unknown", "Qixu exited without a final execution receipt.")
 
         work = asyncio.create_task(exchange())
         cancelled = asyncio.create_task(cancel.wait())
-        result = NativeResult("unknown", "Personal Agent execution could not be confirmed.")
+        result = NativeResult("unknown", "Qixu execution could not be confirmed.")
         exited = False
         stopped = False
         try:
             done, _ = await asyncio.wait({work, cancelled}, return_when=asyncio.FIRST_COMPLETED)
             if cancelled in done:
-                result = NativeResult("cancelled", "Personal Agent cancellation was requested.")
+                result = NativeResult("cancelled", "Qixu cancellation was requested.")
             else:
                 result = await work
                 try:
@@ -240,12 +236,10 @@ class PersonalAgentProvider:
                     exited = True
                 except TimeoutError:
                     result = NativeResult(
-                        "unknown", "Personal Agent reported a result but did not finish stopping."
+                        "unknown", "Qixu reported a result but did not finish stopping."
                     )
         except (BridgeError, OSError, ValueError):
-            result = NativeResult(
-                "unknown", "Personal Agent stopped without a valid final receipt."
-            )
+            result = NativeResult("unknown", "Qixu stopped without a valid final receipt.")
         finally:
             for pending in (work, cancelled):
                 if not pending.done():
@@ -258,8 +252,6 @@ class PersonalAgentProvider:
             or (result.status == "succeeded" and (not exited or process.returncode != 0))
             or (result.status == "cancelled" and process.returncode != 0)
         ):
-            result = NativeResult(
-                "unknown", "Personal Agent process termination remains unconfirmed."
-            )
+            result = NativeResult("unknown", "Qixu process termination remains unconfirmed.")
         await callbacks.state({"native_terminal": result.status})
         return result

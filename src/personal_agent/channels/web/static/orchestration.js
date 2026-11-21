@@ -2,7 +2,7 @@
 /** @typedef {import('./orchestration').Agent} Agent */
 /** @typedef {import('./orchestration').Task} Task */
 
-export const AGENT_KINDS = Object.freeze({grok:"Grok",muse:"Meta Muse",personal_agent:"Personal Agent",codex:"Codex",cursor:"Cursor"});
+export const AGENT_KINDS = Object.freeze({grok:"Grok",muse:"Meta Muse",personal_agent:"栖序",codex:"Codex",cursor:"Cursor"});
 const STATES = Object.freeze({
   planned:"待确认计划",draft:"待确认计划",awaiting_approval:"待确认计划",waiting_approval:"等待批准",approved:"已批准",
   pending:"等待前序验收",blocked:"等待前序验收",ready:"等待领取",queued:"等待领取",waiting_claim:"等待领取",
@@ -42,7 +42,7 @@ export function wakeDescription(agent) {
     ? "Routine 触发 · 通过你配置的 Grok Routine 通知它来领取。"
     : "手动领取 · 在 Grok 启动已连接的任务工具后领取。";
   if (["codex","cursor"].includes(agent.kind)) return "自有电脑执行 · 需要一个能领取任务的执行端。";
-  return "由你自己的 Personal Agent 执行端领取任务并回传结果。";
+  return "由你自己的栖序执行端领取任务并回传结果。";
 }
 
 /** Build the task from the form fields. */

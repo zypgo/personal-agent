@@ -215,7 +215,7 @@ class DingTalkApi:
         self, robot_code: str, staff_id: str, text: str, *, markdown: bool = True
     ) -> str:
         """Send to one staff ID; a batch-level receipt alone does not mean that user was accepted."""
-        params = {"title": "Personal Agent", "text": text} if markdown else {"content": text}
+        params = {"title": "栖序", "text": text} if markdown else {"content": text}
         payload = {
             "robotCode": robot_code,
             "userIds": [staff_id],

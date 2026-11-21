@@ -36,7 +36,7 @@ from personal_agent.commands import (
 
 app = typer.Typer(
     name="pa",
-    help="A local, always-on personal agent (OpenAI models, Anthropic engineering practices).",
+    help="Qixu 栖序: a personal agent that stays on your computer.",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -44,7 +44,7 @@ app = typer.Typer(
 
 def _version(value: bool) -> None:
     if value:
-        typer.echo(f"personal-agent {__version__}")
+        typer.echo(f"Qixu {__version__} (personal-agent)")
         raise typer.Exit()
 
 
@@ -54,7 +54,7 @@ def _root(
         False, "--version", callback=_version, is_eager=True, help="Show version."
     ),
 ) -> None:
-    """personal-agent."""
+    """Qixu."""
 
 
 # Commands that stand alone (a Typer added without a name contributes its commands directly).

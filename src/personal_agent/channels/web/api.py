@@ -95,13 +95,22 @@ class Sent:
     voice: Upload | None
 
 
+PRODUCT_NAME = "栖序"
+
+
+def page_title(agent: str) -> str:
+    """The tab's title: the product, with the agent's own name in front when it has one."""
+    return f"{agent} · {PRODUCT_NAME}" if agent and agent != PRODUCT_NAME else PRODUCT_NAME
+
+
 def load_assets(
     directory: Path = STATIC_DIR, *, agent: str = "Agent"
 ) -> tuple[dict[str, Asset], str]:
     """Every file of the page, read once, and a version that changes when any of them does.
 
-    `{{version}}` and `{{agent}}` in the page, its manifest and its service worker are filled in
-    here, the name escaped for the place it lands in."""
+    `{{version}}` in the page, its manifest and its service worker is filled in here, and
+    `{{title}}` in the page: the agent's name is the one thing a person types, so it goes in last
+    and escaped, and is never read as a placeholder itself."""
     found: dict[str, bytes] = {}
     for path in sorted(directory.iterdir()):
         if path.is_file() and path.suffix in _TYPES and not path.name.startswith("."):
@@ -115,9 +124,7 @@ def load_assets(
         if name in ("index.html", "sw.js", "manifest.webmanifest"):
             body = body.replace(b"{{version}}", version.encode())
         if name == "index.html":
-            body = body.replace(b"{{agent}}", html.escape(agent, quote=True).encode())
-        elif name == "manifest.webmanifest":
-            body = body.replace(b"{{agent}}", json.dumps(agent)[1:-1].encode())
+            body = body.replace(b"{{title}}", html.escape(page_title(agent), quote=True).encode())
         assets[name] = Asset(
             body,
             _TYPES[Path(name).suffix],

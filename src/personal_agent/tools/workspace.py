@@ -78,7 +78,7 @@ async def inspect_workspace_tool(
 
 @function_tool(
     name_override="prepare_workspace_action",
-    description_override="Prepare a persistent action card in the personal assistant conversation. Use an exact action from workspace_capabilities, its current resource target_id, a stable action_key for retries, and a JSON object draft containing only the listed nonsecret fields. The user completes and confirms the form; this tool NEVER executes the action, issues an invitation/token, grants access, approves a plan, accepts a result or attests that execution stopped. Never put credentials, secret_env, stop notes, arbitrary URLs or unlisted fields in draft_json. For task proposals continue using submit_job/delegate_agents; their approvals appear as user cards.",
+    description_override="Prepare a persistent action card in the chat. Use an exact action from workspace_capabilities, its current resource target_id, a stable action_key for retries, and a JSON object draft containing only the listed nonsecret fields. The user completes and confirms the form; this tool NEVER executes the action, issues an invitation/token, grants access, approves a plan, accepts a result or attests that execution stopped. Never put credentials, secret_env, stop notes, arbitrary URLs or unlisted fields in draft_json. For task proposals continue using submit_job/delegate_agents; their approvals appear as user cards.",
 )
 async def prepare_workspace_action_tool(
     ctx: RunContextWrapper[RunContext],

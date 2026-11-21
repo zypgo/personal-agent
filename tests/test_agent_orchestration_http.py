@@ -410,7 +410,7 @@ def test_standard_mcp_initialize_list_claim_and_result(site, agents, protocol):
                 "clientInfo": {"name": "test-muse", "version": "1"},
             },
         )
-        assert initialized["serverInfo"]["name"] == "Personal Agent task connector"
+        assert initialized["serverInfo"]["name"] == "Qixu task connector"
     listing = rpc("tools/list", {})
     assert {t["name"] for t in listing["tools"]} >= {"claim_task", "submit_result", "ask_question"}
     claimed = rpc(

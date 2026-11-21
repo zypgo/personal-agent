@@ -966,16 +966,19 @@ pre {
   box-shadow: var(--shadow-1);
 }
 
+/* A leaf in the place's colour (two round corners, two sharp ones), with a smaller one behind it. */
 .task-layout > .stack > .empty::before {
   content: "";
   display: block;
   width: 3.25rem;
   height: 3.25rem;
   margin: 0 auto 1.5rem;
-  border-radius: 1rem;
-  background: color-mix(in srgb, var(--tint) 16%, var(--surface));
-  box-shadow: 0.7rem 0.4rem 0 -0.25rem color-mix(in srgb, var(--tint) 9%, var(--surface));
-  transform: rotate(-8deg);
+  border-radius: 0 100% 0 100%;
+  background: color-mix(in srgb, var(--tint) 20%, var(--surface));
+  box-shadow: -0.95rem 0.75rem 0 -0.7rem color-mix(in srgb, var(--tint) 11%, var(--surface));
+  rotate: -12deg; /* the sway below turns it a little further each way */
+  transform-origin: 0 100%;
+  animation: leaf-sway 7s var(--ease-sway) infinite;
 }
 
 .empty h3 {

@@ -400,7 +400,7 @@ test("changing page cross-fades only where the browser can, and only when motion
   assert.deepEqual([welcome.get("panel-tasks").hidden, welcome.get("panel-knowledge").hidden], [false, true], "the swap happens inside the transition, not before it");
   updates[0]();
   assert.equal(welcome.get("panel-knowledge").hidden, false); assert.equal(welcome.get("panel-tasks").hidden, true);
-  assert.equal(welcome.context.document.title, "资料 · Personal Agent"); assert.equal(welcome.get("masthead-title").textContent, "资料");
+  assert.equal(welcome.context.document.title, "资料 · 栖序"); assert.equal(welcome.get("masthead-title").textContent, "资料");
 
   const still = setup(taskFixture(), {documentExtras: {startViewTransition}, globals: {matchMedia: query => ({matches: query.includes("reduce")})}});
   still.ui.state.tab = "tasks"; still.ui.showPanel();

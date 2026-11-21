@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Muse-native worker CLI; the native agent executes tasks, this file never does.
 
-Reuse the installed Personal Agent bridge, or load an explicitly SHA-256-verified export.
+Reuse the installed Qixu bridge, or load an explicitly SHA-256-verified export.
 Only Muse's official Vault helper injects credentials; normal proxy/TLS stay enabled.
 """
 
@@ -34,13 +34,9 @@ def load_core(path=None, expected_sha256=None):
         try:
             from personal_agent.agent_adapters import bridge
         except ImportError:
-            raise AdapterError(
-                "Install Personal Agent, or supply --bridge and --bridge-sha256."
-            ) from None
+            raise AdapterError("Install Qixu, or supply --bridge and --bridge-sha256.") from None
         if not hasattr(bridge, "WorkerDispatcher"):
-            raise AdapterError(
-                "Use the matching updated Personal Agent bridge with shared dispatch support."
-            )
+            raise AdapterError("Use the matching updated Qixu bridge with shared dispatch support.")
         return bridge
     if not expected_sha256 or not re.fullmatch(r"[a-fA-F0-9]{64}", expected_sha256):
         raise AdapterError(

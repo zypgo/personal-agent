@@ -6,10 +6,10 @@
 
 ## 安装与授权
 
-1. 在 Personal Agent 控制台注册一个独立的 Muse Agent，记下服务端的 HTTPS origin、Agent ID 和空间 ID。
+1. 在栖序控制台注册一个独立的 Muse Agent，记下服务端的 HTTPS origin、Agent ID 和空间 ID。
 2. 通过 Muse 官方的 Secure Vault 表单，保存这个 Agent 的 worker token。凭据名用 `custom.<provider>`，令牌字段是 `access_token`，Bearer 注入只允许发往你自己的**精确服务端主机**。
 3. 安装这个示例和原版 bridge。下面两种来源任选一种：
-   - 安装同一版本的 Personal Agent；适配器直接导入这份安装里的 bridge。
+   - 安装同一版本的栖序；适配器直接导入这份安装里的 bridge。
    - 用 `pa agents export-bridge --output pa-agent-bridge.py` 导出，或者从你自己的 `/api/v4/bridge.py` 下载。审阅来源，并单独记下 SHA-256；启动时同时指定 `--bridge` 和 `--bridge-sha256`。程序只执行通过这个哈希校验的字节，不会自动下载或更新代码。
 4. 创建测试任务之前，先运行 `probe`，在 Muse 里完成对这个连接器和具体请求的权限确认。
 
@@ -36,7 +36,7 @@ worker=(python3 /workspace/muse_vault_worker.py
   --agent YOUR_AGENT_ID --space YOUR_SPACE_ID
   --home /workspace/pa-muse-state)
 
-# 没有安装 Personal Agent 时，在上面的数组中再加入：
+# 没有安装栖序时，在上面的数组中再加入：
 # --bridge /workspace/pa-agent-bridge.py --bridge-sha256 YOUR_VERIFIED_SHA256
 
 "${worker[@]}" probe
@@ -77,7 +77,7 @@ worker=(python3 /workspace/muse_vault_worker.py
 先在你的账号实际支持的原生调度工具里创建任务，再把控制台里的连接模式改成 `native_schedule`。这个模式只记录配置，不会替 Muse 创建定时器。频率按你账号实际支持的周期和能接受的额度来定；每轮唤醒都可能消耗 Muse 的用量，空队列也不是免费的。
 
 ```text
-你是已登记的 Personal Agent Muse 工作方。
+你是已登记的栖序 Muse 工作方。
 使用已安装的 muse_vault_worker.py、固定 origin/credential/agent/space 和固定私密状态目录。
 凭据由 Muse 官方 Vault 注入，不读取或展示凭据、请求头、私密账本。
 

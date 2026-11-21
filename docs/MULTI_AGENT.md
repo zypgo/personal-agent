@@ -14,7 +14,7 @@
 | Muse | 通过 HTTP / MCP / Bridge 主动领取；手动启动，或用账号原生的 schedule | 同一套任务协议；不假设有公开的 session / cancel / wake API | 账号能调用外部工具；配好连接或运行 Bridge；原生 schedule 单独验证 |
 | Codex | 自有 Host 启动 `codex app-server`，走标准输入输出协议 | 原生事件、审批、取消和本地回执 | 这台机器上的 CLI、明确选定的工作目录、原生登录 |
 | Cursor | 自有 Host 启动 `agent acp`，复用官方的 ACP Python SDK | session 更新、权限、问题、计划和取消 | 这台机器上的 CLI、原生登录、需要的 ACP 能力 |
-| Personal Agent | 自有 Host 里的独立 profile，复用现有的 Harness / ToolGuard | 原有的副作用审批，映射成手机上的问题；独立的会话和结果 | 专用的 profile 配置和模型凭据，不能自动沿用个人的记忆目录 |
+| 栖序 | 自有 Host 里的独立 profile，复用现有的 Harness / ToolGuard | 原有的副作用审批，映射成手机上的问题；独立的会话和结果 | 专用的 profile 配置和模型凭据，不能自动沿用个人的记忆目录 |
 
 缺少账户配置时，注册记录显示“等待连接”或“等待领取”。
 
@@ -30,7 +30,7 @@ flowchart TD
     GROK --> API
     MUSE["已有 Muse"] --> API
     HOST["自有 Agent Host"] --> API
-    HOST --> CLI["Codex / Cursor / Personal Agent"]
+    HOST --> CLI["Codex / Cursor / 栖序"]
     API --> REVIEW["成果、文件与人工验收"]
     REVIEW --> DB
     DB --> UI
@@ -109,7 +109,7 @@ worker token 在数据库里只存哈希。Grok webhook 的 URL / key 放在部�
 - HTTP / Bridge 单个文件最多 2 MiB，一次结果的文件合计最多 8 MiB，每个空间的文件总量最多 128 MiB；结果的 JSON 请求最多 16 MiB。OpenAPI 连接器可以用 base64 的 JSON 文件，Bridge 用二进制下载。
 - 文件的 SHA-256 和字节数，由服务端核验；同一个 attempt 里，同名的文件不能换内容。下载始终要经过任务和依赖的授权。
 - 控制循环只检查数据库和轻量的 HTTP，不会在空队列上调用模型。Muse 的原生定时器会不会产生模型用量，由平台决定。
-- 服务端已有的模型预算继续有效；独立的 Personal Agent runtime 限制单次费用，跨 attempt 的日费用还没有汇总。外部的 Grok / Muse / Codex / Cursor 费用来源各自不同，未知的费用不会显示成零。
+- 服务端已有的模型预算继续有效；独立的栖序 runtime 限制单次费用，跨 attempt 的日费用还没有汇总。外部的 Grok / Muse / Codex / Cursor 费用来源各自不同，未知的费用不会显示成零。
 
 ## 升级与回退
 

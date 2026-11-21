@@ -117,7 +117,7 @@ function showPanel({focus=false}={}) {
       $("task-view-" + name).setAttribute("aria-pressed",String(active));
     }
     $("tasks-intro").textContent=state.taskView==="collaboration" ? "把目标交给助手，进度与成果都在这里。" : "安排电脑去做具体的事。";
-    document.title=`${WORKSPACE_TABS[state.tab]} · Personal Agent`;
+    document.title=`${WORKSPACE_TABS[state.tab]} · 栖序`;
     $("masthead-title").textContent=WORKSPACE_TABS[state.tab];
     productShell?.setActive(state.tab);
     if(focus) $("panel-" + state.tab).querySelector("h1")?.focus({preventScroll:true});
@@ -177,7 +177,7 @@ function showLogin() {
   $("login").hidden = false;
   input("enroll-code").value = state.pendingInvite;
   $("workspace-loading").hidden=true;
-  $("workspace-context").textContent="你的个人助理";
+  $("workspace-context").textContent="栖序";
   $("space-role").textContent="";
   $("space-select").replaceChildren();
   productShell?.setContext({name:"",space:"",role:""});

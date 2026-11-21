@@ -103,7 +103,7 @@ def worker_document(base_url: str, agent_id: str, space_id: str) -> dict[str, An
     return {
         "openapi": "3.1.0",
         "info": {
-            "title": "Personal Agent worker",
+            "title": "Qixu worker",
             "version": "1.0.0",
             "description": "Task claiming, leases and durable results for one registered agent. A wake is not completion; results await human acceptance.",
         },

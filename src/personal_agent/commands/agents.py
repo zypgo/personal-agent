@@ -198,7 +198,7 @@ def export_bridge(
         Path, typer.Option(help="New destination for the standalone standard-library script.")
     ],
 ) -> None:
-    """Copy a standalone worker bridge for a cloud computer without installing Personal Agent."""
+    """Copy a standalone worker bridge for a cloud computer without installing Qixu."""
     from importlib.resources import files
 
     data = files("personal_agent.agent_adapters").joinpath("bridge.py").read_bytes()

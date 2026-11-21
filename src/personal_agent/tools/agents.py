@@ -76,7 +76,7 @@ def _receipt(rc: RunContext, task: dict[str, Any]) -> str:
             "review_path": "/?" + urlencode({"space": rc.app.space_id}) + "#assistant-inbox",
             "approval_required": task["state"] == "planned",
             "notice": (
-                "Review the exact outbound plan in the personal assistant's action card before dispatch. "
+                "Review the exact outbound plan in the action card in the chat before dispatch. "
                 "This call issued no approval and started no new execution. "
                 "Manual Muse connections require a native user turn; a schedule must already "
                 "exist in Muse. Shared native environments are not isolated sandboxes."
@@ -127,8 +127,8 @@ async def list_agents_tool(ctx: RunContextWrapper[RunContext]) -> str:
     name_override="delegate_agents",
     description_override=(
         "Save an immutable multi-agent plan in the current space; this does NOT approve or "
-        "dispatch it. The user reviews the complete outbound context in a personal assistant "
-        "action card and approves there. The menu's Tasks page is an optional management view. "
+        "dispatch it. The user reviews the complete outbound context in an action card "
+        "in the chat and approves there. The menu's Tasks page is an optional management view. "
         "Give a stable task_key for the same requested plan across retries. Each step names an "
         "authorized agent, explicit prompt and acceptance criteria. Use empty depends_on lists "
         "for parallel research; a dependency must be accepted by a human before its successor "

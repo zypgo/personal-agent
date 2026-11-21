@@ -276,7 +276,7 @@ def test_dingtalk_fallback_does_not_fabricate_a_download_link(make_app):
     source(app)
     artifact = publish(app, channel="dingtalk", web_enabled=True).artifact
     message = app.outbox.get(artifact.outbox_id)
-    assert "signed-in Personal Agent Web" in message.text
+    assert "signed-in Qixu web console" in message.text
     assert "http" not in message.text
 
 

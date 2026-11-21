@@ -10,7 +10,7 @@ from personal_agent.commands import conversation
 # ---- setup commands ---------------------------------------------------------------------
 def test_version_flag():
     result = invoke("--version")
-    assert result.exit_code == 0 and "personal-agent" in result.output
+    assert result.exit_code == 0 and "Qixu" in result.output and "personal-agent" in result.output
 
 
 def test_init_creates_a_private_home_and_is_safe_to_repeat(home):

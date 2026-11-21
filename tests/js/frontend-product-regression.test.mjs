@@ -73,7 +73,7 @@ function setup({ record, duration = async () => 1, shrink = async file => file, 
     canRecord: () => canRecord, audioDuration: duration, shrinkImage: shrink,
     api: async (path, options) => { calls.push({ path, options }); return respond ? await respond(path, options) : {}; },
     matchMedia: () => ({ matches: false }), commandHints: () => [], newClientId: () => "client-a", scrolls,
-    durationLabel: () => "0:00", connectionLabel: () => "已连接", activityLabel: () => "已完成", localStorage: { getItem() { return null; } },
+    durationLabel: () => "0:00", pageTitle: (agent, unread = 0) => (unread ? `(${unread}) ` : "") + agent, connectionLabel: () => "已连接", activityLabel: () => "已完成", localStorage: { getItem() { return null; } },
     // sheet.js is covered by its own tests; here a sheet only has to open and close like a dialog.
     presentSheet(dialog, { document: doc }) { doc.body.append(dialog); dialog.showModal(); }, dismissSheet(dialog) { dialog.close(); },
   };

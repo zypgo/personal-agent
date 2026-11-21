@@ -292,9 +292,9 @@ class ArtifactStore:
                 text = description.strip() or f"File ready: {filename} ({len(data)} bytes)."
                 if channel not in ("web", "telegram"):
                     text += (
-                        " Open your signed-in Personal Agent Web conversation to download the file."
+                        " Open your signed-in Qixu web console to download the file."
                         if web_enabled
-                        else " The file is saved locally; enable Personal Agent Web and sign in to download it."
+                        else " The file is saved locally; turn on the Qixu web console and sign in to download it."
                     )
                 outbox_id = Outbox(self.db, self.clock).enqueue(
                     session_key=session_key,

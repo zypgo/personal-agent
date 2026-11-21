@@ -4,17 +4,19 @@ safe from whatever the agent happens to be called. The JavaScript is exercised b
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import shutil
 import struct
 import subprocess
+import zlib
 from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
 
-from personal_agent.channels.web.api import STATIC_DIR, load_assets
+from personal_agent.channels.web.api import STATIC_DIR, load_assets, page_title
 from personal_agent.channels.web.security import CSP
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -322,7 +324,7 @@ def test_the_manifest_is_valid_and_its_icons_are_real_pictures_of_the_size_it_cl
     found, _ = assets
     manifest = json.loads(found["manifest.webmanifest"].body)
     assert manifest["display"] == "standalone" and manifest["start_url"] == "/"
-    assert manifest["name"] == manifest["short_name"] == "Agent"
+    assert manifest["name"] == manifest["short_name"] == "栖序"
     purposes = {(i["sizes"], i.get("purpose")) for i in manifest["icons"]}
     assert {("192x192", "any"), ("512x512", "any"), ("512x512", "maskable")} <= purposes
     for icon in manifest["icons"]:
@@ -337,6 +339,33 @@ def test_the_home_screen_icon_for_ios_is_a_180_pixel_picture(assets):
     link = next(a for a in page_of(assets).named("link") if a.get("rel") == "apple-touch-icon")
     body = found[url_to_name(link["href"])].body
     assert body[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", body[16:24]) == (180, 180)
+
+
+def test_the_png_icons_are_what_the_script_draws_from_the_svg():
+    """So that a changed icon.svg can't leave stale pictures behind (or a rerun undo it)."""
+    spec = importlib.util.spec_from_file_location("make_icons", ROOT / "scripts/make_icons.py")
+    assert spec and spec.loader
+    drawing = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(drawing)
+
+    def pixels(body: bytes) -> bytes:
+        data, offset = b"", 8
+        while offset < len(body):
+            (length,) = struct.unpack(">I", body[offset : offset + 4])
+            if body[offset + 4 : offset + 8] == b"IDAT":
+                data += body[offset + 8 : offset + 8 + length]
+            offset += 12 + length
+        return zlib.decompress(data)
+
+    for name, size, bleed in drawing.ICONS:
+        drawn = drawing.render(STATIC_DIR / "icon.svg", size, bleed=bleed)
+        committed = pixels((STATIC_DIR / name).read_bytes())
+        assert len(committed) == len(drawn), name
+        # Float rounding can differ by a level between machines; a different picture differs a lot.
+        worst = max(abs(a - b) for a, b in zip(committed, drawn, strict=True))
+        assert worst <= 1, (
+            f"{name} is out of step with icon.svg: uv run python scripts/make_icons.py"
+        )
 
 
 def test_the_svg_icon_is_a_picture_and_nothing_that_could_run(assets):
@@ -472,11 +501,13 @@ def test_the_page_keeps_nothing_secret_where_a_script_could_read_it(assets):
 def test_a_hostile_agent_name_is_text_in_the_page_and_never_markup():
     found, _ = load_assets(agent=HOSTILE)
     page = Page(found["index.html"].body.decode())
-    assert page.title == "个人助理 · " + HOSTILE
+    assert page.title == HOSTILE + " · 栖序"
     titles = [
         a["content"] for a in page.named("meta") if a.get("name") == "apple-mobile-web-app-title"
     ]
-    assert titles == [HOSTILE]
+    assert titles == [
+        "栖序"
+    ]  # the home-screen label is the product's, whatever the agent is called
     assert [s.get("src") for s in page.named("script")] == [
         next(s["src"] for s in page.named("script"))
     ]
@@ -484,18 +515,23 @@ def test_a_hostile_agent_name_is_text_in_the_page_and_never_markup():
     assert b"<script>alert" not in found["index.html"].body
 
 
-def test_a_hostile_agent_name_stays_one_string_in_the_manifest():
+def test_the_agent_name_stays_out_of_the_manifest():
     found, _ = load_assets(agent=HOSTILE)
     manifest = json.loads(found["manifest.webmanifest"].body)
-    assert manifest["name"] == manifest["short_name"] == HOSTILE
+    assert manifest["name"] == manifest["short_name"] == "栖序"
     assert len(manifest["icons"]) == 3  # nothing else in the file moved
 
 
 def test_the_name_is_never_read_as_a_placeholder_itself():
     found, version = load_assets(agent="{{version}}")
-    assert Page(found["index.html"].body.decode()).title == "个人助理 · {{version}}"
-    assert json.loads(found["manifest.webmanifest"].body)["name"] == "{{version}}"
+    assert Page(found["index.html"].body.decode()).title == "{{version}} · 栖序"
     assert version != "{{version}}"
+
+
+def test_the_tab_is_titled_with_the_product_and_the_agent_name_comes_first():
+    assert page_title("Ada") == "Ada · 栖序"
+    assert page_title("栖序") == "栖序"  # an agent named after the product is not said twice
+    assert page_title("") == "栖序"
 
 
 def test_no_placeholder_is_left_unfilled(assets):

@@ -1,6 +1,6 @@
 # Grok Bot 自动接单配置指南
 
-用你已有的 Personal Agent 服务和 Grok Bot 账号，跑通这条流程：「批准任务 → 唤醒 Grok → 执行 → 回传文件 → owner 验收」。不用新增云沙箱，这条调度链路也不需要配模型 API key；Grok 执行任务时，用的还是你自己产品的额度。
+用你已有的栖序服务和 Grok Bot 账号，跑通这条流程：「批准任务 → 唤醒 Grok → 执行 → 回传文件 → owner 验收」。不用新增云沙箱，这条调度链路也不需要配模型 API key；Grok 执行任务时，用的还是你自己产品的额度。
 
 下面的步骤还没有在真实的 Grok 账号上跑过，第一次连接时，每一步都要自己确认。
 
@@ -106,7 +106,7 @@ chmod 700 /workspace/pa-grok-bridge/run-worker.sh
 
 先让 Grok 建一个专用的接单 Routine，加上 webhook 触发；在桌面端 Routine 详情里查看 **POST to、key、header**。把 URL 和 key，直接填进 Railway 对应服务的私密变量 `GROK_ROUTINE_URL` 和 `GROK_ROUTINE_KEY`，让变量随部署生效。[1]
 
-再到 Personal Agent 里编辑刚建好的 Grok 连接：
+再到栖序里编辑刚建好的 Grok 连接：
 
 | 控制台字段 | 填什么 |
 | --- | --- |
@@ -127,7 +127,7 @@ Grok Bot 的 webhook 用 POST + Bearer，**只有 HTTP 200 才算接受，201 / 
 下面这段提示，同时用在 webhook Routine 和定时兜底 Routine 里。路径和凭据配好之后，不要每轮改动：
 
 ```text
-你是 Personal Agent 登记的 Grok 工作方。
+你是栖序登记的 Grok 工作方。
 唯一接单入口是 /workspace/pa-grok-bridge/run-worker.sh，固定状态目录
 /workspace/pa-grok-state；凭据由官方安全功能注入 PA_GROK_AGENT_TOKEN。
 不要展示凭据、请求头、私密账本，不读取平台内部secret文件。

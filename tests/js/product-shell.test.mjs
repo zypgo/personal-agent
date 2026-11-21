@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FakeElement, elements, find, toHtml } from "./fake_dom.mjs";
-import { createProductShell } from "../../src/personal_agent/channels/web/static/product-shell.js";
+import { createAgentMark, createProductShell } from "../../src/personal_agent/channels/web/static/product-shell.js";
 
 class Element extends FakeElement {
   constructor(tag, doc) {
@@ -41,7 +41,7 @@ function key(s, value, extra = {}) { const event = { key: value, defaultPrevente
 test("chat is the first destination and all existing tools retain their scoped deep links", () => {
   const s = setup();
   const links = find(s.nav, "a");
-  assert.deepEqual(links.map(item => item.textContent), ["个人助理", "任务", "资料", "助手与连接", "项目与成员", "设备与账号"]);
+  assert.deepEqual(links.map(item => item.textContent), ["对话", "任务", "资料", "助手与连接", "项目与成员", "设备与账号"]);
   assert.equal(links[0].getAttribute("aria-current"), "page");
   for (const [index, tab] of ["", "tasks", "knowledge", "agents", "spaces", "devices"].entries()) {
     const url = new URL(links[index].getAttribute("href"), "https://example.invalid");
@@ -51,6 +51,31 @@ test("chat is the first destination and all existing tools retain their scoped d
   }
   s.setSpace("new-space"); s.shell.setContext({ name: "新用户", space: "新空间", role: "成员" });
   assert.ok(find(s.nav, "a").every(link => link.getAttribute("href").includes("space=new-space")));
+});
+
+test("the drawer opens with the product's name beside its mark, and the owner's name below", () => {
+  const s = setup();
+  const brand = find(s.shell.element, "a").find(item => item.className === "product-brand");
+  assert.equal(brand.textContent, "栖序Qixu");
+  assert.equal(brand.children[0].className, "product-mark");
+  const identity = elements(s.shell.element).find(item => item.className === "product-identity");
+  assert.equal(find(identity, "strong")[0].textContent, "栖序"); // no name known yet
+  s.shell.setContext({ name: "Frank", space: "家", role: "主人" });
+  assert.equal(find(identity, "strong")[0].textContent, "Frank");
+  assert.equal(identity.children[0].textContent, "F");
+});
+
+test("the mark is two paths that can move on their own, and data-state says how the assistant is doing", () => {
+  const doc = { createElement: tag => new Element(tag, doc), createElementNS: (_, tag) => new Element(tag, doc) };
+  const mark = createAgentMark(doc, "tile", "busy");
+  assert.equal(mark.className, "product-mark tile");
+  assert.equal(mark.getAttribute("aria-hidden"), "true");
+  assert.equal(mark.getAttribute("data-state"), "busy");
+  const svg = find(mark, "svg")[0];
+  assert.equal(svg.getAttribute("viewBox"), "83 91 312 312");
+  assert.deepEqual(find(svg, "path").map(path => path.getAttribute("class")), ["mark-orbit", "mark-leaf"]);
+  assert.equal(createAgentMark(doc).hasAttribute("data-state"), false);
+  assert.equal(createAgentMark(doc).className, "product-mark");
 });
 
 test("desktop collapse persists only its layout choice and removes hidden navigation from focus", () => {

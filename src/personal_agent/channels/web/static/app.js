@@ -19,6 +19,7 @@ import {
   durationLabel,
   expiresIn,
   newClientId,
+  pageTitle,
   parsePairing,
 } from "./format.js";
 import { canRecord, record, shrinkImage } from "./media.js";
@@ -163,7 +164,7 @@ async function start(notice = "", { paired = false } = {}) {
     if (error.status !== 401) return showOffline(error.message);
     return showPairing(paired ? KEPT_NOTHING : problem);
   }
-  document.title = session.agent;
+  document.title = pageTitle(session.agent);
   await showChat(problem);
 }
 
@@ -210,8 +211,8 @@ function showPairing(problem = "") {
     h(
       "main",
       { class: "pair" },
-      createAgentMark(document, "pair-brand-mark", "idle"),
-      h("p", { class: "assistant-eyebrow", text: "Personal Agent" }),
+      createAgentMark(document, "pair-brand-mark tile", "idle"),
+      h("p", { class: "assistant-eyebrow", text: "栖序 Qixu" }),
       h("h1", { text: "连接你的个人助理" }),
       h("p", { class: "lede", text: "可以和它聊天、整理资料、设提醒，也可以把要做的事交给它去办。先连接你的账号。" }),
       h(
@@ -240,8 +241,8 @@ function showOffline(message) {
     h(
       "main",
       { class: "pair" },
-      createAgentMark(document, "pair-brand-mark", "offline"),
-      h("h1", { text: document.title || "Agent" }),
+      createAgentMark(document, "pair-brand-mark tile", "offline"),
+      h("h1", { text: "栖序" }),
       h("p", { class: "lede", text: message }),
       h("button", { type: "button", class: "primary", text: "重新连接", onclick: () => start() }),
     ),
@@ -348,7 +349,7 @@ function buildChat() {
   const update = h("button", { type: "button", class: "update", hidden: true, text: "有新版本可用，点击更新。", onclick: () => location.reload() });
   const loadMore = h("button", { type: "button", class: "earlier", hidden: true, text: "查看更早的对话", onclick: loadEarlier });
   const working = h("div", { class: "working", hidden: true, "aria-hidden": "true" }, createAgentMark(document, "", "busy"), h("span", { class: "working-text" }));
-  const log = h("main", { class: "log", id: "log", role: "log", "aria-live": "polite", "aria-label": "个人助理对话", tabindex: "-1" }, loadMore, working);
+  const log = h("main", { class: "log", id: "log", role: "log", "aria-live": "polite", "aria-label": "对话", tabindex: "-1" }, loadMore, working);
   const jump = h("button", { type: "button", class: "jump", hidden: true, onclick: () => scrollToBottom(true) }, icon("down"), h("span", { class: "jump-count" }));
   const toasts = h("div", { class: "toasts" });
   const mark = createAgentMark(document, "chat-brand-mark", "idle");
@@ -881,7 +882,7 @@ function buildComposer() {
     rows: "1",
     enterkeyhint: "send",
     placeholder: "说说你想做的事…",
-    "aria-label": "给个人助理发消息",
+    "aria-label": `给${session?.agent || "栖序"}发消息`,
     autocomplete: "off",
     autocapitalize: "sentences",
     maxlength: "20000",
@@ -1309,7 +1310,7 @@ function watchViewport() {
 }
 
 function setBadge(count) {
-  document.title = (count ? `(${count}) ` : "") + (session?.agent ?? document.title.replace(/^\(\d+\) /, ""));
+  document.title = session?.agent ? pageTitle(session.agent, count) : (count ? `(${count}) ` : "") + document.title.replace(/^\(\d+\) /, "");
   try {
     if (count) navigator.setAppBadge?.(count);
     else navigator.clearAppBadge?.();

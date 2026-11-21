@@ -116,9 +116,7 @@ async def test_send_uses_staff_id_json_string_params_and_token_header(rig):
             "robotCode": "robot",
             "userIds": ["owner"],
             "msgKey": "sampleMarkdown",
-            "msgParam": json.dumps(
-                {"title": "Personal Agent", "text": "你好 **world**"}, ensure_ascii=False
-            ),
+            "msgParam": json.dumps({"title": "栖序", "text": "你好 **world**"}, ensure_ascii=False),
         }
     ]
     assert fake.calls(SEND_PATH)[0].headers[TOKEN_HEADER] == "offline-access"

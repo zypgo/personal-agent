@@ -57,7 +57,7 @@ class _Section(BaseModel):
 
 
 class AgentConfig(_Section):
-    name: str = "Assistant"
+    name: str = "栖序"
     owner_name: str | None = None
     timezone: str | None = None
     """IANA zone name. `None` = detect from the system."""
@@ -837,10 +837,10 @@ class Config(_Section):
 
 
 DEFAULT_CONFIG_TOML = """\
-# personal-agent configuration. Keys such as OPENAI_API_KEY go in .env.
+# Qixu configuration. Keys such as OPENAI_API_KEY go in .env.
 
 [agent]
-name = "Assistant"
+name = "栖序"
 # owner_name = "Your Name"
 # timezone = "Asia/Shanghai"     # IANA name; default: detected from this machine
 max_turns = 25                   # model calls per run before the harness stops it
@@ -1022,7 +1022,7 @@ transcribe_model = "gpt-transcribe"
 
 
 DEFAULT_ENV = """\
-# Keys for personal-agent. Put your key after the equals sign.
+# Keys for Qixu. Put your key after the equals sign.
 OPENAI_API_KEY=
 
 # Optional: an OpenAI-compatible endpoint instead of api.openai.com

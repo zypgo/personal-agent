@@ -96,7 +96,7 @@ async def run_native(app: App, request: NativeRequest, callbacks: NativeCallback
     engine = Engine.acquire(app)
     if not engine.inline:
         engine.close()
-        return NativeResult("failed", "Another process owns this isolated Personal Agent runtime.")
+        return NativeResult("failed", "Another process owns this isolated Qixu runtime.")
     await callbacks.state({"session_id": session, "phase": "running"})
     try:
         # This is a user-role task, never a system/developer instruction. The host keeps
@@ -120,17 +120,17 @@ async def run_native(app: App, request: NativeRequest, callbacks: NativeCallback
                 trust=Trust.OWNER,
             )
         )
-        await callbacks.progress("Personal Agent is working on the approved request.")
+        await callbacks.progress("Qixu is working on the approved request.")
         for _ in range(33):
             results = await engine.settle(session, on_failure="drop")
             if not results:
-                return NativeResult("unknown", "Personal Agent has no final run receipt.")
+                return NativeResult("unknown", "Qixu has no final run receipt.")
             latest = results[-1]
             if latest.failure is not None:
-                return NativeResult("failed", "Personal Agent could not complete its native run.")
+                return NativeResult("failed", "Qixu could not complete its native run.")
             outcome = latest.outcome
             if outcome is None:
-                return NativeResult("unknown", "Personal Agent lost ownership of its native run.")
+                return NativeResult("unknown", "Qixu lost ownership of its native run.")
             await callbacks.state(
                 {
                     "turn_id": outcome.run_id,
@@ -141,22 +141,18 @@ async def run_native(app: App, request: NativeRequest, callbacks: NativeCallback
             if outcome.status != "awaiting_approval":
                 text = redact(outcome.final_text, known_secret_values())
                 if len(text) > MAX_NATIVE_TEXT:
-                    return NativeResult(
-                        "failed", "Personal Agent result exceeded the native output limit."
-                    )
+                    return NativeResult("failed", "Qixu result exceeded the native output limit.")
                 if outcome.status == "completed" and text.strip():
                     return NativeResult("succeeded", text)
-                return NativeResult(
-                    "failed", text or "Personal Agent did not produce a complete result."
-                )
+                return NativeResult("failed", text or "Qixu did not produce a complete result.")
             pending = app.approvals.pending(session)
             if not pending:
-                return NativeResult(
-                    "unknown", "Personal Agent suspended without a pending approval record."
-                )
+                return NativeResult("unknown", "Qixu suspended without a pending approval record.")
             for approval in pending:
                 question_id = f"pa-approval-{approval.id}"
-                text = f"Approve this specific Personal Agent action?\nTool: {approval.tool}\n{approval.summary}"
+                text = (
+                    f"Approve this specific Qixu action?\nTool: {approval.tool}\n{approval.summary}"
+                )
                 answer = await callbacks.question(question_id, text, ["approve", "reject"])
                 app.approvals.decide(
                     approval.id,
@@ -170,7 +166,7 @@ async def run_native(app: App, request: NativeRequest, callbacks: NativeCallback
                     return NativeResult(
                         "failed", "A required action was not approved; it did not execute."
                     )
-        return NativeResult("failed", "Personal Agent reached the delegated approval-round limit.")
+        return NativeResult("failed", "Qixu reached the delegated approval-round limit.")
     finally:
         try:
             await app.stop_services()
@@ -233,11 +229,11 @@ async def main() -> None:
         app = build_native_app(request, config=Config.model_validate(value["config"]))
         result = await run_native(app, request, NativeCallbacks(progress, question, state))
     except asyncio.CancelledError:
-        result = NativeResult("cancelled", "Personal Agent stopped after cancellation.")
+        result = NativeResult("cancelled", "Qixu stopped after cancellation.")
     except Exception:
         # Exceptions can contain paths, endpoint URLs or credential-bearing provider data.
         result = NativeResult(
-            "failed", "The isolated Personal Agent runtime could not complete this request."
+            "failed", "The isolated Qixu runtime could not complete this request."
         )
     finally:
         if app is not None:

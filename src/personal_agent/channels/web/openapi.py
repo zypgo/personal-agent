@@ -121,7 +121,7 @@ async def _schema_only_endpoint(request: Request) -> Response:
 def document() -> dict[str, Any]:
     """Exportable OpenAPI 3.1, with no instance-specific data or live side effects."""
     schema = get_openapi(
-        title="Personal Agent V3 API",
+        title="Qixu V3 API",
         version=__version__,
         description=(
             "Authenticated collaboration and durable execution. Browser writes also require "

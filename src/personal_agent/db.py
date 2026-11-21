@@ -624,7 +624,7 @@ class Database:
         if current > SCHEMA_VERSION:
             raise DatabaseTooNew(
                 f"database schema v{current} is newer than this program (v{SCHEMA_VERSION}); "
-                "upgrade personal-agent"
+                "upgrade Qixu"
             )
         for number in range(current + 1, SCHEMA_VERSION + 1):
             script = MIGRATIONS[number - 1]

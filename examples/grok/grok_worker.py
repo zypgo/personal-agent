@@ -29,9 +29,7 @@ def load_core(path=None, expected_sha256=None):
         try:
             from personal_agent.agent_adapters import bridge
         except ImportError:
-            raise AdapterError(
-                "Install Personal Agent, or supply --bridge and --bridge-sha256."
-            ) from None
+            raise AdapterError("Install Qixu, or supply --bridge and --bridge-sha256.") from None
         module = bridge
     else:
         if not expected_sha256 or not re.fullmatch(r"[a-fA-F0-9]{64}", expected_sha256):

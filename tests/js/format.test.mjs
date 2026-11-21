@@ -13,6 +13,7 @@ import {
   durationLabel,
   expiresIn,
   newClientId,
+  pageTitle,
   parsePairing,
 } from "../../src/personal_agent/channels/web/static/format.js";
 
@@ -107,4 +108,13 @@ test("clipping prefers the end of a word", () => {
   assert.equal(clip("short", 10), "short");
   assert.equal(clip("the quick brown fox jumps", 12), "the quick…");
   assert.equal(clip("abcdefghijklmnopqrstuvwxyz", 10), "abcdefghij…");
+});
+
+test("the tab is titled with the product; the agent's own name goes first and unread messages in front", () => {
+  assert.equal(pageTitle(""), "栖序");
+  assert.equal(pageTitle(undefined), "栖序");
+  assert.equal(pageTitle("Ada"), "Ada · 栖序");
+  assert.equal(pageTitle("栖序"), "栖序"); // an agent named after the product is not said twice
+  assert.equal(pageTitle("Ada", 3), "(3) Ada · 栖序");
+  assert.equal(pageTitle("", 2), "(2) 栖序");
 });

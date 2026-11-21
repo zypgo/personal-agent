@@ -93,5 +93,5 @@ def test_the_version_is_printed_without_the_model_sdk():
     )
     assert result.returncode == 0, result.stderr
     shown, loaded = result.stdout.strip().splitlines()[-2:]
-    assert shown.startswith("0 personal-agent "), shown
+    assert shown.startswith("0 Qixu "), shown
     assert loaded == "[]"

@@ -56,7 +56,7 @@ curl --fail --proto '=https' --tlsv1.2 \
 python3 pa-agent-bridge.py --help
 ```
 
-也可以从已经装了 Personal Agent 的电脑导出，再复制到云端：
+也可以从已经装了栖序的电脑导出，再复制到云端：
 
 ```bash
 pa agents export-bridge --output pa-agent-bridge.py
@@ -141,7 +141,7 @@ python3 pa-agent-bridge.py --home /workspace/pa-worker-state report ATTEMPT_ID \
 把下面这段文字放进已有的 Grok Routine 或 Muse 原生任务，替换脚本和状态目录的路径；不要把 token 放进提示。能不能持久安装 Skill、能不能定时执行，取决于你的账号实际提供的功能。
 
 ```text
-你是已登记的 Personal Agent 协作工作方。
+你是已登记的栖序协作工作方。
 使用 /workspace/pa-agent-bridge.py，状态目录 /workspace/pa-worker-state。
 凭据已经私密配置，不读取、不展示、不写入任务结果。
 
@@ -164,7 +164,7 @@ python3 pa-agent-bridge.py --home /workspace/pa-worker-state report ATTEMPT_ID \
 
 Muse 环境需要官方 Vault 注入或出站代理时，用 [Muse 通用示例和运行说明](../examples/muse/README.md)。这个适配器复用现有的 `WorkerBridge`，只换掉 HTTP 传输，并增加持久的交付记录；不启动额外的模型或云沙箱。它保留平台代理、验证 TLS、拒绝重定向，通过官方的 `dynamic_credentials.py` 向明确指定的 HTTPS 主机注入 `custom.<provider>` 凭据，不向模型导出真实的 token。
 
-`--url`、`--credential`、`--agent`、`--space` 都由部署的人显式设置。装了完整的 Personal Agent 时，直接复用配套的 bridge；独立运行的话，要提供 `--bridge` 和你独立核实过的 `--bridge-sha256`。先运行 `probe` 完成实际的权限检查，再配置原生定时任务，并创建已批准的测试任务。
+`--url`、`--credential`、`--agent`、`--space` 都由部署的人显式设置。装了完整的栖序时，直接复用配套的 bridge；独立运行的话，要提供 `--bridge` 和你独立核实过的 `--bridge-sha256`。先运行 `probe` 完成实际的权限检查，再配置原生定时任务，并创建已批准的测试任务。
 
 ```bash
 python3 /workspace/muse_vault_worker.py \
@@ -189,9 +189,9 @@ python3 /workspace/muse_vault_worker.py \
 
 之后，用原来的状态目录运行示例的 `reconcile`。它要求服务端 `stop-receipt` 里的原 attempt、generation 匹配，状态是 `stopped` 或 `accepted`，`stopped_by` 是非空字符串，`stopped_at` 是有限的正数、而且不是布尔值；光有一个 `accepted`，不足以释放。恢复只会把本地的接单指针标成已释放，原来的 pending 和历史都保留，不伪造结果回执，不重发旧任务，也不替 owner 停止远端的执行。完整步骤见 [Muse 恢复说明](../examples/muse/README.md#已验收结果与本地待确认请求的恢复)；服务端和适配器，都必须是包含这项恢复支持的版本。
 
-## Codex / Cursor / Personal Agent Host
+## Codex / Cursor / 栖序 Host
 
-Host 运行在你自己的 Linux 或 macOS 电脑上，要用完整安装的 Personal Agent；云端的 Grok / Muse 仍然只需要单文件桥接。Host 沿用同一个 worker token，以及同样的领取、租约、问答和候选结果接口。还没有在真实的 Codex / Cursor 账号上验证过，装好之后请在目标电脑上自己试一遍。
+Host 运行在你自己的 Linux 或 macOS 电脑上，要用完整安装的栖序；云端的 Grok / Muse 仍然只需要单文件桥接。Host 沿用同一个 worker token，以及同样的领取、租约、问答和候选结果接口。还没有在真实的 Codex / Cursor 账号上验证过，装好之后请在目标电脑上自己试一遍。
 
 先按前面讲的 `pa agents setup` 配好独立的状态目录，再由账号的拥有者，在原生 CLI 里用已有的账户登录。Host 不会发起登录，也不接受把 API key 放进命令行参数。
 
@@ -213,7 +213,7 @@ Git 项目默认要求源工作区是干净的（包括未跟踪的文件），�
 | --- | --- | --- |
 | Codex | `codex app-server --listen stdio://`；线程、turn、审批、终态事件、interrupt | 崩溃后不自动 resume，也不重放 prompt |
 | Cursor | `agent acp`，官方 `agent-client-protocol==1.0.0` SDK | 用已有的 CLI 身份；不支持账户级的远程会话 API |
-| Personal Agent | 独立 PA 子进程里已有的 Engine / Harness / ToolGuard | 只读取显式新建的 profile 配置，不复用原来的个人会话、记忆或旧的 PA home |
+| 栖序 | 独立 PA 子进程里已有的 Engine / Harness / ToolGuard | 只读取显式新建的 profile 配置，不复用原来的个人会话、记忆或旧的 PA home |
 
 升级原生 CLI 时，请重新核对协议。公开依据：[Codex app-server](https://developers.openai.com/codex/app-server)、[Cursor ACP](https://cursor.com/docs/cli/acp)、[ACP Python SDK](https://agentclientprotocol.com/libraries/python)。
 
@@ -221,11 +221,11 @@ Codex 的工具审批、Cursor 的单次工具权限，以及计划批准，都�
 
 每次启动原生程序之前，都先保存一份本地 journal，里面记着 PID、启动时间、boot 身份、原生的 session / turn、见过的子进程和终止的证据。Host 会对 profile 和规范化后的工作目录加本机锁，防止不同的 Host 同时往同一个目录里写。
 
-Codex / Cursor 会用到原生账号里已有的全局配置、记忆、Skills 和 MCP，所以默认只执行这个 Agent 的拥有者自己的请求。想接收别的成员的任务，必须同时满足：启动 Host 时显式加 `--allow-shared-native-profile`、服务端把这个 Agent 标成 `shared_environment`、任务是 `space` 可见的。其他成员的私密任务一律拒绝，并且在原生进程启动之前，就回传一个“没有执行”的失败候选。Personal Agent 这个 provider 用独立的配置和状态，并且把依赖内容用结构化标记保存下来，当作不可信的输入。
+Codex / Cursor 会用到原生账号里已有的全局配置、记忆、Skills 和 MCP，所以默认只执行这个 Agent 的拥有者自己的请求。想接收别的成员的任务，必须同时满足：启动 Host 时显式加 `--allow-shared-native-profile`、服务端把这个 Agent 标成 `shared_environment`、任务是 `space` 可见的。其他成员的私密任务一律拒绝，并且在原生进程启动之前，就回传一个“没有执行”的失败候选。栖序这个 provider 用独立的配置和状态，并且把依赖内容用结构化标记保存下来，当作不可信的输入。
 
 心跳默认每 30 秒一次；取消是协作式的，有传播的延迟。Host 先发原生的取消，再等原生的终态和本机进程清理；强制终止了但没有原生的终态，状态是 `unknown`。费用状态保持“未知”，token 用量不等于最终账单。
 
-### Personal Agent 独立配置
+### 栖序独立配置
 
 配置路径是 `WORKER_HOME/hosts/personal_agent/config.toml`，要你显式创建。示例里的模型名、地址和密钥的环境变量由你自己选；不要复制旧的 PA home：
 

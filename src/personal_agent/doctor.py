@@ -173,7 +173,7 @@ def _database_check(paths: Paths) -> Check:
             "database",
             "fail",
             f"schema v{found.schema} is newer than this program (v{SCHEMA_VERSION})",
-            "Upgrade personal-agent.",
+            "Upgrade Qixu.",
         )
     if exposed := [path for path in paths.exposed_files() if path != paths.env_file]:
         names = ", ".join(path.name for path in exposed)

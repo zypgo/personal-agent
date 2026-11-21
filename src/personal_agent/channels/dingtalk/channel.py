@@ -450,7 +450,7 @@ class DingTalkChannel:
         )
         if self.app.identities is not None:
             text = (
-                "Open your Personal Agent workspace, choose a space, and use Devices → "
+                "Open your Qixu workspace, choose a space, and use Devices → "
                 "Generate channel binding code. Send /bind followed by that code here. "
                 "New collaborators must first accept a project invitation."
             )
