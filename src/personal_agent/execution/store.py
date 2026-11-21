@@ -429,8 +429,7 @@ class ExecutionStore:
         plan = make_plan(
             command, timeout_s=timeout_s, input_manifest=input_manifest, output_paths=output_paths
         )
-        home = self.workspace.parent if self.workspace else Path("/__personal_agent_control__")
-        reason = check_command(command, home=home)
+        reason = check_command(command)
         if reason:
             raise ExecutionError(reason)
         plan["wake_on_completion"] = bool(wake_on_completion)
@@ -965,10 +964,7 @@ class ExecutionStore:
         plan = make_plan(
             command, timeout_s=timeout_s, input_manifest=input_manifest, output_paths=output_paths
         )
-        reason = check_command(
-            command,
-            home=self.workspace.parent if self.workspace else Path("/__personal_agent_control__"),
-        )
+        reason = check_command(command)
         if reason:
             raise ExecutionError(reason)
         plan["wake_on_completion"] = False

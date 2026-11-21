@@ -128,7 +128,7 @@ src/personal_agent/
     sanitize.py    ✅ 去掉隐藏字符和终端控制码
     policy.py      ✅ 分层的策略引擎
     guardian.py    ✅ `auto` 模式用的评审模型（失败就升级给人）
-    floors.py      ✅ 命令黑名单：提权、磁盘、系统目录这类命令直接拒绝
+    floors.py      ✅ 命令黑名单：格式化磁盘、`rm -rf` 根/家/系统目录、fork 炸弹、直接写磁盘
     sandbox.py     ✅ seatbelt / docker / none 三种后端；用到时才探测（SandboxProvider）
     broker.py      ✅ 密钥占位符：请求发出时才填入真实的值
     ssrf.py        ✅ 出站网关：默认不连内网地址
@@ -278,7 +278,7 @@ logs/ run/           日志、锁文件
   - **none**：不隔离，命令直接以你的身份运行（`[sandbox] backend = "none"`）。
 - 子进程的环境变量走白名单，不带 API key；输出会截断；正常退出、超时和取消，都会清理整个进程组（docker 后端同样清理容器）。判断命令是否结束，靠轮询 `returncode`，不靠管道关闭；最低支持的 Python 3.11，有单独的回归测试。
 - **用到时才选后端**：第一次需要的时候探测这台机器，真的跑一个小进程确认可用；常驻进程启动时会预热。沙箱不可用时，不提供 `shell` 工具，`pa doctor` 会说明原因。
-- **命令黑名单（floors）**：`sudo`、格式化磁盘、`rm -rf` 系统目录、`curl | sh`、读取 `.ssh` / `.env` / 钥匙串、改启动项这类命令直接拒绝，批准也不行。它读的是命令文本：看位置（`grep reboot` 不会被误拦），先剥掉引号、反斜杠和 `${IFS}`，批准之后、执行之前再查一次。
+- **命令黑名单（floors）**：只拦会毁掉机器的几类：格式化或重新分区磁盘、`rm -rf` 根目录 / 家目录 / 系统目录、fork 炸弹、直接写磁盘设备。直接拒绝，批准也不行。它读的是命令文本：看位置（`grep reboot` 不会被误拦），先剥掉引号、反斜杠和 `${IFS}`，批准之后、执行之前再查一次。别的命令，由沙箱限制，并按策略问你。
 - **文件工具**只读写 `PA_HOME/workspace`（已安装技能的目录只读）；`.env`、数据库、记忆都在它之外。打开文件时逐级检查目录、不跟符号链接（`tools/safefs.py`），只读普通文件，在线程里读；写入用原子替换，有大小上限，不读二进制。
 
 ### 密钥与联网工具（`security/broker.py`、`security/ssrf.py`、`tools/web.py`、`tools/urls.py`）

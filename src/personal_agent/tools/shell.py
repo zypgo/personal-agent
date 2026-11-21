@@ -122,7 +122,7 @@ def _validate(rc: RunContext, args: dict[str, Any]) -> str | None:
 
 
 def _floor(rc: RunContext, args: dict[str, Any]) -> str | None:
-    return check_command(str(args.get("command", "")), home=rc.app.paths.home)
+    return check_command(str(args.get("command", "")))
 
 
 def _available(app: App) -> str | None:
