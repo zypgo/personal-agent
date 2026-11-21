@@ -71,10 +71,10 @@ test("credential references reject raw URLs, secrets and shell expressions",()=>
   assert.deepEqual(secretReferences("",""),{});
 });
 
-test("Muse wake labels distinguish manual and existing native schedules without an automatic wake claim",()=>{
-  assert.match(wakeDescription({kind:"muse",wake_mode:"manual"}),/手动领取.*不会自动唤醒/);
-  assert.match(wakeDescription({kind:"muse",wake_mode:"native_schedule"}),/原生定时领取.*不会创建定时任务/);
-  assert.match(wakeDescription({kind:"cursor",wake_mode:"manual"}),/不会启动本机 CLI/);
+test("Muse wake labels distinguish manual and existing native schedules",()=>{
+  assert.match(wakeDescription({kind:"muse",wake_mode:"manual"}),/手动领取/);
+  assert.match(wakeDescription({kind:"muse",wake_mode:"native_schedule"}),/原生定时领取/);
+  assert.match(wakeDescription({kind:"cursor",wake_mode:"manual"}),/自有电脑执行/);
   assert.equal(statusLabel("planned"),"待确认计划");assert.equal(statusLabel("private_internal_code"),"等待状态更新");
 });
 
@@ -113,7 +113,7 @@ test("only agent owner receives rotation and revoke controls; revoked agents can
   assert.deepEqual(form.elements.filter(el=>el.name==="selected_agent").map(el=>el.value),["muse-a"]);
 });
 
-test("agent edits preserve existing capability declarations, require confirmation and use the full PATCH contract",async()=>{
+test("agent edits preserve existing capability declarations and use the full PATCH contract",async()=>{
   const agents=agentsFixture();agents[0]={...agents[0],capabilities:["claim"],wake_mode:"grok_routine",secret_env:{webhook_url:"OLD_URL",webhook_key:"OLD_KEY"}};
   const {ui,get,calls,secrets}=setup({agents,admin:true,respond:(path,options)=>path==="/api/v4/agents/grok-a" ? {agent:options.method==="PATCH"?{...agents[0],...options.body}:agents[0]} : undefined});
   await ui.loadAgents();await click(button(get("agents-list"),"编辑连接"));
@@ -133,7 +133,7 @@ test("new connections become selectable without losing a task draft or its lost-
   assert.ok(refreshed.elements.find(el=>el.name==="selected_agent" && el.value==="new"));
 });
 
-test("creating a plan never dispatches it; explicit confirmation binds approval to its exact revision and hash",async()=>{
+test("creating a plan never dispatches it; approval binds to its exact revision and hash",async()=>{
   const {ui,get,calls}=setup();await ui.loadTasks();
   const form=find(get("collaboration-compose-content"),"form")[0];
   form.elements.namedItem("title").value="Compare";form.elements.namedItem("prompt").value="Only this context";form.elements.namedItem("acceptance").value="Citations";
@@ -142,10 +142,9 @@ test("creating a plan never dispatches it; explicit confirmation binds approval 
   assert.equal(calls.filter(call=>call.path.endsWith("/approve")).length,0);
   const sent=calls.find(call=>call.path==="/api/v4/tasks" && call.method==="POST");
   assert.equal(sent.body.visibility,"private");assert.equal(sent.body.client_request_id,"stable-request");
-  const approval=find(get("collaboration-detail"),"form").find(item=>item.elements.namedItem("confirm_scope"));
-  const approve=button(approval,"批准并派发");assert.equal(approve.disabled,true);
-  await submit(approval);assert.equal(calls.filter(call=>call.path.endsWith("/approve")).length,0);
-  const consent=approval.elements.namedItem("confirm_scope");consent.checked=true;consent.listeners.get("change")();await submit(approval);
+  const approval=find(get("collaboration-detail"),"form").find(item=>button(item,"批准并派发"));
+  assert.ok(approval);
+  await submit(approval);
   assert.deepEqual(calls.find(call=>call.path.endsWith("/approve")).body,{revision:3,plan_hash:"confirmed-plan"});
 });
 
@@ -189,7 +188,6 @@ test("shared-task reviewers see the actual recipient metadata even without an ag
   const task=taskFixture();task.visibility="space";task.can_manage=true;task.can_approve=true;task.steps[0]={...task.steps[0],agent_id:"unlisted",agent_name:"Bob's Grok",agent_kind:"grok",agent_owner_id:"bob",shared_environment:true};
   const {ui,get}=setup({task,agents:[],role:"owner"});await ui.loadTasks();ui.renderTask(task);
   assert.match(get("collaboration-detail").textContent,/Bob's Grok/);assert.match(get("collaboration-detail").textContent,/Grok · 所有者：Bob/);
-  assert.match(get("collaboration-detail").textContent,/共享原生环境/);
 });
 
 test("uncertain execution offers no retry or acceptance, and queued dependencies remain blocked until accepted",async()=>{
@@ -204,7 +202,7 @@ test("cancel requests do not manufacture a terminal state",async()=>{
   const task=taskFixture();task.state="running";
   const {ui,get,calls,notices}=setup({task});ui.renderTask(task);await click(button(get("collaboration-detail"),"取消任务"));
   assert.ok(calls.find(call=>call.path.endsWith("/cancel")));assert.equal(task.state,"running");
-  assert.match(notices.at(-1)[0],/实际状态/);assert.match(get("collaboration-detail").textContent,/正在处理/);
+  assert.match(notices.at(-1)[0],/已提交取消/);assert.match(get("collaboration-detail").textContent,/正在处理/);
 });
 
 test("failed remote results cannot be accepted even when another task step is eligible",()=>{
@@ -215,25 +213,22 @@ test("failed remote results cannot be accepted even when another task step is el
   assert.ok(button(get("collaboration-detail"),"拒绝此成果"));
 });
 
-test("stop attestation requires owner capability, explicit acknowledgment and the current attempt",async()=>{
+test("stop confirmation needs the owner capability and names the current attempt",async()=>{
   const task=taskFixture();task.state="uncertain";task.steps[0]={...task.steps[0],state:"uncertain",can_confirm_stopped:true,attempt:{id:"attempt-a"}};
   const {ui,get,calls}=setup({task});ui.renderTask(task);
-  const form=find(get("collaboration-detail"),"form").find(item=>item.elements.namedItem("stop_note"));
-  form.elements.namedItem("stop_note").value="Checked the native session is stopped.";
-  await submit(form);assert.equal(calls.filter(call=>call.path.endsWith("/stopped")).length,0);
-  form.elements.namedItem("confirm_stopped").checked=true;await submit(form);
-  assert.deepEqual(calls.find(call=>call.path.endsWith("/stopped")).body,{step_id:"s1",attempt_id:"attempt-a",note:"Checked the native session is stopped."});
-  task.steps[0].can_confirm_stopped=false;ui.renderTask(task);assert.equal(button(get("collaboration-detail"),"记录停止确认"),undefined);
+  const form=find(get("collaboration-detail"),"form").find(item=>button(item,"确认已停止"));
+  await submit(form);
+  assert.deepEqual(calls.find(call=>call.path.endsWith("/stopped")).body,{step_id:"s1",attempt_id:"attempt-a",note:"已确认停止"});
+  task.steps[0].can_confirm_stopped=false;ui.renderTask(task);assert.equal(button(get("collaboration-detail"),"确认已停止"),undefined);
 });
 
-test("Grok wake uncertainty is visible and only an explicit owner attestation releases a wake",async()=>{
+test("Grok wake uncertainty is visible and the owner can release a wake",async()=>{
   const task=taskFixture();task.state="queued";task.steps[0].state="queued";task.wakes=[{id:"wake-a",step_id:"s1",state:"uncertain",can_confirm_stopped:true}];
   const {ui,get,calls}=setup({task});await ui.loadTasks();ui.renderTask(task);
   assert.match(get("collaboration-list").textContent,/触发待核查/);assert.match(get("collaboration-detail").textContent,/未确认 Routine 是否收到触发/);
-  const form=find(get("collaboration-detail"),"form").find(f=>f.elements.namedItem("wake_stop_note"));form.elements.namedItem("wake_stop_note").value="Verified the remote routine never ran.";
-  await submit(form);assert.equal(calls.filter(call=>call.path.endsWith("/wakes/wake-a/stopped")).length,0);
-  form.elements.namedItem("confirm_wake_stopped").checked=true;await submit(form);
-  assert.deepEqual(calls.find(call=>call.path.endsWith("/wakes/wake-a/stopped")).body,{note:"Verified the remote routine never ran."});
+  const form=find(get("collaboration-detail"),"form").find(f=>button(f,"确认触发已结束"));
+  await submit(form);
+  assert.deepEqual(calls.find(call=>call.path.endsWith("/wakes/wake-a/stopped")).body,{note:"已确认停止"});
 });
 
 test("connection guide shows server-provided MCP, OpenAPI and Bridge addresses without retaining a credential",async()=>{
@@ -251,8 +246,8 @@ test("resource owner can clear opaque occupancy without fetching another member'
   const {ui,get,calls}=setup({respond:path=>path==="/api/v4/agents/grok-a/occupancy" ? {attempts:[{task_id:"private-task",step_id:"s-private",attempt_id:"attempt-private",state:"uncertain",can_confirm_stopped:true,prompt:"must-not-render-private-prompt"}],wakes:[]} : undefined});
   await ui.loadAgents();const panel=find(get("agents-list"),"details").find(el=>el.children[0].textContent==="处理占用与失联");panel.open=true;await panel.listeners.get("toggle")();
   assert.doesNotMatch(panel.textContent,/must-not-render-private-prompt|private-task|attempt-private/);
-  const form=find(panel,"form")[0];form.elements.namedItem("occupancy_note").value="Checked native execution stopped.";form.elements.namedItem("confirm_occupancy").checked=true;
-  await submit(form);assert.deepEqual(calls.find(call=>call.path==="/api/v4/tasks/private-task/stopped").body,{step_id:"s-private",attempt_id:"attempt-private",note:"Checked native execution stopped."});
+  const form=find(panel,"form")[0];
+  await submit(form);assert.deepEqual(calls.find(call=>call.path==="/api/v4/tasks/private-task/stopped").body,{step_id:"s-private",attempt_id:"attempt-private",note:"已确认停止"});
   assert.equal(calls.some(call=>call.path==="/api/v4/tasks/private-task"),false);
 });
 
@@ -308,20 +303,6 @@ test("reselecting the current collaboration task preserves an unanswered draft",
   assert.equal(editor.elements.namedItem("answer").value,"Keep my unfinished answer");
   assert.equal(editor.dataset.dirty,"1");
   assert.equal(calls.filter(call=>call.path===`/api/v4/tasks/${task.id}`).length,reads);
-});
-
-test("declining an agent edit confirmation keeps the unsaved draft protected",async()=>{
-  const agents=agentsFixture();
-  const {ui,get,calls}=setup({agents,confirm:false,respond:path=>path==="/api/v4/agents/grok-a" ? {agent:agents[0]} : undefined});
-  await ui.loadAgents();await click(button(get("agents-list"),"编辑连接"));
-  const editor=find(get("agent-create-content"),"form")[0];
-  editor.elements.namedItem("name").value="Unfinished agent name";editor.listeners.get("input")();
-  await submit(editor);
-  assert.equal(calls.some(call=>call.method==="PATCH"),false);
-  assert.equal(editor.dataset.dirty,"1");
-  assert.equal(editor.elements.namedItem("name").value,"Unfinished agent name");
-  assert.equal(editor.elements.namedItem("name").disabled,false);
-  assert.equal(get("agent-create").open,true);
 });
 
 for(const reduced of [true,false])test(`opening an agent editor ${reduced ? "honors reduced motion" : "uses the standard scroll transition"}`,async()=>{

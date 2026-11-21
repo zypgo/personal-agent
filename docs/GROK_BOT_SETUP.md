@@ -2,7 +2,7 @@
 
 用你已有的 Personal Agent 服务和 Grok Bot 账号，跑通这条流程：「批准任务 → 唤醒 Grok → 执行 → 回传文件 → owner 验收」。不用新增云沙箱，这条调度链路也不需要配模型 API key；Grok 执行任务时，用的还是你自己产品的额度。
 
-**先说清楚验证到了哪一步：这次开发没有登录 Grok，也没有真正和 Grok 联调过。** 下面的步骤是给你第一次连接、自己验收用的。Muse 那边的真实成功记录，不能代替 Grok 的验收。
+下面的步骤还没有在真实的 Grok 账号上跑过，第一次连接时，每一步都要自己确认。
 
 推荐的做法：**有任务时用 Webhook 叫醒，再加一个每 15 分钟的原生 Routine 兜底。** 想更快兜底，可以改成每 5 分钟；官方允许的最短间隔是 5 分钟，而且每一轮都会消耗用量。[1]
 
@@ -18,7 +18,7 @@
 | `GROK_ROUTINE_URL` | Railway 服务变量 | **服务端 → Grok**，Routine 界面里 “POST to” 的地址 |
 | `GROK_ROUTINE_KEY` | Railway 服务变量 | 同一个 Routine 的 webhook key，发送时用 Bearer |
 
-两组令牌不能互换。真实的值只填到对应平台的私密配置表单里，不要填进普通聊天、Shell 命令里的字面量、脚本、Git、任务正文或截图。控制台里的 `secret_env` 只存变量名。
+两组令牌不能互换。真实的值只填到对应平台的私密配置表单里。控制台里的 `secret_env` 只存变量名。
 
 在控制台选好空间，打开 **Agent → ＋ 连接 Agent**：
 
@@ -26,7 +26,7 @@
 2. 保存连接，私密保管只显示一次的 worker token，记下 `agent_id`、`space_id` 和服务端的 HTTPS origin。
 3. 先不要创建已批准的任务。等下面的配置全部做完再验收，免得中途修改连接，让旧计划失效。
 
-同一个账号下的 Grok Bots 共用云端电脑、文件和 CLI 凭据；目录权限没法把这些 Bots 变成互相隔离的沙箱。[2]
+同一个账号下的 Grok Bots 共用云端电脑、文件和 CLI 凭据。[2]
 
 ## 2. 把代码包交给 Grok
 
@@ -39,7 +39,7 @@ SHA256SUMS
 GROK_BOT_SETUP.md
 ```
 
-直接把 ZIP 作为附件发给 Grok，让它解压到固定目录 **`/workspace/pa-grok-bridge`**。不要求 Grok 匿名访问你的私有 GitHub 仓库，也不要把下载的内容直接用管道执行。先运行：
+直接把 ZIP 作为附件发给 Grok，让它解压到固定目录 **`/workspace/pa-grok-bridge`**，然后运行：
 
 ```bash
 cd /workspace/pa-grok-bridge
@@ -48,17 +48,17 @@ python3 --version
 python3 grok_worker.py --help
 ```
 
-要求 Python 3.11 以上；两个 Python 文件只用标准库，可以单独运行。所有哈希都通过之后，从随包的清单里记下 `pa-agent-bridge.py` 的 SHA-256，后面用 `YOUR_BRIDGE_SHA256` 代表它。哈希只是用来核对你这次审阅的附件有没有被改过；如果哈希和代码是从同一个来路不明的地方一起拿来的，它就不能证明来源可靠。
+要求 Python 3.11 以上；两个 Python 文件只用标准库，可以单独运行。所有哈希都通过之后，从随包的清单里记下 `pa-agent-bridge.py` 的 SHA-256，后面用 `YOUR_BRIDGE_SHA256` 代表它。
 
 仓库里的源码位置：`examples/grok/grok_worker.py`；共用的 WorkerBridge / WorkerDispatcher 在 `src/personal_agent/agent_adapters/bridge.py`。想自己打包的话，在同一版本的已安装项目里运行 `pa agents export-bridge --output pa-agent-bridge.py`，再生成并核对清单；不要混用不同版本。
 
 状态目录固定为 **`/workspace/pa-grok-state`**，放在 Git 仓库外面，跟脚本目录分开。`/workspace` 是官方的持久工作目录：已经同步的文件通常会保留，但电脑恢复时，最近没同步的修改可能丢；手动安装的包和虚拟环境不保证保留。[2]
 
-## 3. 安全保存 worker token，并验证它真的被注入了
+## 3. 保存 worker token，并确认它被注入了
 
 请 Grok 发起官方的 **secure secret card**，告诉它要保存的名称是 `PA_GROK_AGENT_TOKEN`；你在安全卡片里填入专用的 worker token，选 **Save securely**。Team Bot 的 owner / manager，也可以在 Bot 详情的 **Secrets → Add secret** 里填写这个环境变量名、说明和值。[3]
 
-**第一次连接前必须知道：** 公开文档没有保证，每个个人账号的 secure secret card 都会把值注入到任意 Python 进程里。所以，不能把“已保存”当成“脚本能用”，也不能靠回显、导出或读取平台内部的凭据文件来验证。下面只通过正常的 worker 接口来确认。
+公开文档没有保证 secure secret card 的值一定会注入到 Python 进程里，所以“已保存”不等于“脚本能用”。下面用 worker 接口来确认。
 
 先把非秘密的配置写进专用的状态目录；把所有 `YOUR_...` 换成你自己的配置：
 
@@ -73,9 +73,9 @@ python3 /workspace/pa-grok-bridge/grok_worker.py \
   --token-env PA_GROK_AGENT_TOKEN
 ```
 
-`setup` 只在这个身份第一次配置时运行。它保存环境变量的名称，不保存令牌的值，也没有 `--token-stdin`；更新脚本时保留原来的 home。之后需要联网的命令，都从平台注入的进程环境里取值。默认的 `system-proxy` 会保留平台的代理和 TLS 验证、拒绝重定向；`direct` 只能显式选择，也不会在失败后自动切换。不要用它绕过平台的拒绝或审批。
+`setup` 只在这个身份第一次配置时运行。它保存环境变量的名称，不保存令牌的值，也没有 `--token-stdin`；更新脚本时保留原来的 home。之后需要联网的命令，都从平台注入的进程环境里取值。默认的 `system-proxy` 会保留平台的代理和 TLS 验证、拒绝重定向；`direct` 只能显式选择，也不会在失败后自动切换。
 
-为了让每次运行的参数固定，在脚本目录里创建下面这个**不含秘密**的 `run-worker.sh`：
+为了让每次运行的参数固定，在脚本目录里创建 `run-worker.sh`：
 
 ```bash
 #!/usr/bin/env bash
@@ -100,7 +100,7 @@ chmod 700 /workspace/pa-grok-bridge/run-worker.sh
 - `status`：联网的只读核查，验证身份、权限和实际能不能连通。
 - `probe`：调用 worker hello，登记能力和在线状态。**它不是纯只读的**；但它不领取、不执行任务。
 
-正常的 `status` / `probe` 都成功之后，才继续配自动接单。变量缺失、还是占位符、401 / 403、或者被平台审批挡住时，保留错误类别，先别配自动任务；也不要打印环境变量、令牌或请求头。这时可以改用第 8 节的官方 Remote HTTPS MCP 连接。
+正常的 `status` / `probe` 都成功之后，才继续配自动接单。变量缺失、还是占位符、401 / 403、或者被平台审批挡住时，保留错误类别，先别配自动任务。这时可以改用第 8 节的官方 Remote HTTPS MCP 连接。
 
 ## 4. 配 Webhook 和定时兜底
 
@@ -150,9 +150,9 @@ Grok Bot 的 webhook 用 POST + Bearer，**只有 HTTP 200 才算接受，201 / 
 9. 有任务、进展或阻塞时按事实报告；空轮询不发送无事可做的消息。
 ```
 
-Grok 里的 **Always allow** 会保存成 Custom Rules。只应授权这一个你审阅过的脚本、固定的状态目录，以及精确的服务端工作请求。要核对界面上实际保存的范围；保留 Auto Review，不要设“允许一切”的规则。Ask first 优先，内置检查仍然生效；后台审批大约 30 分钟后过期。[4]
+Grok 里的 **Always allow** 会保存成 Custom Rules，授权这一个脚本、固定的状态目录和服务端的工作请求就够了，保存后在界面上看一下实际的范围。后台审批大约 30 分钟后过期。[4]
 
-不要照搬 Muse 的 “Always allow for this scheduled task” 的范围：Grok 官方说的是账户级的 Custom Rules。如果这次的动作没有持久授权的选项，或者规则仍然要求确认，就如实记成“暂时还不能无人值守”；安全凭据保存好了，也不等于工具动作已经获批。
+Grok 的 Custom Rules 是账户级的，和 Muse 的 “Always allow for this scheduled task” 不一样。如果这次的动作没有持久授权的选项，或者规则仍然要求确认，就记成“暂时还不能无人值守”。
 
 ## 6. 用一个新任务验收自动接单
 
@@ -212,7 +212,7 @@ CSV列为nonce,region,order_count,quantity,revenue；包括North、South、TOTAL
 | `uncertain ATTEMPT_ID --text '原因'` | 记录无法确认的执行，等人核对 |
 | `reconcile` | 拿到匹配的、明确的 owner 停止证明后，释放本地的接单指针 |
 
-私密状态目录的权限是 0700，账本和 outbox 是 0600。里面有任务正文和租约，不能当附件，也不能出现在调试输出里。`local-status` 不会改动账本的原始字节；不存在 attempt 时，有些字段不会返回，别把缺失的值当成 `false`。
+状态目录的权限是 0700，账本和 outbox 是 0600，里面有任务正文和租约，别当附件发出去。不存在 attempt 时，`local-status` 的有些字段不会返回，别把缺失的值当成 `false`。
 
 结果正文最多 64,000 个字符；最多 8 个附件，单个不超过 2 MiB，合计不超过 8 MiB。
 
@@ -220,7 +220,7 @@ CSV列为nonce,region,order_count,quantity,revenue；包括North、South、TOTAL
 
 | 现象 | 怎么办 |
 | --- | --- |
-| 变量没注入、401 / 403 | 核对同一个 Agent 的安全凭据和授权；不要打印 secret，也不要改用明文文件 |
+| 变量没注入、401 / 403 | 核对同一个 Agent 的安全凭据和授权 |
 | `next: status_then_retry` | 在同一个 home / attempt 下先 status，再最多 retry 一次，然后结束本轮 |
 | 普通的 idle / busy | 正常结束本轮；busy 不代表可以换个目录去领另一份 |
 | 租约失效、uncertain、权限被撤销 | 停止后续执行，保留原状态，由 owner 核对原生的执行情况 |
@@ -237,7 +237,7 @@ CSV列为nonce,region,order_count,quantity,revenue；包括North、South、TOTAL
 
 ## 8. 凭据环境没打通时：官方的 Remote HTTPS MCP
 
-这条路线可以先用上任务工具，但**不等于上面那套持久的自动接单方案**。单纯的 MCP 没有本地的 WorkerDispatcher / outbox，不能直接把它换进 Routine，然后宣称有同样的断线恢复保证。
+这条路线可以先用上任务工具，但**不等于上面那套持久的自动接单方案**。单纯的 MCP 没有本地的 WorkerDispatcher / outbox，不能直接换进 Routine，断线恢复要自己补。
 
 1. 在控制台展开这个 Agent 的接入信息，复制 `mcp_url`，形如：
 
@@ -245,29 +245,21 @@ CSV列为nonce,region,order_count,quantity,revenue；包括North、South、TOTAL
    https://YOUR-CONTROL-ORIGIN/api/v4/agents/YOUR_AGENT_ID/worker/mcp?space=YOUR_SPACE_ID
    ```
 
-2. 在 Grok 桌面端 **Connect apps → Add a custom connector → Remote HTTPS** 里，填名称和 Server URL；由你本人在 HTTP headers 表单里设置 `Authorization`，值是 `Bearer ` 加专用的 worker token，不要经过聊天；不填 OAuth Client ID。[2] worker 请求只需要这个鉴权头，不需要浏览器 Cookie、Origin 或 `X-PA`。如果客户端自己带了 Origin，它必须是服务端允许的来源，不能填 `grok.com`，也不要关掉服务端的 Guard。
+2. 在 Grok 桌面端 **Connect apps → Add a custom connector → Remote HTTPS** 里，填名称和 Server URL；由你本人在 HTTP headers 表单里设置 `Authorization`，值是 `Bearer ` 加专用的 worker token，不要经过聊天；不填 OAuth Client ID。[2] worker 请求只需要这个鉴权头，不需要浏览器 Cookie、Origin 或 `X-PA`。如果客户端自己带了 Origin，它必须是服务端允许的来源，不能填 `grok.com`。
 3. 保存后，在新消息里选这个连接器，先调用 `task_status`；确认工具发现和鉴权都成功，不领任务。
 4. 之后如果要做一次手动测试，调用 `claim_task` 之后，保留同一个 worker_id / attempt / generation / lease，用 heartbeat、report_progress、submit_result；响应未知时先 task_status，不要自动重新执行业务。结果仍由 owner 验收。
 
-安全卡到 Python 环境的映射、你当前账号能用的审批范围、MCP 实际能不能连通，都要单独验证。非官方的逆向代码里，能找到环境变量注入的线索，但那不是当前产品的约定，本指南不调用它的内部接口，也不读取内部的凭据文件。
+安全卡到 Python 环境的映射、账号能用的审批范围、MCP 能不能连通，都要自己验证。
 
-## 9. 停用、费用，以及哪些部分可以替换
+## 9. 停用和费用
 
 - 暂停 Grok 的 webhook Routine 和定时兜底，就停止了后续的唤醒；已经领取的工作要另外取消，并确认已停止。
 - 想彻底断开的话：撤销对应的规则 / 连接器和专用的 worker token，再从 Railway 删掉不再用的 webhook 凭据；保留审计记录和待恢复的账本。
-- 每次 Routine 唤醒都消耗用量，空轮询也一样。默认的 15 分钟兜底，比 5 分钟唤醒得少；关掉聊天窗口，不会停掉云端的 Routine。你长期不在时，平台也可能要求你确认是否继续运行，不回应可能会暂停，所以不能承诺永远不用维护。[1][2]
-
-| 可以替换的部分 | 仍要保留的约束 |
-| --- | --- |
-| Webhook / 原生定时的频率 | 共用同一个 Agent、home，以及不带过滤的 claim |
-| 控制台界面 / owner API | 任务必须先批准，成果必须独立验收 |
-| Grok 原生的工具和模型 | 只执行已批准的 payload，按平台原生的权限操作 |
-| worker HTTP / 官方 MCP | 鉴权范围一致；MCP 要另外补上持久恢复，才能达到完整的自动接单能力 |
-| system-proxy / 显式 direct | 保留 TLS 校验、拒绝重定向、精确的服务端地址，不自动绕过网络策略 |
+- 每次 Routine 唤醒都消耗用量，空轮询也一样。默认的 15 分钟兜底，比 5 分钟唤醒得少；关掉聊天窗口，不会停掉云端的 Routine。你长期不在时，平台可能要求你确认是否继续运行，不回应可能会暂停。[1][2]
 
 ## 官方依据
 
-资料核对日期：2026-11-19（Asia/Shanghai）；界面有变动时，按实际字段核对，不要去猜隐藏的 API。
+资料核对日期：2026-11-19；界面有变动时，以实际字段为准。
 
 1. [Skills and routines](https://docs.x.ai/grok-bot/skills-routines-and-automations)：Webhook、定时、时区、历史和用量。
 2. [Use the computer and apps](https://docs.x.ai/grok-bot/computer-and-apps)：`/workspace`、共享电脑、持久化和 Remote HTTPS 连接器。

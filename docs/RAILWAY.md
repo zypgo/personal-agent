@@ -15,7 +15,7 @@ V3 把聊天、渠道、模型 API、身份、审批、SQLite 队列和工作空
 | Serverless / Sleep | 关掉，这样定时任务和渠道消息才能一直收得到 |
 | 从 SIGTERM 到 SIGKILL | 45 秒，比如设 `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=45` |
 
-`railway.toml` 里也写了上面这些设置，只是为了兼容。2026-11-17 查阅的[官方配置文档](https://docs.railway.com/config-as-code)说：Config as Code 已经弃用；已有服务的 `railway.toml` / `railway.json` 兼容到 2026-12-01，新服务已经不能再启用。所以请直接在**已有服务**的设置里核对上面这张表，别指望兼容文件一直有效。这里没有提交可能会创建额外资源的 Infrastructure as Code，也没有自动部署。
+`railway.toml` 里也写了上面这些设置，只是为了兼容。2026-11-17 查阅的[官方配置文档](https://docs.railway.com/config-as-code)说：Config as Code 已经弃用；已有服务的 `railway.toml` / `railway.json` 兼容到 2026-12-01，新服务已经不能再启用。所以请直接在**已有服务**的设置里核对上面这张表，别指望兼容文件一直有效。
 
 服务变量：
 
@@ -35,11 +35,11 @@ RAILWAY_DEPLOYMENT_DRAINING_SECONDS=45
 
 ### 卷和进程权限
 
-据 [Railway 官方说明](https://docs.railway.com/volumes)，卷在运行时才挂载，属于 root。镜像先以 root 身份初始化 `/data` 的目录权限，然后清掉附加组，切换到 UID/GID `10001`，再加载应用。它不会递归修改旧文件的权限，也不会跟随符号链接。
+据 [Railway 官方说明](https://docs.railway.com/volumes)，卷在运行时才挂载，属于 root。镜像先以 root 身份初始化 `/data` 的目录权限，然后清掉附加组，切换到 UID/GID `10001`，再加载应用。
 
 迁移已有数据时，要先停掉旧服务，再确认目录里的文件都属于这个服务账号。不要把迁移放进 pre-deploy command：那个阶段没有挂载持久卷。
 
-带卷的服务重新部署时会短暂中断，因为同一个卷不能同时给新旧两个实例用。SQLite、Inbox、Outbox、任务尝试和 Runner 的收据，让恢复过程有迹可查，但不保证零停机。[健康检查的官方说明](https://docs.railway.com/deployments/healthchecks)也提到，健康检查只用来判断部署是否就绪，不是持续监控。程序只对健康检查路径接受 Railway 专用的 Host；其他 API 仍然严格校验 Host、Origin 和 CSRF 请求头。
+带卷的服务重新部署时会短暂中断，因为同一个卷不能同时给新旧两个实例用。SQLite、Inbox、Outbox、任务尝试和 Runner 的收据，让恢复过程有迹可查，但不保证零停机。[健康检查的官方说明](https://docs.railway.com/deployments/healthchecks)也提到，健康检查只用来判断部署是否就绪，不是持续监控。程序只对健康检查路径接受 Railway 专用的 Host。
 
 ### 未登录的入口按来源地址限流
 
@@ -47,9 +47,7 @@ RAILWAY_DEPLOYMENT_DRAINING_SECONDS=45
 
 应用读到的是 TCP 对端地址，不读任何转发头。但 Railway 在应用前面有一层边缘代理，[官方文档](https://docs.railway.com/networking/public-networking/specs-and-limits)（2026-11-17 查阅）说它用 `X-Real-IP` 传递访客地址。所以在 Railway 上，所有访客看起来都来自同一个代理地址，共用一个计数。
 
-配对码和恢复码都是一次性的高熵凭据，所以这不是认证被绕过，而是可用性上的取舍：有人不停地请求，会让这几个入口对所有人短暂返回 429（大约一分钟）。已登录用户的接口和节点领任务的请求，不受这个限流影响。
-
-不要为此随手放开 uvicorn 的 `FORWARDED_ALLOW_IPS`：uvicorn 只认 `X-Forwarded-For`，而上面那个文档页没有列出这个头；去信任一个可以被伪造的转发头，反而会让限流失效。如果这真成了问题，应该另外做一次带测试的改动，决定能不能在确认请求来自平台代理时，只读取 `X-Real-IP`。
+有人不停地请求时，这几个入口会对所有人短暂返回 429（大约一分钟）。已登录用户的接口和节点领任务的请求，不受这个限流影响。
 
 ## 2. 第一次打开网页和手机
 
@@ -59,7 +57,7 @@ RAILWAY_DEPLOYMENT_DRAINING_SECONDS=45
 python -m personal_agent.deploy admin web pair --label phone
 ```
 
-把终端给出的一次性短时链接，在你自己的浏览器里打开。不要把邀请链接贴进日志、工单、截图或 PR。之后在已登录的设置页管理成员、空间和节点；成员用自己的身份和邀请，不共用 owner 的浏览器会话。手机直接访问公开的 HTTPS 地址就行，不用另外买隧道服务。
+把终端给出的一次性短时链接，在你自己的浏览器里打开。之后在已登录的设置页管理成员、空间和节点；成员用自己的身份和邀请，不共用 owner 的浏览器会话。手机直接访问公开的 HTTPS 地址就行，不用另外买隧道服务。
 
 ## 3. 连接你自己的电脑
 
@@ -102,7 +100,3 @@ pa node run
 镜像里带了 restic 0.19.1 和 OpenSSH 客户端。已经做好离线的一致快照后，可以用 `python -m personal_agent.deploy admin db restic ...` 加密归档。这不会让运行中的主目录自动变成一致快照。恢复必须走本项目的 `restic restore`，它会继续执行撤权和任务冻结。命令、密码文件和保留策略见[基础组件升级](OPEN_SOURCE_ADAPTERS.md#加密备份与恢复)。
 
 归档支持已有的本地磁盘或你自己的 SFTP，不会创建存储服务，也不会自动上传。用 SFTP 时，先给服务账号配好 SSH 主机校验和凭据，账号的 home 是 `/data`。只存在同一个卷里的归档，扛不住整个卷丢失。浏览器的 bundle 已经打包进镜像，不需要 Node，也不用运行时的 CDN。
-
-## 验证范围
-
-仓库的测试覆盖了：环境变量覆盖、公开源校验、服务端禁用本地执行、权限切换的先后顺序，以及节点的重复交付、断网、丢回执、重启恢复和取消流程。这个 PR 没有创建或部署 Railway 资源。实际的域名、卷权限、Docker 镜像是否可用、真实的模型额度，要在你已有的环境启动之后再检查。

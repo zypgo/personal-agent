@@ -124,7 +124,7 @@ pa db restic --namespace personal forget --keep-last 7 --apply
 
 不会自动执行 `prune`、解锁、定时上传，也不会删除其他命名空间。restic 的密码丢了就恢复不了。只备份在同一块 Railway 卷里，能帮你回滚，但抵御不了整块卷丢失；需要这种保障，就用已有的另一块磁盘，或者你自己的 SFTP 位置。
 
-## 升级、回退与验证
+## 升级与回退
 
 1. 停止接收新任务，把正在执行的任务做完，或者明确取消；不确定的任务，保留它的收据和容器，留着核对。
 2. 创建整个实例的一致快照。
@@ -145,8 +145,6 @@ PA_TEST_RESTIC_BINARY=/absolute/path/to/restic uv run --frozen pytest tests/test
 ```
 
 内存有限的开发机，可以设置 `PA_TEST_WORKERS=2`，只是减少测试的并行数，不会跳过用例；不同 Python 版本的全量检查，要一个接一个地跑。
-
-离线测试证明不了真实的模型额度、Railway 已经部署好，或者 Docker 主机已经配好。发布时，分别记录测试结果、实际的启动状态和外部环境的检查；没有观察到的部署，不要标成已完成。
 
 ## 上游来源
 

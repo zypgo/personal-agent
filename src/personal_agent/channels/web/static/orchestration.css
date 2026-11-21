@@ -179,16 +179,6 @@
   line-height: 1.7;
 }
 
-.or-scope-note {
-  padding: 0.65rem 0.85rem;
-  border-left: 3px solid var(--pencil);
-  border-radius: 2px var(--r-s) var(--r-s) 2px;
-  background: var(--surface-2);
-  color: var(--ink-2);
-  font-size: var(--fs-footnote);
-  line-height: 1.65;
-}
-
 /* ---- forms that gather several things --------------------------------------------------------------- */
 .or-fieldset {
   min-width: 0;

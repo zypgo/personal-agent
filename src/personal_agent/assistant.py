@@ -97,12 +97,12 @@ CAPABILITIES = (
     Capability("cancel_agent_task", "取消 Agent 任务", "agent_tasks", target="agent_task"),
     Capability(
         "confirm_agent_stopped",
-        "核对执行已停止",
+        "确认执行已停止",
         "agent_tasks",
         ("step_id", "attempt_id"),
         "agent_task",
     ),
-    Capability("confirm_wake_stopped", "核对唤醒已停止", "agent_tasks", ("wake_id",), "agent_task"),
+    Capability("confirm_wake_stopped", "确认唤醒已停止", "agent_tasks", ("wake_id",), "agent_task"),
 )
 BY_ACTION = {item.action: item for item in CAPABILITIES}
 TOPICS = (
@@ -553,9 +553,9 @@ def _proposal_card(record: dict[str, Any]) -> dict[str, Any]:
         "id": record["id"],
         "kind": "workspace_action",
         "title": spec.title,
-        "summary": "请核对表单。你确认之前不会执行。"
+        "summary": "表单已经预填好了。改一改就能提交。"
         if pending
-        else "这个操作已经提交过一次。结果还不确定。请先确认实际结果。不要重复提交。",
+        else "这个操作已经提交过。结果还没确认。",
         "status": record["status"],
         "space_id": record["space_id"],
         "data": {
@@ -563,7 +563,7 @@ def _proposal_card(record: dict[str, Any]) -> dict[str, Any]:
             "target_id": record["target_id"],
             "draft": _clean(record["draft"]),
         },
-        "actions": [{"id": "open", "label": "核对并操作"}, {"id": "dismiss", "label": "取消提案"}]
+        "actions": [{"id": "open", "label": "填写"}, {"id": "dismiss", "label": "暂不处理"}]
         if pending
         else [],
     }
@@ -650,7 +650,7 @@ def action_cards(
                 "job:" + job["id"],
                 "execution_approval",
                 review["title"],
-                "批准之前请看清完整命令、输入文件的快照和允许输出的文件。",
+                "这个电脑任务等你批准。",
                 job["state"],
                 {
                     "space_id": review["space_id"],
@@ -692,7 +692,7 @@ def action_cards(
         for task in app.orchestration.list_tasks(actor_id)[:20]:
             if task["state"] == "planned":
                 actions = (
-                    [("approve", "确认外发计划"), ("cancel", "取消任务")]
+                    [("approve", "确认并派发"), ("cancel", "取消这项计划")]
                     if task.get("can_approve")
                     else []
                 )
@@ -701,7 +701,7 @@ def action_cards(
                         "agent-plan:" + task["id"],
                         "agent_plan",
                         task["title"],
-                        "请先看清每个助手会收到什么内容、能看到哪些信息。",
+                        "这份协作计划等你确认。",
                         task["state"],
                         {"task": task},
                         actions,
@@ -724,7 +724,7 @@ def action_cards(
                             "agent-result:" + attempt["id"],
                             "agent_result",
                             task["title"],
-                            "助手已交回结果。请对照验收标准检查。",
+                            "助手交回了结果。等你验收。",
                             attempt["state"],
                             {"task": task, "step": step, "attempt": attempt},
                             actions,

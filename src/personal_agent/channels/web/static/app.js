@@ -225,7 +225,7 @@ function showPairing(problem = "") {
       h(
         "p",
         { class: "fine-print" },
-        "配对链接限本人使用，只能使用一次。",
+        "配对链接只能用一次。",
       ),
       h("div", { class: "pair-options" }, h("a", { href: "/workspace", text: "恢复账号或接受项目邀请" })),
       h("details", {}, h("summary", { text: "首次连接自己的助理" }), h("p", {}, "在运行助理的电脑上执行 ", h("code", { text: "pa web pair" }), "，将生成的链接粘贴到上方。")),
@@ -899,7 +899,7 @@ function buildComposer() {
   const actions = h("div", { class: "row-actions" }, mic, audio, send);
   const row = h("div", { class: "row" }, attach, input, actions);
   const recording = h("div", { class: "recording", hidden: true });
-  const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker, voicePicker, h("p", { class: "composer-note" }, "需要你确认的操作，我会先问你。", h("span", { class: "keys", text: "按 Enter 发送，Shift + Enter 换行。" })));
+  const element = h("footer", { class: "composer" }, hints, chips, row, recording, picker, voicePicker, h("p", { class: "composer-note" }, h("span", { class: "keys", text: "按 Enter 发送，Shift + Enter 换行。" })));
   const composer = { element, input, files, chips, hints, send, mic, row, recording, picker, voice: null, voiceStarting: false, pendingImages: 0, pendingAudio: 0, disposed: false };
   const current = () => !composer.disposed && ui?.composer === composer;
 

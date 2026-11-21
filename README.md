@@ -14,8 +14,8 @@
 | “每个工作日早上八点，整理一份我关注的行业简报。” | 建一个定时任务，到点自动执行，并按你设好的方式通知你。它会参考记住的你的偏好。 |
 | “把这段资料整理进旅行计划。” | 先找到已有的资料，准备好修改内容，再存进去。资料有版本，也记着属于哪个空间。 |
 | “让 Grok 先调研，再让 Muse 整理成报告。” | 看有哪些 Agent 能用，拟好每一步的目标、材料和验收标准。你确认计划后，按先后顺序分头去做。 |
-| “帮我接入另一台电脑。” | 给你一张接入卡片。你在安全的表单里确认是哪台电脑、能用到什么范围。 |
-| “停掉这个任务，告诉我停下来没有。” | 先发出停止请求，再去核对对方是不是真的停了。“已请求停止”和“确实停了”会分开说。 |
+| “帮我接入另一台电脑。” | 给你一张接入卡片，在里面选是哪台电脑。 |
+| “停掉这个任务，告诉我停下来没有。” | 先发出停止请求，再确认对方真的停了。“已请求停止”和“确实停了”分开显示。 |
 
 ## 打开就是聊天
 
@@ -30,7 +30,7 @@
 
 电脑上的菜单可以收起，手机上从左边拉出来。换页面时，当前所在的空间不变。以前工作台里的功能都在这些页面里，旧的 `/workspace` 地址也还能用。
 
-资料、任务、连接这些事，都可以先在聊天里说。模型负责听懂、查询和准备；授权、对外发送的计划、成果验收这几类事，必须由你点头。邀请码、连接令牌和恢复信息只会出现在受保护的表单里。
+资料、任务、连接这些事，都可以先在聊天里说。要你决定的（授权、对外发送的计划、成果验收），会变成卡片等你点。
 
 ## 整体结构
 
@@ -57,7 +57,7 @@ flowchart TB
 
 - **模型**：默认用 OpenAI。也能接兼容的接口，可以自定义密钥的环境变量名，语音转文字可以单独配一个服务。联网搜索按各服务商的支持情况打开。
 - **Agent 引擎**：[OpenAI Agents SDK](https://github.com/openai/openai-agents-python)，放在 `harness/` 这一层后面。
-- **设计思路**：参考 Anthropic 最近关于常驻 Agent（always-on）、Agent 自动化（agent automations）、Agent 记忆（agent memory）、Managed Agents 和可信 Agent（trustworthy agents）的文章。落成五样基础件：事件收件箱、计时器、记忆、权限、发件箱。大脑（决策）、双手（动手执行）、会话（记录）三者分开；默认安静，默认安全，默认保密。
+- **设计思路**：参考 Anthropic 最近关于常驻 Agent（always-on）、Agent 自动化（agent automations）、Agent 记忆（agent memory）、Managed Agents 和可信 Agent（trustworthy agents）的文章。落成五样基础件：事件收件箱、计时器、记忆、权限、发件箱。大脑（决策）、双手（动手执行）、会话（记录）三者分开。
 - **可以扩展**：MCP 服务器、Agent Skills、渠道适配器、沙箱后端、模型接口。
 
 ## 文档
@@ -82,8 +82,8 @@ flowchart TB
 - [Anthropic 指南提炼](docs/research/anthropic-guidance.md) · [同类开源项目对比](docs/research/reference-analysis.md) · [参考项目复核](docs/REFERENCE_REVIEW.md)
 - [V3 设计](docs/V3.md) · [0.2.0 设计](docs/V0_2.md)
 
-**验收记录与开发流程**
-- [V3 验证记录](docs/V3_ACCEPTANCE.md) · [0.3.2 真实验收](docs/REVIEW_0_3_2.md)
+**验收清单与开发流程**
+- [V3 上线前验收清单](docs/V3_ACCEPTANCE.md) · [0.3.2 审查与修复](docs/REVIEW_0_3_2.md)
 - [PR 处理手册](docs/PR_PLAYBOOK.md)：本机发现新 PR 之后怎么办
 
 ## 快速开始
@@ -91,7 +91,7 @@ flowchart TB
 ```bash
 uv sync
 uv run pa init                # 创建 ~/.personal-agent：配置、数据库、记忆模板和一个空的 .env
-# 用编辑器把 OPENAI_API_KEY=sk-... 填进 ~/.personal-agent/.env（别贴进聊天）
+# 用编辑器把 OPENAI_API_KEY=sk-... 填进 ~/.personal-agent/.env
 uv run pa doctor              # 检查环境；加 --live 会真的调用两次模型（几美分）
 uv run pa chat                # 开始聊天；/help 看命令，Ctrl-D 退出
 uv run pa ask "你好"           # 只问一句
@@ -113,7 +113,7 @@ uv run pa audit               # 它实际做了什么：每次调用工具和对
 uv run pa budget              # 今天花了多少、上限多少；pa budget extend 2 表示今天加额度，并放行被暂停的任务
 ```
 
-默认是 `supervised` 模式：读取、记忆、通知直接放行；会改变外部世界的操作，先问你。想放开某一类，就在 `config.toml` 里写规则，比如 `[policy] allow = ["schedule"]`（让它不用问就能建定时任务）。`deny` 规则在任何模式下都绕不过去。
+默认是 `supervised` 模式：读取、记忆、通知直接放行；会改变外部世界的操作，先问你。想放开某一类，就在 `config.toml` 里写规则，比如 `[policy] allow = ["schedule"]`（让它不用问就能建定时任务）。
 
 ### 给它加能力（先看后用）
 
@@ -128,11 +128,11 @@ uv run pa plugins                      # Python 插件；装好后还要列在 c
 ### 用 Telegram 在手机上聊（不需要公网地址）
 
 ```bash
-# 1. 在 Telegram 里找 @BotFather 建一个机器人，把令牌填进 ~/.personal-agent/.env 的 TELEGRAM_BOT_TOKEN（别贴进聊天）
+# 1. 在 Telegram 里找 @BotFather 建一个机器人，把令牌填进 ~/.personal-agent/.env 的 TELEGRAM_BOT_TOKEN
 # 2. 在 ~/.personal-agent/config.toml 里加一节 [telegram]，写上 enabled = true（连不上 Telegram 的地区，再加 proxy）
 uv run pa channels test telegram       # 只让机器人报一下身份，确认令牌和网络都通
 uv run pa serve                        # 常驻；给机器人发一句话，它会回你一个配对码
-uv run pa channels approve telegram ABCD-EFGH   # 只能在你自己的电脑上批准；陌生人的消息进不了 agent
+uv run pa channels approve telegram ABCD-EFGH   # 在你自己的电脑上批准这个配对码
 ```
 
 配好之后，手机上直接聊就行：文字、语音、图片都可以。处理 Telegram 的 Ogg 语音需要 `brew install ffmpeg`。发 `/status`、`/approvals` 看状态；要你点头的操作会带 ✅/❌ 按钮；它主动找你的消息，会发到你最近用过的那个聊天 App。
@@ -151,11 +151,11 @@ uv run pa web open                     # 直接在这台电脑上打开，并自
 uv run pa web sessions                 # 看已配对的浏览器；pa web revoke <id> 收回其中一个
 ```
 
-`connect` 会保留你原来的配置和注释，也不会覆盖其他 Tailscale 服务。局域网模式只接受本机的私网地址。端口如果已被占用，必须是当前这个 agent 自己占的（靠签名探针确认），否则不会代理，免得把别的本地服务暴露出去。Tailscale 模式用的是 Serve，不开 Funnel；手机连上同一个 tailnet 后扫码即可。
+`connect` 会保留你原来的配置和注释，也不会覆盖其他 Tailscale 服务。Tailscale 模式用的是 Serve，不开 Funnel；手机连上同一个 tailnet 后扫码即可。局域网模式只接受本机的私网地址。
 
 局域网的 HTTP 可以聊天、发图片、上传录音文件；浏览器麦克风需要 HTTPS。手机页面“设置 → Recent tasks”里能看到排队、待审批、重试时间和最终停止的状态。
 
-配对令牌放在地址 `#` 后面，不会进入 HTTP 请求路径。页面把它换成 HttpOnly、SameSite=Strict 的 cookie 之后，就把 `#` 后面的内容清掉。用 HTTPS 时，cookie 还带 Secure 属性。完整配置、撤销设备和排错见[手机连接说明](docs/MOBILE.md)。
+完整配置、撤销设备和排错见[手机连接说明](docs/MOBILE.md)。
 
 > 网页现在是“你打开就能看到”（SSE 实时推送），**没有系统推送通知**。需要它主动叫你，就同时开着 Telegram 或钉钉。iOS 的“主屏幕 App”和 Safari 不共享 cookie，所以主屏幕 App 里要再配对一次。
 
@@ -181,9 +181,9 @@ uv run pa webhooks                   # 各路由的地址、密钥是否就绪�
 uv run pa webhooks send github --event push --body '{"ref":"refs/heads/main"}'   # 用真实密钥签名，发一次测试投递
 ```
 
-收到的内容一律当作**不可信的数据**：放进围栏里，只有 `prompt` 是可信的指令。agent 用权限最小的 `untrusted` 画像运行，只能看、只能告诉你，不能动手。
+webhook 唤醒的那一轮只能读内容、通知你，不会动手。`prompt` 里写你希望它怎么处理。
 
-下面这些情况，对外一律回同样的 404，不暴露这条路由存不存在：路由不存在、密钥没配好、签名错误、请求已过期。原因只写进日志（`pa webhooks` 会显示最近一次）。请求太大回 413，太快回 429。不在白名单里的事件和重复的投递回 202，意思是“收到了，不处理”。
+路由不存在、密钥没配好、签名错误、请求已过期，都回 404，具体原因看 `pa webhooks`。请求太大回 413，太快回 429。不在白名单里的事件和重复的投递回 202，意思是“收到了，不处理”。
 
 `generic` 方案的签名自己算也很简单：
 
@@ -205,12 +205,12 @@ agent 大部分时间在睡觉。每次醒来都是一段**新的对话**，所�
 
 对话太长时，先压成摘要。更早说过的话用 `search_history` 查，原文永远留在日志里。
 
-每天夜里（默认 03:30；电脑睡着了，醒来后补上）它会“做梦”一次：回看新的对话记录，整理记忆，改掉过时的笔记。它有这些限制：
+每天夜里（默认 03:30；电脑睡着了，醒来后补上）它会“做梦”一次：回看新的对话记录，整理记忆，改掉过时的笔记。做梦的规则：
 
 - 至少有 20 条新记录才会跑；
 - 花费最多 $0.30；
-- 不能给你发消息、不能联网、不能动文件，也不能改你写的偏好；
-- 如果删得太多，整一次都会被撤销。
+- 只改记忆：不给你发消息，不联网，也不动你写的偏好；
+- 如果删得太多，整一次都会撤销。
 
 ```bash
 uv run pa dream                        # 开没开、几点跑、攒了多少条新记录、上次做了什么
@@ -226,10 +226,10 @@ uv run pa memory restore 42            # 撤销某一次改动（版本号来自
 想让它一直在，要做到三件事：关掉启动它的终端后还在，重新登录后还在，崩溃后会被重新拉起。macOS 上用 launchd：
 
 ```bash
-uv run pa service install --dry-run    # 先看它会写什么：一个 LaunchAgent，不需要 root，任务文件里没有任何密钥
+uv run pa service install --dry-run    # 先看它会写什么：一个 LaunchAgent，不需要 root
 uv run pa service install              # 登录后自动启动，异常退出后自动拉起；加 --keep-awake：接电源时不让 Mac 睡着
 uv run pa service status               # 加载了没有、在不在跑、跑了几次、上次怎么退出的（直接写 pa service 效果一样）
-uv run pa service logs                 # 它自己的日志（每行先去掉密钥）；-f 持续跟随；--launchd 看日志打开之前的崩溃
+uv run pa service logs                 # 它自己的日志；-f 持续跟随；--launchd 看日志打开之前的崩溃
 uv run pa service restart              # 等进行中的任务做完再重启（launchd 限制 30 秒内不能重复重启，可能要等一会儿）
 uv run pa service uninstall            # 停掉并删掉任务文件；你的数据和日志都还在
 ```
@@ -237,7 +237,7 @@ uv run pa service uninstall            # 停掉并删掉任务文件；你的数
 装之前先知道两件事：
 
 1. macOS 不允许后台任务读「桌面 / 文稿 / 下载 / iCloud」文件夹。它不弹窗，只会报 “Operation not permitted”。解释器或代码放在这些文件夹里时，`install` 会醒目地警告：任务能装上，但起不来。解决办法：把项目放到别处（比如 `~/Developer`），或者在项目目录里 `uv tool install .` 装一份，再从那一份运行 `pa service install`。
-2. 后台任务不继承终端的环境变量。需要代理就加 `--pass-env HTTPS_PROXY`。名字像密钥的变量，或者值里带密钥、口令的（比如 `http://user:口令@代理`），一律拒绝：这类内容只放 `.env`，守护进程自己会读。
+2. 后台任务不继承终端的环境变量。需要代理就加 `--pass-env HTTPS_PROXY`。名字像密钥的变量不能这样传，放进 `.env`，守护进程自己会读。
 
 `pa doctor` 会指出这几种问题：任务没加载、指向的程序已经不在了、被 macOS 挡在门外。
 
@@ -263,7 +263,7 @@ uv run pa eval run --live --trials 3 --max-cost 1.0 --model gpt-6.1-sol --effort
 
 内置场景覆盖这几件事：同一条新闻只说一次；没有新东西就不打扰；读不到信息源，不能当成“一切正常”；任务进度跨几次唤醒保留；遵守你的偏好；webhook 里夹带的指令只当数据。
 
-报告（JSON 加 Markdown）写在 `~/.personal-agent/evals/reports/`，权限 0600，密钥已经去掉。
+报告（JSON 加 Markdown）写在 `~/.personal-agent/evals/reports/`。
 
 ### 控制数据库大小
 
@@ -295,13 +295,13 @@ uv run pa db vacuum                    # 把删掉的空间还给磁盘（要先
 
 ### 让多个 Agent 一起干活（0.4.0）
 
-手机工作台里新增 **Agents / Agent 协作任务**：登记多个 Grok Bot、Muse 和你自己的执行端；你确认对外发送的计划后派活，各步骤按依赖先后接力，文件传回来，经你验收再进入下一步。Grok 用已有的 Routine webhook；Muse 通过 HTTP/MCP 或单文件 Python Bridge 主动来领任务。Muse 能不能自动唤醒，取决于你的账号实际有什么功能；手动连接的不会显示成“自动运行”。
+手机工作台里新增 **Agents / Agent 协作任务**：登记多个 Grok Bot、Muse 和你自己的执行端；你确认对外发送的计划后派活，各步骤按依赖先后接力，文件传回来，经你验收再进入下一步。Grok 用已有的 Routine webhook；Muse 通过 HTTP/MCP 或单文件 Python Bridge 主动来领任务。Muse 能不能自动唤醒，取决于你的账号有什么功能。
 
 - [功能、架构、权限与升级](docs/MULTI_AGENT.md)
 - [Grok / Muse 接入与 Routine 模板](docs/CLOUD_AGENTS.md)
 - 自有 Agent Host 对接 Codex app-server、Cursor ACP 和独立的 Personal Agent profile。服务端仍然用现有的 Railway、SQLite 和持久卷，不新增付费沙箱。
-- 叫醒、领取、结果回传、验收分别记录。断线后回执会保留；不确定有没有执行的任务，不会自动重跑。
-- 测试结果和真实账号上的验收结果分开记录。注册连接要在你自己的 Agent 环境里配置；不能用一个模型 API key 顶替 Grok Bot 或 Muse 账号。
+- 叫醒、领取、结果回传、验收分别记录。不确定有没有执行的任务，不会自动重跑。
+- 注册连接要在你自己的 Agent 环境里配置。
 
 ### 钉钉、流式回复、文件成果（0.2.0）
 
@@ -310,21 +310,21 @@ uv run pa db vacuum                    # 把删掉的空间还给磁盘（要先
 - **文件成果**：`publish_artifact` 给工作区里的文件做一份不可变的快照，网页鉴权后下载，Telegram 以文档上传。有配额和有效期，也不会因为不确定投递结果而重复发送。
 - **服务分开配置**：模型和语音可以用不同的端点和密钥。`pa channels capabilities` 查看各渠道实际支持什么，`pa doctor` 检查配置。
 
-钉钉、Telegram 和模型服务都要你自己配置。自动化测试验证了协议和故障时的表现；真实的企业应用权限、手机网络和模型兼容性，仍要按文档自己验收。
+钉钉、Telegram 和模型服务都要你自己配置。
 
 [功能、架构与升级](docs/V0_2.md) · [钉钉](docs/DINGTALK.md) · [把文件发给你](docs/ARTIFACTS.md) · [模型、语音和搜索服务](docs/PROVIDERS.md)
 
 ## 版本记录
 
-**0.7.1：安全边界和日常使用修复。** [详情](docs/RELEASE_0_7_1.md)
+**0.7.1：缺陷修复。** [详情](docs/RELEASE_0_7_1.md)
 
-- 文件列表不会再被“中途把目录换成链接”骗出工作区；无效的预算金额不能再让支出上限失效。
+- 修了文件列表在目录被中途换成链接时的行为，以及无效预算金额让支出上限失效的问题。
 - 修了手机上的几个问题：设置面板关不掉，旋转屏幕后菜单手势卡住，发图片后预览资源没释放，退出或切换空间后还留着旧的提示。
 - 嵌套很深的请求会返回明确的“输入有误”。
 - 发布检查现在会查重复写的配置值和新标签的作者邮箱，同时保留 GitHub 上已有的提交和标签。
 - 界面和功能同 0.7.0，没有数据库迁移，没有新增依赖。
 
-**0.7.0：更灵动，更像一个原生应用。** [设计与验证](docs/RELEASE_0_7_0.md)
+**0.7.0：更灵动，更像一个原生应用。** [设计说明](docs/RELEASE_0_7_0.md)
 
 - 整个前端重做了视觉和动效：纸白和深林两套外观，玻璃质感的顶栏和输入区，统一的圆角、阴影和弹性过渡。系统开了“减少动态效果”时，动画全部关掉。
 - 聊天更像在说话：回复边生成边排版，欢迎语随时段变化，助手在做什么，用日常的话告诉你。
@@ -342,12 +342,12 @@ uv run pa db vacuum                    # 把删掉的空间还给磁盘（要先
 
 **0.3.2：真实调用和可靠性修复。** 修了这些问题：恢复配对、撤权时的流式响应和审批、退出和离开项目、发件箱中断后的恢复、长时间的工具会话、跨时区的提醒、Docker 客户端关闭，以及浏览器的响应校验和离线缓存。控制端、你自己的 Runner 和 SQLite 的结构不变，不增加云资源。
 
-- [审查发现、修复和真实验收记录](docs/REVIEW_0_3_2.md)
+- [审查发现和修复](docs/REVIEW_0_3_2.md)
 - 真实测试：先把 `OPENAI_API_KEY` 放进环境，再运行 `PA_LIVE=1 uv run pytest tests/live -q`。缺少密钥会明确报错；默认的离线测试不会调用模型。
 
 **0.3.1：基础组件升级。** V3 的 API 改用 FastAPI/Pydantic 的严格契约；浏览器用上 TanStack Query、markdown-it，以及可复现的 TypeScript/Vite 构建；正文提取换成本地的 Trafilatura；自有 Runner 默认用 Docker 官方 SDK；整个实例的一致性快照可以交给 restic 做加密归档。原有的权限、收据和恢复撤权机制都保留。运行服务不需要 Node，也不新增云资源。
 
-- [实现、配置、备份与回退](docs/OPEN_SOURCE_ADAPTERS.md) · [验证记录与部署边界](docs/RELEASE_0_3_1.md)
+- [实现、配置、备份与回退](docs/OPEN_SOURCE_ADAPTERS.md) · [0.3.1 发布记录](docs/RELEASE_0_3_1.md)
 - 更新：`uv sync --frozen`；启动：`uv run pa serve`；节点要回退到旧方式：`pa node run --backend cli`
 - 维护前端：`npm ci && npm run check`。Python 安装包里已经带了浏览器的构建产物。
 
@@ -393,9 +393,9 @@ scripts/fetch_references.sh   # 重新拉取只读的参考项目到 references/
 .venv/bin/python scripts/github_export.py --dry-run   # 推送到 GitHub 之前的检查（去掉 workflow 文件，查隐私和密钥）；去掉 --dry-run 才真的推送
 ```
 
-## 安全约定
+## 数据放在哪
 
-- 密钥只放 `.env`（已被 git 忽略），**不要贴进聊天，也不要提交**。
-- 个人数据（记忆、会话、数据库）默认放在 `~/.personal-agent`，不在仓库里。数据库和 `.env` 只有你自己读得到（`pa init` 会把已有的权限收紧，`pa doctor` 会提醒）。
+- 密钥放 `~/.personal-agent/.env`。
+- 记忆、会话和数据库默认放在 `~/.personal-agent`，不在仓库里。
 - 遥测和 OpenAI 托管的 tracing 默认关闭。
-- 推到 GitHub 只经过 `scripts/github_export.py`。它读的私有配置（隐私名单、gitleaks 的放行名单）放在 `~/.config/pa-export/`，不在仓库里；仓库自带的放行文件它一律不读。
+- 推到 GitHub 只经过 `scripts/github_export.py`。它读的私有配置（隐私名单、gitleaks 的放行名单）放在 `~/.config/pa-export/`，不在仓库里。

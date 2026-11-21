@@ -1,6 +1,5 @@
-// Conversation cards are views of server-owned state. Models may propose a named action;
-// only these fixed routes can execute it, after the person reviews its concrete form.
-// Private form values and one-time credentials never enter chat, storage or a transcript.
+// Cards in the chat. They show state kept by the server. The model can only propose a named
+// action; the buttons and forms here are what carry it out.
 import { buildTaskRequest, buildStepRequest, buildAnswerRequest } from "./query.js";
 import { AGENT_KINDS, statusLabel, wakeDescription, secretReferences, currentAttempt, artifactPath } from "./orchestration.js";
 import { createAgentMark, createProductIcon } from "./product-shell.js";
@@ -195,7 +194,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
   }
   function requireFreshReview(entry, text) {
     // A read already in flight may describe the state before this failed request. Only a
-    // later successful read may recreate a decision, with fresh consent and permissions.
+    // later successful read may recreate the card, with fresh state and permissions.
     recheckAfter.set(entry.card.id, serial);
     message(entries.get(entry.card.id) || entry, text, true);
   }
@@ -273,17 +272,13 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       message(entry, "已处理。"); onNotice("已处理，正在更新任务状态。"); await refresh();
     } catch (error) {
       if (!alive || error?.name === "AbortError") return;
-      requireFreshReview(entry, error.status >= 400 && error.status < 500 ? "这条待办已变化或提交未获允许，请刷新后核对。" : "提交结果尚未确认，请刷新核对实际状态。请勿重复提交。");
+      requireFreshReview(entry, error.status >= 400 && error.status < 500 ? "这条待办已经变化，请刷新后再试。" : "没收到结果，请刷新看看。");
     } finally { inFlight.delete(entry.card.id); entry.node.setAttribute("aria-busy", "false"); }
   }
 
   function actionButton(entry, action, label, options = {}) {
     if (!can(entry.card, action)) return null;
-    const control = register(entry, button(label, async () => {
-      if (options.confirm && !options.confirm.control.checked) { message(entry, "请先核对内容并勾选确认。", true); return; }
-      await nativeAction(entry, action);
-    }, options.className || ""));
-    return control;
+    return register(entry, button(label, () => nativeAction(entry, action), options.className || ""));
   }
 
   function renderSteps(parent, task, { open = false } = {}) {
@@ -293,7 +288,6 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       const owner = memberNames?.get(step.agent_owner_id) || (step.agent_owner_id === principalId ? "我" : "连接所有者");
       if (step.agent_kind || step.agent_owner_id) section.append(node("p", `${AGENT_KINDS[step.agent_kind] || "助手"}${step.agent_owner_id ? ` · 所有者：${owner}` : ""}`, "assistant-hint"));
       if (step.state) section.append(node("p", statusLabel(step.state), "assistant-hint"));
-      if (step.shared_environment || step.agent_kind === "grok") section.append(node("p", "使用原有运行环境，可能沿用历史、文件和工具权限。", "assistant-impact"));
       if (step.depends_on?.length) section.append(node("p", `等待${step.depends_on.map(id => { const n = (task.steps || []).findIndex(item => item.id === id); return n < 0 ? "前序步骤" : `第 ${n + 1} 步`; }).join("、")}验收通过后继续。`, "assistant-hint"));
       const details = disclosure("交办内容与验收标准", node("p", step.prompt || "", "assistant-prewrap"), node("h5", "验收标准"), node("p", step.acceptance || "", "assistant-prewrap")); details.open = open;
       section.append(details); parent.append(section);
@@ -306,14 +300,14 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
     entry.node.append(node("p", ({ execution_approval: "等待执行授权", agent_plan: "等待确认计划", agent_result: "等待验收成果", execution_question: "需要你补充", agent_question: "需要你补充", workspace_action: "助理拟好的操作", task_status: "任务进展" })[card.kind] || "待办", "assistant-eyebrow"), node("h3", card.title || task.title || "待处理事项"));
     if (card.summary && !["execution_question", "agent_question", "task_status"].includes(card.kind)) entry.node.append(node("p", card.summary, "assistant-prewrap"));
     if (card.kind === "workspace_action") {
-      if (["executing", "uncertain"].includes(card.status)) entry.node.append(node("p", "这项操作已提交或结果待核查。请先核对实际状态；这里不会重复执行。", "assistant-impact"));
+      if (["executing", "uncertain"].includes(card.status) && !card.summary) entry.node.append(node("p", "这项操作已经提交，结果还没确认。", "assistant-impact"));
       if (can(card, "open")) {
-        const open = register(entry, button("核对并填写", () => openWorkspaceForm(entry), "primary")); entry.node.append(open);
+        const open = register(entry, button("填写", () => openWorkspaceForm(entry), "primary")); entry.node.append(open);
         const cancel = register(entry, button("暂不处理", async () => {
           if (!current(entry) || entry.busy || inFlight.has(card.id) || recheckAfter.has(card.id)) return;
           lock(entry); inFlight.add(card.id);
           try { await api(`/api/assistant/cards/${identifier(card.id)}/dismiss`, { method: "POST", json: {} }); if (alive) { suppressed.add(card.id); await refresh(); } }
-          catch (error) { if (alive && error?.name !== "AbortError") requireFreshReview(entry, "暂未确认是否已收起，请刷新核对。"); }
+          catch (error) { if (alive && error?.name !== "AbortError") requireFreshReview(entry, "没收起来，请刷新看看。"); }
           finally { inFlight.delete(card.id); entry.node.setAttribute("aria-busy", "false"); }
         })); entry.node.append(cancel);
       }
@@ -322,28 +316,21 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       const paths = [...(data.input_manifest || []).map(item => `读取：${item.path}`), ...(data.output_paths || []).map(path => `保留：${path}`)];
       if (paths.length) entry.node.append(node("p", paths.join("\n"), "assistant-prewrap"));
       if (data.timeout_s) entry.node.append(node("p", `最长执行 ${data.timeout_s} 秒。`, "assistant-hint"));
-      const consent = check(entry, "我已核对执行内容、输入文件与输出范围");
-      if (can(card, "approve")) entry.node.append(consent.element);
-      appendActions(entry, [actionButton(entry, "approve", "允许执行", { confirm: consent, className: "primary" }), actionButton(entry, "deny", "不允许")]);
+      appendActions(entry, [actionButton(entry, "approve", "允许执行", { className: "primary" }), actionButton(entry, "deny", "不允许")]);
     } else if (card.kind === "agent_plan") {
-      entry.node.append(node("p", `${task.visibility === "space" ? "项目成员可以查看这项任务。" : "这项任务仅你可查看。"} 下方内容将发给对应助手；前序成果须经你验收才交给后续步骤。`, "assistant-impact"));
       renderSteps(entry.node, task, { open: true });
-      const consent = check(entry, "我已核对接收对象、外发内容、运行环境与验收标准");
-      if (can(card, "approve")) entry.node.append(consent.element);
-      appendActions(entry, [actionButton(entry, "approve", "确认并派发", { confirm: consent, className: "primary" }), actionButton(entry, "cancel", "取消这项计划")]);
+      appendActions(entry, [actionButton(entry, "approve", "确认并派发", { className: "primary" }), actionButton(entry, "cancel", "取消这项计划")]);
     } else if (card.kind === "agent_result") {
       const step = data.step || {}, attempt = data.attempt || currentAttempt(step) || {}, result = step.result || attempt.result || {};
-      entry.node.append(node("h4", "验收标准"), node("p", step.acceptance || "请核对交办目标。", "assistant-prewrap"), node("h4", "提交的成果"), node("p", typeof result === "string" ? result : result.text || result.summary || "已提交成果文件。", "assistant-prewrap"));
-      if (result.outcome === "failed") entry.node.append(node("p", "执行端报告未完成，请核对原因。", "assistant-impact"));
+      entry.node.append(node("h4", "验收标准"), node("p", step.acceptance || "未写验收标准。", "assistant-prewrap"), node("h4", "提交的成果"), node("p", typeof result === "string" ? result : result.text || result.summary || "已提交成果文件。", "assistant-prewrap"));
+      if (result.outcome === "failed") entry.node.append(node("p", "执行端报告没有完成。", "assistant-impact"));
       renderArtifacts(entry.node, result.artifacts || []);
-      const consent = check(entry, "成果已满足验收标准；通过后可继续后续步骤");
-      if (can(card, "accept")) entry.node.append(consent.element);
-      appendActions(entry, [actionButton(entry, "accept", "验收通过", { confirm: consent, className: "primary" })]);
+      appendActions(entry, [actionButton(entry, "accept", "验收通过", { className: "primary" })]);
       if (can(card, "reject")) {
         const form = node("form", "", "assistant-form"), reason = input(entry, "reason", "未满足的要求", "", { multiline: true, required: true, maxLength: 2000 });
         const submit = register(entry, button("记录未通过", null, "danger")); submit.type = "submit";
         form.append(reason.element, submit); form.addEventListener("submit", event => { event.preventDefault(); return nativeAction(entry, "reject", { reason: reason.read() }); });
-        entry.node.append(disclosure("成果需要调整", node("p", "记录原因后，后续依赖步骤不会继续；不会自动重新派发。", "assistant-hint"), form));
+        entry.node.append(disclosure("成果需要调整", form));
       }
     } else if (["execution_question", "agent_question"].includes(card.kind)) {
       const question = data.question || {};
@@ -351,7 +338,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       if (can(card, "answer")) {
         const form = node("form", "", "assistant-form"), answer = input(entry, "answer", "你的回答", "", { required: true, multiline: !question.choices?.length, options: question.choices?.length ? [["", "请选择"], ...question.choices.map(choice => [choice, choice])] : null, maxLength: card.kind === "execution_question" ? 4000 : 8000 });
         const submit = register(entry, button("发送回答", null, "primary")); submit.type = "submit";
-        form.append(answer.element, node("p", "这份回答会交给当前任务的执行端。", "assistant-hint"), submit);
+        form.append(answer.element, submit);
         form.addEventListener("submit", event => { event.preventDefault(); return nativeAction(entry, "answer", { answer: answer.read() }); }); entry.node.append(form);
       }
     } else if (card.kind === "task_status") {
@@ -376,7 +363,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
         renderArtifacts(detail, job.result?.artifacts || [], "execution");
       }
       if (detail.children.length > 1) entry.node.append(detail);
-      if (task.state === "uncertain") entry.node.append(node("p", "原执行尚未核实，请先在对应助手或电脑上核对状态。", "assistant-impact"));
+      if (task.state === "uncertain") entry.node.append(node("p", "不确定有没有执行成功。", "assistant-impact"));
     }
     entry.node.append(entry.message);
   }
@@ -414,7 +401,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
     const section = disclosure("接入指引与文件"), controls = [];
     const valid = () => alive && available() && (!entry || current(entry));
     const remember = control => { controls.push(control); if (entry) register(entry, control); return control; };
-    section.append(node("p", "在执行环境中选择受支持的接入方式，并将连接凭据保存为 Bearer Token。只支持聊天的会话无法领取任务。", "assistant-hint"));
+    section.append(node("p", "在执行环境里选一种接入方式，把凭据存成 Bearer Token。", "assistant-hint"));
     for (const [key, label] of [["mcp_url", "MCP 服务器地址"], ["openapi_url", "HTTP 工具定义地址（OpenAPI）"], ["bridge_url", "Python 连接脚本地址"]]) {
       const address = connection?.[key];
       if (typeof address !== "string" || !address) continue;
@@ -439,14 +426,14 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
     };
     if (agentId && downloadConnection && connection?.openapi_download_path === `/api/v4/agents/${encodeURIComponent(agentId)}/openapi.json`) {
       download("openapi", "下载 OpenAPI 定义");
-      section.append(node("p", "可将定义文件导入支持 HTTP 工具的执行环境。文件不含凭据；连接认证需单独设置。", "assistant-hint"));
+      section.append(node("p", "可导入支持 HTTP 工具的执行环境。", "assistant-hint"));
     }
     if (agentId && downloadConnection && typeof connection?.bridge_url === "string" && connection.bridge_url) {
       download("bridge", "下载 Python Bridge");
-      section.append(node("p", "Bridge 负责领取任务和回传结果，执行任务的仍是你的助手。下载后用 python bridge.py --help 查看接入方法；凭据通过安全输入或环境变量提供。", "assistant-hint"));
+      section.append(node("p", "下载后运行 python bridge.py --help 查看用法。", "assistant-hint"));
     }
     if (typeof connection?.instructions === "string" && connection.instructions) section.append(disclosure("给执行助手的协议说明", node("pre", connection.instructions, "assistant-command")));
-    if (!["mcp_url", "openapi_url", "bridge_url"].some(key => typeof connection?.[key] === "string" && connection[key])) section.append(node("p", "接入信息暂不可用，请稍后重新打开连接设置。", "assistant-hint"));
+    if (!["mcp_url", "openapi_url", "bridge_url"].some(key => typeof connection?.[key] === "string" && connection[key])) section.append(node("p", "暂时没有接入信息，请稍后再打开。", "assistant-hint"));
     return { element: section, clear() { controls.forEach(control => { control.disabled = true; if ("value" in control) control.value = ""; }); section.replaceChildren(); } };
   }
 
@@ -458,7 +445,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
     const value = node("textarea"); value.readOnly = true; value.autocomplete = "off"; value.rows = 4;
     value.setAttribute("aria-label", response.worker_token ? "连接凭据" : "一次性代码");
     value.value = action === "bind_channel" ? `/bind ${code}` : code;
-    dialog.append(title, node("p", "只在此安全窗口显示。请保存到需要连接的设备或服务；不要粘贴到聊天中。", "assistant-hint"), value);
+    dialog.append(title, node("p", "只显示这一次，请先复制。", "assistant-hint"), value);
     const extra = [];
     for (const [label, address] of [["设备配对地址", response.url || response.pairing_url]]) {
       if (typeof address === "string" && address) { const field = node("textarea"); field.readOnly = true; field.value = address; field.rows = 2; field.setAttribute("aria-label", label); extra.push(field); dialog.append(node("p", label, "assistant-hint"), field); }
@@ -483,7 +470,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
   async function executeWorkspace(entry, payload, privateFields = null) {
     if (!current(entry) || entry.busy || !can(entry.card, "open")) return;
     const base = `/api/assistant/cards/${identifier(entry.card.id)}`;
-    lock(entry); message(entry, "正在提交你确认的操作…");
+    lock(entry); message(entry, "正在提交…");
     let execution = null, received = false;
     try {
       execution = await api(`${base}/begin`, { method: "POST", json: { payload } });
@@ -511,7 +498,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
         return;
       }
       try { await api(`${base}/complete`, { method: "POST", json: { execution_id: execution.execution_id, outcome: "succeeded" } }); }
-      catch { if (alive) onNotice("操作已经完成，但待办列表还没更新。请刷新看看，不用再操作一次。"); }
+      catch { if (alive) onNotice("操作已经完成，待办列表还没更新，刷新一下就行。"); }
       if (alive) { suppressed.add(entry.card.id); onContextChanged(); await refresh(); }
     } catch (error) {
       if (!alive || error?.name === "AbortError") return;
@@ -519,7 +506,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       if (execution?.execution_id) {
         try { await api(`${base}/complete`, { method: "POST", json: { execution_id: execution.execution_id, outcome: definite ? "failed" : "uncertain" } }); } catch { /* The persisted begin still prevents a second execution. */ }
       }
-      message(entry, definite ? "操作未完成或已被处理，请刷新核对。如需调整，请告诉助理重新准备。" : "操作结果尚未确认，请先核对实际状态。此卡片不会再次执行。", true);
+      message(entry, definite ? "没有完成，请刷新看看。要改的话，告诉助理重新准备。" : "没收到结果，请刷新看看。", true);
     } finally {
       if (privateFields) { privateFields.code = ""; privateFields.display_name = ""; }
       entry.privateControls.forEach(control => { control.value = ""; });
@@ -529,37 +516,33 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
 
   async function openWorkspaceForm(entry) {
     if (!current(entry) || entry.busy || entry.opened) return;
-    entry.opened = true; message(entry, "正在准备确认表单…");
+    entry.opened = true; message(entry, "正在打开表单…");
     try {
       const form = await workspaceForm(entry);
       if (!current(entry)) return;
       entry.node.insertBefore(form, entry.message); message(entry, "");
-    } catch (error) { if (current(entry)) { entry.opened = false; message(entry, error?.name === "AbortError" ? "" : "暂时无法准备表单，请刷新后重试。", true); } }
+    } catch (error) { if (current(entry)) { entry.opened = false; message(entry, error?.name === "AbortError" ? "" : "表单暂时打不开，请刷新后再试。", true); } }
   }
 
   async function workspaceForm(entry) {
     const { action, target_id: target, draft = {} } = entry.card.data;
     const ctx = await context(), form = node("form", "", "assistant-form");
-    let read = () => ({}), readPrivate = () => null, label = "确认提交", consent = null;
+    let read = () => ({}), readPrivate = () => null, label = "提交";
     const field = (name, title, value, options = {}) => { const item = input(entry, name, title, value, options); form.append(item.element); return item; };
     const note = text => form.append(node("p", text, "assistant-impact"));
-    const confirm = text => { consent = check(entry, text); consent.control.required = true; form.append(consent.element); };
     const required = { required: true };
     switch (action) {
       case "create_space": {
         const name = field("name", "项目名称", draft.name, { ...required, maxLength: 60 });
-        note("创建一个可邀请他人加入的项目；你的个人空间仍独立保存。"); read = () => ({ name: name.read().trim() }); label = "创建项目"; break;
+        read = () => ({ name: name.read().trim() }); label = "创建项目"; break;
       }
       case "invite_member": {
         const remark = field("label", "邀请备注", draft.label, { maxLength: 60 }), role = field("role", "项目角色", draft.role || "member", { options: ROLES });
-        note("生成一次性邀请代码。将代码交给受邀者后，对方可按所选角色加入当前项目。");
+        note("会生成一次性邀请码，发给对方就能加入。");
         read = () => ({ label: remark.read().trim(), role: role.read() }); label = "生成邀请"; break;
       }
       case "accept_project_invite": {
-        note(`使用当前账号「${ctx.principal?.display_name || "我的账号"}」加入受邀项目；你的个人空间仍独立保存。`);
         const code = field("invite_code", "邀请代码或邀请链接", "", { ...required, type: "password", maxLength: 2000 }); entry.privateControls.push(code.control);
-        note("邀请码只发给账号服务，不会进入聊天、模型或待办记录。");
-        confirm("我确认使用当前账号接受这份项目邀请");
         readPrivate = () => {
           const raw = code.read().trim(), linked = /[#&?]invite=([A-Za-z0-9_-]{16,128})(?![A-Za-z0-9_-])/.exec(raw);
           const value = linked ? linked[1] : raw;
@@ -572,44 +555,41 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       case "change_member": {
         const members = await api("/api/v3/members"), member = (members.members || []).find(item => (item.principal_id || item.id) === target);
         if (!member) throw new Error("成员已变化。");
-        note(`操作对象：${member.display_name || "当前项目成员"}`);
+        note(`成员：${member.display_name || "当前项目成员"}`);
         const mode = field("mode", "调整方式", draft.revoke ? "revoke" : "role", { options: [["role", "修改角色"], ["revoke", "移出当前项目"]] });
         const role = field("role", "新的项目角色", draft.role || member.role || "member", { options: ROLES });
-        confirm("我确认调整此成员的项目访问权限");
-        read = () => mode.read() === "revoke" ? { principal_id: target, revoke: true } : { principal_id: target, role: role.read() }; label = "保存成员权限"; break;
+        read = () => mode.read() === "revoke" ? { principal_id: target, revoke: true } : { principal_id: target, role: role.read() }; label = "保存"; break;
       }
       case "pair_device": {
-        const remark = field("label", "设备名称", draft.label, { maxLength: 60 }); note("新设备使用配对代码登录你的账号。只向你控制的设备提供代码。"); read = () => ({ label: remark.read().trim() }); label = "生成配对代码"; break;
+        const remark = field("label", "设备名称", draft.label, { maxLength: 60 }); read = () => ({ label: remark.read().trim() }); label = "生成配对代码"; break;
       }
-      case "create_recovery_code": note("恢复代码可以恢复你的账号访问，请保存到安全的位置。"); confirm("我会妥善保存恢复代码"); label = "生成恢复代码"; break;
-      case "bind_channel": note("生成一次性绑定代码。在要绑定的聊天渠道发送后，该渠道将关联你的账号。"); confirm("我确认绑定的是自己控制的聊天账号"); label = "生成绑定代码"; break;
+      case "create_recovery_code": note("会生成新的恢复码，旧的失效。"); label = "生成恢复码"; break;
+      case "bind_channel": note("会生成绑定码，在要绑定的聊天里发给机器人。"); label = "生成绑定码"; break;
       case "revoke_channel": {
         const data = await api("/api/v3/channel-bindings"), bindings = data.bindings || data.channel_bindings || [];
         const binding = bindings.find(item => item.channel === draft.channel && item.account_id === draft.account_id && item.sender_id === draft.sender_id);
         if (!binding) throw new Error("绑定已变化。");
-        note(`解除 ${binding.channel} 渠道与当前账号的绑定。`); confirm("我确认解除这个渠道绑定");
+        note(`解除 ${binding.channel} 的绑定。`);
         read = () => ({ channel: binding.channel, account_id: binding.account_id, sender_id: binding.sender_id }); label = "解除绑定"; break;
       }
       case "invite_node": {
         const remark = field("label", "电脑名称", draft.label, { ...required, maxLength: 60 });
         const choices = [];
         for (const space of ctx.spaces || []) { const choice = check(entry, space.name || "当前空间", (draft.space_ids || [ctx.space_id]).includes(space.id)); form.append(choice.element); choices.push([space.id, choice.control]); }
-        note("这台电脑可领取所选空间中已批准的执行任务。");
-        read = () => { const space_ids = choices.filter(([, control]) => control.checked).map(([id]) => id); if (!space_ids.length) throw new Error("请选择至少一个授权空间。"); return { label: remark.read().trim(), space_ids }; }; label = "生成电脑邀请"; break;
+        read = () => { const space_ids = choices.filter(([, control]) => control.checked).map(([id]) => id); if (!space_ids.length) throw new Error("请选择至少一个空间。"); return { label: remark.read().trim(), space_ids }; }; label = "生成电脑邀请"; break;
       }
       case "revoke_device": case "revoke_node": case "revoke_agent": case "rotate_agent_token": {
         const isAgent = ["revoke_agent", "rotate_agent_token"].includes(action);
         const response = await api(isAgent ? `/api/v4/agents/${identifier(target)}` : action === "revoke_device" ? "/api/v3/devices" : "/api/v3/nodes");
         const item = isAgent ? response.agent || response : (response[action === "revoke_device" ? "devices" : "nodes"] || []).find(value => String(value.id) === String(target));
         if (!item) throw new Error("对象已变化。");
-        note(`操作对象：${item.name || item.label || (isAgent ? "已连接的助手" : "已登录的设备")}`);
-        note(action === "rotate_agent_token" ? "生成新凭据后，旧凭据立即失效，需要在执行端更新。" : action === "revoke_device" ? "撤销后，这台设备将无法继续访问账号。" : "撤销连接授权并使旧计划失效；进行中的执行仍需核对停止状态。");
-        confirm(action === "rotate_agent_token" ? "我确认更换连接凭据" : "我确认撤销此项访问权限"); label = action === "rotate_agent_token" ? "更换凭据" : "确认撤销"; break;
+        note(`${item.name || item.label || (isAgent ? "已连接的助手" : "已登录的设备")}`);
+        note(action === "rotate_agent_token" ? "旧凭据会立即失效。" : "撤销后不能再使用。");
+        label = action === "rotate_agent_token" ? "更换凭据" : "撤销"; break;
       }
       case "write_knowledge": {
         const path = field("path", "资料文件名", draft.path || target || "", { ...required, maxLength: 100, placeholder: "例如：项目笔记.md" });
         const body = field("text", "资料内容", draft.text || "", { ...required, multiline: true, rows: 8, maxLength: 30000 });
-        note("保存到当前空间的资料中。项目资料会向有权访问该项目的成员开放。");
         read = () => ({ path: path.read().trim(), text: body.read(), ...(draft.revision == null ? {} : { revision: draft.revision }) }); label = "保存资料"; break;
       }
       case "create_execution_task": case "add_execution_step": {
@@ -617,20 +597,18 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
         const command = field("command", "执行内容", draft.command, { ...required, multiline: true, rows: 4 });
         const inputs = field("input_paths", "读取的文件 · 每行一个路径", lines(draft.input_paths), { multiline: true }), outputs = field("output_paths", "保留的成果文件 · 每行一个路径", lines(draft.output_paths), { multiline: true });
         const timeout = field("timeout_s", "最长执行时间（秒）", draft.timeout_s || 900, { ...required, type: "number", min: 1, max: 3600 });
-        note("这里先生成电脑任务的计划，还要由批准使用这台电脑的人批准，才会执行。输入文件会先做一份快照，默认没有网络。");
+        note("提交后，要批准才会执行。");
         read = () => { const fields = { command: command.read(), input_paths: inputs.read(), output_paths: outputs.read(), timeout_s: timeout.read() }; return title ? buildTaskRequest({ ...fields, title: title.read() }, `assistant:${entry.card.id}`) : buildStepRequest(fields, draft.expected_revision, draft.step_id); }; label = title ? "提交待批准计划" : "补充执行步骤"; break;
       }
       case "revise_execution_task": {
-        const title = field("title", "新的任务名称", draft.title, { ...required, maxLength: 200 }); note("修改任务会使旧版本的执行授权失效。请重新核对后续计划。"); confirm("我确认修改这项任务"); read = () => ({ revision: draft.revision, title: title.read().trim() }); label = "保存修改"; break;
+        const title = field("title", "新的任务名称", draft.title, { ...required, maxLength: 200 }); note("修改后需要重新批准。"); read = () => ({ revision: draft.revision, title: title.read().trim() }); label = "保存修改"; break;
       }
-      case "cancel_execution_task": case "cancel_agent_task": note("提交取消请求。正在运行的执行仍须等待执行端确认停止。"); confirm("我确认取消这项任务"); label = "提交取消请求"; break;
+      case "cancel_execution_task": case "cancel_agent_task": label = "取消任务"; break;
       case "confirm_agent_stopped": case "confirm_wake_stopped": {
-        note("先在远端实际核对并停止执行，再登记确认。确认只释放对应占用，原任务不会重新派发。");
-        const explanation = field("note", "你在哪里核对、如何确认已停止", "", { ...required, multiline: true, maxLength: 1000 });
-        confirm(action === "confirm_wake_stopped" ? "我已核对：这次触发未执行或相关执行已经停止" : "我已核对：本次远端执行确实停止");
-        read = () => action === "confirm_wake_stopped" ? { note: explanation.read().trim() } : { step_id: draft.step_id, attempt_id: draft.attempt_id, note: explanation.read().trim() }; label = "记录停止确认"; break;
+        note("确认对方已经停止，释放占用。");
+        read = () => action === "confirm_wake_stopped" ? { note: "已确认停止" } : { step_id: draft.step_id, attempt_id: draft.attempt_id, note: "已确认停止" }; label = "确认已停止"; break;
       }
-      case "create_agent": case "edit_agent": read = await agentForm(entry, form, ctx, draft, target); label = action === "create_agent" ? "保存连接并生成凭据" : "保存连接修改"; if (action === "edit_agent") confirm("我确认旧计划会失效，并需核对进行中的执行"); break;
+      case "create_agent": case "edit_agent": read = await agentForm(entry, form, ctx, draft, target); label = action === "create_agent" ? "保存连接并生成凭据" : "保存连接修改"; break;
       case "create_agent_task": read = await agentTaskForm(entry, form, draft); label = "生成待确认计划"; break;
       default: throw new Error("未知操作。");
     }
@@ -638,7 +616,6 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
     form.addEventListener("submit", event => {
       event.preventDefault();
       if (!current(entry) || entry.busy) return;
-      if (consent && !consent.control.checked) { message(entry, "请核对影响并勾选确认。", true); return; }
       if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
       try { const payload = read(); return executeWorkspace(entry, payload, readPrivate()); } catch (error) { message(entry, error.message, true); }
     });
@@ -658,9 +635,9 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
     const kind = add("kind", "运行在哪里", initial.kind || "grok", { options: Object.entries(AGENT_KINDS) }); kind.control.disabled = editing;
     const wake = add("wake_mode", "如何领取任务", "manual", { options: [["manual", "手动领取"]] });
     const guidance = node("p", "", "assistant-hint"); form.append(guidance);
-    const shared = check(entry, "使用原有共享环境，可能沿用历史、文件与工具权限", initial.shared_environment); form.append(shared.element);
+    const shared = check(entry, "使用助手原有的运行环境", initial.shared_environment); form.append(shared.element);
     const grants = [];
-    form.append(node("h4", "谁可以交办任务"), node("p", "默认仅自己。授权成员可以交办，但不会因此看到你的私人任务。", "assistant-hint"));
+    form.append(node("h4", "谁可以交办任务"));
     for (const member of members) {
       const id = member.principal_id || member.id;
       if (id === ctx.principal?.id || member.role === "viewer") continue;
@@ -671,7 +648,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
     if (ctx.principal?.is_admin) {
       url = input(entry, "webhook_url_env", "Routine 网址的环境变量名", previous?.secret_env?.webhook_url || "", { maxLength: 128 });
       key = input(entry, "webhook_key_env", "认证密钥的环境变量名", previous?.secret_env?.webhook_key || "", { maxLength: 128 });
-      advanced = disclosure("已配置 Grok Routine？", node("p", "只填写服务器中已配置的变量名，不填写网址或密钥。", "assistant-hint"), url.element, key.element); form.append(advanced);
+      advanced = disclosure("已配置 Grok Routine？", node("p", "填环境变量名，不是网址或密钥。", "assistant-hint"), url.element, key.element); form.append(advanced);
     }
     const updateMode = () => { guidance.textContent = wakeDescription({ kind: kind.read(), wake_mode: wake.read() }); if (url) { const required = kind.read() === "grok" && wake.read() === "grok_routine"; url.control.required = key.control.required = required; advanced.hidden = kind.read() !== "grok"; advanced.open = required; } };
     const updateKind = (first = false) => {
@@ -681,7 +658,7 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       shared.control.checked = kind.read() === "grok" || (first ? Boolean(initial.shared_environment) : kind.read() === "muse"); shared.control.disabled = kind.read() === "grok"; updateMode();
     };
     kind.control.addEventListener("change", () => updateKind()); wake.control.addEventListener("change", updateMode); updateKind(true);
-    form.append(node("p", editing ? "保存修改会使旧计划失效，并要求进行中的执行停止。" : "保存连接后，还需在对应助手或执行端完成配置；仅能聊天的会话无法领取任务。", "assistant-impact"));
+    form.append(node("p", editing ? "保存后，旧计划会失效。" : "保存后，还要在助手那边完成配置。", "assistant-impact"));
     return () => {
       const secret_env = url && kind.read() === "grok" ? secretReferences(url.read(), key.read()) : {};
       if (wake.read() === "grok_routine" && (!secret_env.webhook_url || !secret_env.webhook_key)) throw new Error("请填写已配置的环境变量名，或选择手动领取。");
@@ -723,13 +700,13 @@ export function createAssistantCards({ document: doc = globalThis.document, api,
       section.append(agent.element, prompt.element, acceptance.element);
       const dependencyHost = node("div", "", "assistant-dependencies"); section.append(dependencyHost);
       const required = check(entry, "这是完成任务必须通过的步骤", seed.required !== false); section.append(required.element);
-      const scope = node("p", "", "assistant-hint"); const updateScope = () => { const selected = agents.find(item => item.id === agent.read()); scope.textContent = selected ? wakeDescription(selected) + (selected.shared_environment || selected.kind === "grok" ? " 会沿用原有运行环境，请核对外发信息。" : "") : "请选择可用助手。"; }; agent.control.addEventListener("change", updateScope); updateScope(); section.append(scope);
+      const scope = node("p", "", "assistant-hint"); const updateScope = () => { const selected = agents.find(item => item.id === agent.read()); scope.textContent = selected ? wakeDescription(selected) : "请选择可用助手。"; }; agent.control.addEventListener("change", updateScope); updateScope(); section.append(scope);
       steps.push({ id, index, agent, prompt, acceptance, dependencies: [], dependencyHost, seedDependencies: seed.depends_on || [], required }); host.append(section);
       if (update) updateDependencies();
     };
     const seeds = draft.steps?.length ? draft.steps : [{}]; seeds.forEach(seed => addStep(seed, false)); updateDependencies();
     const more = register(entry, button("添加一步", () => { addStep(); more.disabled = steps.length >= 16; })); form.append(more);
-    form.append(node("p", "此处只生成计划。下一张确认卡片会展示实际外发内容，批准后才开始派发。", "assistant-impact"));
+    form.append(node("p", "提交后会生成一张待确认的计划。", "assistant-impact"));
     return () => {
       const proposed = steps.map(step => ({ id: step.id, agent_id: step.agent.read(), prompt: step.prompt.read().trim(), acceptance: step.acceptance.read().trim(), required: step.required.control.checked, depends_on: step.dependencies.filter(([, control]) => control.checked).map(([id]) => id) }));
       const ids = new Set(proposed.map(step => step.id));

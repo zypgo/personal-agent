@@ -51,10 +51,10 @@ function notice(text, error = false) {
   if(text && !error && typeof setTimeout === "function") noticeTimer = setTimeout(() => notice(""), 6000);
 }
 function readable(error) {
-  if(error?.status === 0 || error instanceof TypeError) return "暂未收到服务器确认。请先刷新查看结果，再决定是否重试。";
-  if(error?.status === 409) return "内容或权限已变化。已保留填写内容，请刷新后重新核对。";
-  if(error?.status === 422) return "请检查填写内容后再提交。";
-  if(error?.status === 401 || error?.status === 403) return "当前访问权限已变化，请重新登录或切换空间。";
+  if(error?.status === 0 || error instanceof TypeError) return "没收到服务器的回复，操作可能已经生效，请刷新看看。";
+  if(error?.status === 409) return "内容已经变化，请刷新后再试。填写的内容还在。";
+  if(error?.status === 422) return "请检查填写的内容后再提交。";
+  if(error?.status === 401 || error?.status === 403) return "没有权限，请重新登录或换个空间。";
   return error instanceof Error ? error.message : "操作未完成，请重试。";
 }
 function run(action) { Promise.resolve().then(action).catch(error => {
@@ -116,7 +116,7 @@ function showPanel({focus=false}={}) {
       $("task-view-" + name).classList.toggle("selected",active);
       $("task-view-" + name).setAttribute("aria-pressed",String(active));
     }
-    $("tasks-intro").textContent=state.taskView==="collaboration" ? "把目标交给助手，进度与成果都在这里。" : "安排电脑处理具体操作，核对计划后再开始。";
+    $("tasks-intro").textContent=state.taskView==="collaboration" ? "把目标交给助手，进度与成果都在这里。" : "安排电脑去做具体的事。";
     document.title=`${WORKSPACE_TABS[state.tab]} · Personal Agent`;
     $("masthead-title").textContent=WORKSPACE_TABS[state.tab];
     productShell?.setActive(state.tab);
@@ -363,7 +363,7 @@ function renderDiagnostics(data) {
     }
     box.append(grid);
     if(!connected) box.append(node("p",waiting ? "执行电脑当前离线，任务会等待设备连接。聊天和任务查询仍可使用。" : "连接自己的执行电脑后，已批准的任务即可开始。","hint"));
-    if(data.cleanup_pending) box.append(node("p",`${data.cleanup_pending} 项执行正在等待设备确认清理，记录会继续保留。`,"hint"));
+    if(data.cleanup_pending) box.append(node("p",`${data.cleanup_pending} 项执行正在等设备清理。`,"hint"));
   }
 }
 async function loadReviews() {
@@ -482,7 +482,7 @@ function renderTaskEditors(panel, task, jobs) {
     taskField(editor,"input_paths","输入文件",{kind:"textarea",required:false,placeholder:"当前工作区的相对路径，每行一个"});
     taskField(editor,"output_paths","需要保留的输出文件",{kind:"textarea",required:false,placeholder:"例如：report.md"});
     const timeout=taskField(editor,"timeout_s","最长执行时间（秒）",{value:"900"});timeout.type="number";timeout.min="1";timeout.max="3600";
-    editor.append(node("p","每一步单独审批。上一步成果不会自动变成这一步的输入，请先确认并准备需要的文件。","hint"));
+    editor.append(node("p","每一步单独批准。上一步的成果不会自动变成这一步的输入。","hint"));
     submitButton(editor,"保存步骤并申请审批");
   }
   const revise=taskEditor(panel,"修改任务目标，建立新版本",async f=>{
@@ -532,11 +532,11 @@ function renderTask(task, jobs) {
   const canManage=canWrite && (state.me?.role==="owner" || state.me?.principal.id===task.actor_id);
   const steps=jobs || task.jobs || [];
   const meta=node("div","","task-meta");meta.append(badge(taskState),node("span",`第 ${task.revision} 版`));panel.append(meta);
-  if (taskState === "uncertain") panel.append(node("p","设备状态暂时无法确认。系统会继续核查原执行，请勿重复创建同一操作。","hint"));
+  if (taskState === "uncertain") panel.append(node("p","设备状态暂时确认不了，会继续查。","hint"));
   if (!terminal.has(taskState) && canManage) {
     const cancel = node("button",taskState === "cancel_requested" ? "取消待确认" : "取消任务","ghost danger");
     cancel.disabled = taskState === "cancel_requested";
-    cancel.addEventListener("click",() => run(async () => {cancel.disabled=true;try {await api(`/api/v3/tasks/${encodeURIComponent(task.id)}/cancel`,{method:"POST",body:{}});notice("已提交取消请求，停止状态以设备确认为准。");await loadTasks(true);} finally {cancel.disabled=false;}}));
+    cancel.addEventListener("click",() => run(async () => {cancel.disabled=true;try {await api(`/api/v3/tasks/${encodeURIComponent(task.id)}/cancel`,{method:"POST",body:{}});notice("已提交取消。");await loadTasks(true);} finally {cancel.disabled=false;}}));
     const actions=node("div","","actions");actions.append(cancel);panel.append(actions);
   }
   renderQuestions(panel,task,canWrite);
@@ -680,19 +680,19 @@ async function loadDevices() {
     if(state.me?.principal.is_admin && !device.revoked_at) {
       const revoke=node("button","撤销","ghost danger");
       revoke.addEventListener("click",()=>run(async()=>{
-        if(!confirm(`撤销执行电脑 ${device.label || device.name || "此设备"} 的权限？已有执行会收到停止请求。`)) return;
+        if(!confirm(`撤销执行电脑 ${device.label || device.name || "此设备"}？已有的执行会被叫停。`)) return;
         await api(`/api/v3/nodes/${encodeURIComponent(device.id)}/revoke`,{method:"POST",body:{}});await loadDevices();
       }));row.append(revoke);
     }
     list.append(row);
   }
-  if (!list.childElementCount) empty(list,"还没有获授权的执行电脑。任务会等待设备上线。");
+  if (!list.childElementCount) empty(list,"还没有执行电脑。任务会等设备上线。");
   const sessions=$("devices-list");sessions.replaceChildren();
   for (const device of devices.devices || []) {
     const row=node("div","","row"),copy=node("div","","row-copy");
     copy.append(node("strong",device.label || device.agent || "浏览器设备"),node("span",date(device.last_seen_at)));
     const revoke=node("button","撤销","ghost danger");
-    revoke.addEventListener("click",() => run(async () => {await api(`/api/v3/devices/${encodeURIComponent(device.id)}/revoke`,{method:"POST",body:{}});notice("该设备的登录权限已撤销。");if(await loadMe()) await loadDevices();}));
+    revoke.addEventListener("click",() => run(async () => {await api(`/api/v3/devices/${encodeURIComponent(device.id)}/revoke`,{method:"POST",body:{}});notice("已撤销。");if(await loadMe()) await loadDevices();}));
     row.append(copy,revoke);sessions.append(row);
   }
   if (!sessions.childElementCount) empty(sessions,"没有活动登录设备。");
@@ -773,7 +773,7 @@ bindForm("enroll-form",async f => {
   const data=await api("/api/v3/enroll",{method:"POST",body:{code:field(f,"code").value.trim(),display_name:field(f,"display_name").value.trim()}});
   state.pendingInvite="";f.reset();state.space="";
   if(await loadMe()) await refresh();
-  if(data.recovery_code) showSecret("保存你的恢复码",data.recovery_code,"只在这里展示。所有设备失效时，用它恢复访问，请离线保存。");
+  if(data.recovery_code) showSecret("保存你的恢复码",data.recovery_code,"只显示这一次。所有设备都登不进去时，用它恢复账号。");
 });
 bindForm("recover-form",async f => {
   await api("/api/v3/recover",{method:"POST",body:{code:field(f,"code").value.trim()}});f.reset();state.space="";
@@ -810,10 +810,10 @@ $("knowledge-new").addEventListener("click",()=>openKnowledge());
 $("knowledge-close").addEventListener("click",closeKnowledge);
 form("knowledge-form").addEventListener("input",()=>{form("knowledge-form").dataset.dirty="1";});
 field(form("knowledge-form"),"path").addEventListener("input",()=>{state.knowledgeRevision=null;input("knowledge-history").disabled=true;});
-bindForm("device-pair-form",async f => {const data=await api("/api/v3/devices/pair",{method:"POST",body:{label:field(f,"label").value.trim()}});f.reset();showSecret("本人设备配对",inviteLink(data.code,"pair"),"在你自己的新设备上打开。它会登录同一个账号，请勿当作成员邀请分享。",`有效期至 ${date(data.expires_at)}`);});
-bindForm("node-invite-form",async f => {const data=await api("/api/v3/node-invites",{method:"POST",body:{label:field(f,"label").value.trim(),space_ids:[state.space]}});f.reset();showSecret("连接执行电脑",data.code,"仅在你管理的执行电脑上使用此代码。电脑只获得所选空间的任务权限。",`在电脑终端运行 pa node pair --url ${location.origin}，按提示粘贴代码，然后运行 pa node run。有效期至 ${date(data.expires_at)}。`);});
-bindButton("channel-pair-button",async()=>{const data=await api("/api/v3/channel-binding",{method:"POST",body:{}});showSecret("绑定聊天账号",`/bind ${data.code}`,"复制命令，在 Telegram 或钉钉与机器人私聊发送。它会绑定你的账号与当前空间。",`仅能使用一次，有效期至 ${date(data.expires_at)}。`);});
-bindButton("recovery-button",async()=>{const data=await api("/api/v3/recovery-code",{method:"POST",body:{}});showSecret("保存新的恢复码",data.code,"旧恢复码已经失效。请离线保存这个一次性恢复码。");});
+bindForm("device-pair-form",async f => {const data=await api("/api/v3/devices/pair",{method:"POST",body:{label:field(f,"label").value.trim()}});f.reset();showSecret("本人设备配对",inviteLink(data.code,"pair"),"在你的新设备上打开，登录同一个账号。",`有效期至 ${date(data.expires_at)}`);});
+bindForm("node-invite-form",async f => {const data=await api("/api/v3/node-invites",{method:"POST",body:{label:field(f,"label").value.trim(),space_ids:[state.space]}});f.reset();showSecret("连接执行电脑",data.code,"在要连接的电脑上使用这个代码。",`在电脑终端运行 pa node pair --url ${location.origin}，按提示粘贴代码，然后运行 pa node run。有效期至 ${date(data.expires_at)}。`);});
+bindButton("channel-pair-button",async()=>{const data=await api("/api/v3/channel-binding",{method:"POST",body:{}});showSecret("绑定聊天账号",`/bind ${data.code}`,"复制命令，在 Telegram 或钉钉里私聊机器人发送。",`仅能使用一次，有效期至 ${date(data.expires_at)}。`);});
+bindButton("recovery-button",async()=>{const data=await api("/api/v3/recovery-code",{method:"POST",body:{}});showSecret("保存新的恢复码",data.code,"旧的恢复码已失效。");});
 bindButton("retry-workspace",openWorkspace);
 bindButton("logout-button",async()=>{await api("/api/logout",{method:"POST",body:{}});showLogin();notice("已退出当前设备。");});
 $("space-select").addEventListener("change",event=>run(()=>switchSpace(event.target.value)));

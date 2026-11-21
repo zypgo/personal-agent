@@ -29,7 +29,7 @@
       <main id="login" class="login" hidden>
         <p class="eyebrow">欢迎回来</p>
         <h1>进入你的空间</h1>
-        <p class="muted">新成员请用项目邀请加入。已经有账号的，先配对这台设备，或者用恢复码登录，不要重复建账号。</p>
+        <p class="muted">新成员用项目邀请加入。已有账号的，配对这台设备，或者用恢复码登录。</p>
         <div class="two-columns">
           <section class="card">
             <h2>接受项目邀请</h2>
@@ -52,7 +52,7 @@
 
       <main id="workspace" hidden>
         <section id="join-banner" class="card invite-banner" hidden>
-          <div><h2>加入新的项目</h2><p class="muted">使用当前账号接受邀请，你的个人空间保持独立。</p></div>
+          <div><h2>加入新的项目</h2><p class="muted">用当前账号接受邀请。</p></div>
           <button id="accept-invite" class="primary">接受邀请</button>
         </section>
 
@@ -65,18 +65,18 @@
           </div>
           <div id="computer-tasks" hidden>
           <section id="task-diagnostics" class="card diagnostics" aria-label="任务与额度状态"></section>
-          <section id="review-card" class="card" hidden><h2>等待我批准的执行</h2><p class="hint">核对要执行的操作与输入文件，再决定是否批准。</p><div id="review-list" class="stack"></div></section>
+          <section id="review-card" class="card" hidden><h2>等待我批准的执行</h2><div id="review-list" class="stack"></div></section>
           <details class="card compose" id="task-compose">
             <summary><span>新建电脑任务</span><span class="compose-description">安排已授权电脑执行具体操作</span><span class="compose-plus" aria-hidden="true">＋</span></summary>
             <form id="task-form">
               <label>任务名称<input name="title" required maxlength="200" placeholder="例如：整理项目数据并生成报告"></label>
-              <label>执行命令<textarea name="command" required maxlength="16000" rows="4" spellcheck="false" placeholder="填写在隔离工作区内执行的命令"></textarea></label>
+              <label>执行命令<textarea name="command" required maxlength="16000" rows="4" spellcheck="false" placeholder="要执行的命令"></textarea></label>
               <div class="two-columns">
                 <label>输入文件<textarea name="input_paths" rows="2" placeholder="工作区相对路径，每行一个"></textarea></label>
                 <label>需要保留的输出文件<textarea name="output_paths" rows="2" placeholder="例如：report.md"></textarea></label>
               </div>
               <label class="short-field">最长执行时间（秒）<input name="timeout_s" type="number" min="1" max="3600" value="900" required></label>
-              <p class="hint">任务只能用输入文件的快照（一份副本），默认没有网络。提交后，要由批准使用这台电脑的人确认；电脑不在线的话，会等它上线。</p>
+              <p class="hint">默认不联网。提交后要批准才会执行，电脑不在线会等它上线。</p>
               <button class="primary" type="submit">提交任务</button>
             </form>
           </details>
@@ -91,7 +91,7 @@
         </section>
 
         <section id="panel-spaces" class="panel" hidden>
-          <div class="section-title"><div><span class="section-emblem" aria-hidden="true"><svg viewBox="0 0 44 44" focusable="false"><path d="M5 15V8h12l4 5h18v25H5V15Z"/><path d="M5 20h34"/><circle cx="18" cy="28" r="3"/><circle cx="28" cy="28" r="3"/><path d="M13 35c1-4 9-4 10 0m1-3c3-1 7 0 8 3"/></svg></span><p class="eyebrow">一起把事情做好</p><h1 tabindex="-1">项目与成员</h1><p class="muted">按项目整理资料、共享任务，私人空间始终独立。</p></div></div>
+          <div class="section-title"><div><span class="section-emblem" aria-hidden="true"><svg viewBox="0 0 44 44" focusable="false"><path d="M5 15V8h12l4 5h18v25H5V15Z"/><path d="M5 20h34"/><circle cx="18" cy="28" r="3"/><circle cx="28" cy="28" r="3"/><path d="M13 35c1-4 9-4 10 0m1-3c3-1 7 0 8 3"/></svg></span><p class="eyebrow">一起把事情做好</p><h1 tabindex="-1">项目与成员</h1><p class="muted">按项目整理资料、共享任务。</p></div></div>
           <div class="two-columns">
             <details class="card compose"><summary><span>创建新项目</span><span class="compose-description">为共同目标留一个独立空间</span><span class="compose-plus" aria-hidden="true">＋</span></summary><form id="space-form"><label>项目名称<input name="name" required maxlength="60" placeholder="例如：每周研究"></label><button class="primary" type="submit">创建项目</button></form></details>
             <details class="card compose" id="member-invite-card"><summary><span>邀请成员</span><span class="compose-description">选择他们在当前项目中的权限</span><span class="compose-plus" aria-hidden="true">＋</span></summary><form id="invite-form"><label>邀请备注<input name="label" maxlength="60" placeholder="可选"></label><label>项目角色<select name="role"><option value="member">成员 · 发起任务、编辑资料</option><option value="viewer">访客 · 查看项目内容</option><option value="owner">负责人 · 同时管理成员与规则</option></select></label><button type="submit">生成一次性邀请</button></form></details>
@@ -117,7 +117,7 @@
             <section class="card"><h2>我的登录设备</h2><div id="devices-list" class="stack"></div><details class="inline-compose"><summary>登录另一台设备</summary><form id="device-pair-form"><label>新设备名称<input name="label" required maxlength="60" placeholder="例如：我的手机"></label><button type="submit">生成设备登录链接</button></form></details></section>
           </div>
           <section id="channel-card" class="card"><h2>聊天账号</h2><p class="muted">连接 Telegram 或钉钉后，可以直接与助理对话。消息会进入当前空间。</p><div id="channel-bindings-list" class="stack"></div><button id="channel-pair-button" type="button">连接聊天账号</button></section>
-          <section class="card account-recovery"><h2>账号恢复</h2><p class="muted">所有设备失效后，可用一次性恢复码重新登录。重新生成会让原恢复码失效，请离线保存。</p><button id="recovery-button" type="button">生成新的恢复码</button></section>
+          <section class="card account-recovery"><h2>账号恢复</h2><p class="muted">所有设备都登不进去时，用恢复码重新登录。重新生成后，旧的恢复码失效。</p><button id="recovery-button" type="button">生成新的恢复码</button></section>
           <div class="actions footer-actions"><a href="/" class="button ghost" id="device-chat-link">返回对话</a><button id="logout-button" type="button" class="danger ghost">退出当前设备</button></div>
         </section>
       </main>
@@ -127,7 +127,7 @@
     <dialog id="secret-dialog" aria-labelledby="secret-title">
       <h2 id="secret-title"></h2><p id="secret-description" class="muted"></p>
       <label class="sr-only" for="secret-value">一次性代码或链接</label><textarea id="secret-value" readonly rows="3" spellcheck="false"></textarea>
-      <p id="secret-extra" class="hint"></p><div class="actions"><button id="secret-copy" class="primary" type="button">复制</button><button id="secret-close" type="button">我已保存</button></div>
+      <p id="secret-extra" class="hint"></p><div class="actions"><button id="secret-copy" class="primary" type="button">复制</button><button id="secret-close" type="button">完成</button></div>
     </dialog>
     <dialog id="knowledge-history-dialog" class="history-dialog" aria-labelledby="knowledge-history-title">
       <h2 id="knowledge-history-title">资料历史</h2><p class="muted">最近二十个历史版本，可查看并复制需要的内容。</p>

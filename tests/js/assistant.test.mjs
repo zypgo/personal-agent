@@ -31,7 +31,6 @@ const button = (root, label) => find(root, "button").find(item => item.textConte
 const click = async control => { assert.ok(control, "button exists"); return control.listeners.get("click")?.({ preventDefault() {} }); };
 const submit = async form => form.listeners.get("submit")({ preventDefault() {} });
 const field = (root, name) => elements(root).find(item => item.name === name);
-const checks = root => find(root, "input").filter(item => item.type === "checkbox");
 const clone = value => JSON.parse(JSON.stringify(value));
 const task = () => ({ id: "task-a", title: "整理研究", revision: 3, plan_hash: "f".repeat(64), state: "planned", visibility: "private", steps: [{ id: "s1", agent_id: "agent-a", agent_name: "研究助手", agent_kind: "grok", shared_environment: true, prompt: "只使用这些资料", acceptance: "注明出处", depends_on: [], state: "planned" }] });
 const planCard = () => ({ id: "plan-a", kind: "agent_plan", title: "整理研究", status: "planned", data: { task: task() }, actions: [{ id: "approve" }, { id: "cancel" }] });
@@ -112,13 +111,11 @@ test("fixed workspace routes cover all 24 actions without interpreting model URL
   for (const action of ["https://evil.invalid", "constructor", "__proto__", "fetch"]) assert.throws(() => workspaceRequest(action, "target", {}), /暂不支持/);
 });
 
-test("reviewing a plan requires explicit consent and concurrent clicks send one mutation", async () => {
+test("concurrent clicks on a plan send one mutation", async () => {
   let release;
   const pending = new Promise(resolve => { release = resolve; });
   const s = setup({ cards: [planCard()], respond: path => path.endsWith("/approve") ? pending : undefined });
   await s.ui.refresh(); const approve = button(s.ui.element, "确认并派发");
-  await click(approve); assert.equal(s.calls.filter(item => item.method !== "GET").length, 0);
-  checks(s.ui.element)[0].checked = true;
   const first = click(approve); await click(approve);
   assert.equal(s.calls.filter(item => item.path.endsWith("/approve")).length, 1);
   release({ ok: true }); await first;
@@ -127,10 +124,10 @@ test("reviewing a plan requires explicit consent and concurrent clicks send one 
 
 test("a stale or removed card cannot submit, including a retained old click handler", async () => {
   const s = setup({ cards: [planCard()] }); await s.ui.refresh();
-  const old = button(s.ui.element, "确认并派发"); checks(s.ui.element)[0].checked = true;
+  const old = button(s.ui.element, "确认并派发");
   s.state.cards[0].data.task.revision = 4; s.state.cards[0].data.task.plan_hash = "e".repeat(64); await s.ui.refresh();
   await click(old); assert.equal(s.calls.filter(item => item.method === "POST").length, 0);
-  const newer = button(s.ui.element, "确认并派发"); checks(s.ui.element)[0].checked = true;
+  const newer = button(s.ui.element, "确认并派发");
   s.state.cards = []; await s.ui.refresh(); await click(newer);
   assert.equal(s.calls.filter(item => item.method === "POST").length, 0);
 });
@@ -160,7 +157,7 @@ test("question inputs survive unchanged polling and answers use each API's revis
 
 test("workspace submit begins once and executes only the server-frozen action payload", async () => {
   const s = setup({ cards: [proposal()], respond: (path, options) => path.endsWith("/begin") ? { execution_id: "frozen", action: "create_space", target_id: "", payload: { name: "规范后的项目名" } } : undefined });
-  await s.ui.refresh(); await click(button(s.ui.element, "核对并填写"));
+  await s.ui.refresh(); await click(button(s.ui.element, "填写"));
   field(s.ui.element, "name").value = "用户核对的名称";
   await submit(find(s.ui.element, "form")[0]);
   assert.deepEqual(s.calls.filter(item => item.method === "POST").map(item => [item.path, item.json]), [
@@ -173,27 +170,27 @@ test("workspace submit begins once and executes only the server-frozen action pa
 
 test("an unknown response never retries an operation, including after a new page reads persisted state", async () => {
   const s = setup({ cards: [proposal()], respond: path => path === "/api/v3/spaces" ? Promise.reject(Object.assign(new Error("connection lost"), { status: 0 })) : path.endsWith("/complete") ? { ok: true } : undefined });
-  await s.ui.refresh(); await click(button(s.ui.element, "核对并填写")); const form = find(s.ui.element, "form")[0]; await submit(form); await submit(form);
+  await s.ui.refresh(); await click(button(s.ui.element, "填写")); const form = find(s.ui.element, "form")[0]; await submit(form); await submit(form);
   assert.equal(s.calls.filter(item => item.path === "/api/v3/spaces").length, 1);
   assert.deepEqual(s.calls.find(item => item.path.endsWith("/complete")).json, { execution_id: "execution-a", outcome: "uncertain" });
-  await s.ui.refresh(); assert.equal(button(s.ui.element, "核对并填写"), undefined);
-  const resumed = setup({ cards: s.state.cards }); await resumed.ui.refresh(); assert.equal(button(resumed.ui.element, "核对并填写"), undefined);
-  assert.match(resumed.ui.element.textContent, /不会重复执行/);
+  await s.ui.refresh(); assert.equal(button(s.ui.element, "填写"), undefined);
+  const resumed = setup({ cards: s.state.cards }); await resumed.ui.refresh(); assert.equal(button(resumed.ui.element, "填写"), undefined);
+  assert.match(resumed.ui.element.textContent, /结果还没确认/);
 });
 
 test("a lost begin response does not call the native endpoint or allow another begin", async () => {
   const s = setup({ cards: [proposal()], respond: (path, options, state) => {
     if (path.endsWith("/begin")) { state.cards[0].status = "executing"; state.cards[0].actions = []; return Promise.reject(Object.assign(new Error("lost response"), { status: 0 })); }
   } });
-  await s.ui.refresh(); await click(button(s.ui.element, "核对并填写")); const form = find(s.ui.element, "form")[0]; await submit(form); await submit(form); await s.ui.refresh();
+  await s.ui.refresh(); await click(button(s.ui.element, "填写")); const form = find(s.ui.element, "form")[0]; await submit(form); await submit(form); await s.ui.refresh();
   assert.equal(s.calls.filter(item => item.path.endsWith("/begin")).length, 1);
   assert.equal(s.calls.filter(item => item.path === "/api/v3/spaces").length, 0);
-  assert.equal(button(s.ui.element, "核对并填写"), undefined);
+  assert.equal(button(s.ui.element, "填写"), undefined);
 });
 
 test("credentials only appear in the dedicated dialog and complete never contains the secret", async () => {
   const s = setup({ cards: [proposal("create_recovery_code", {})], respond: path => path === "/api/v3/recovery-code" ? { code: "single-display-recovery" } : undefined });
-  await s.ui.refresh(); await click(button(s.ui.element, "核对并填写")); checks(s.ui.element)[0].checked = true;
+  await s.ui.refresh(); await click(button(s.ui.element, "填写"));
   await submit(find(s.ui.element, "form")[0]);
   const dialog = find(s.document.body, "dialog")[0], value = find(dialog, "textarea")[0];
   assert.equal(value.value, "single-display-recovery"); assert.doesNotMatch(s.ui.element.textContent, /single-display-recovery/);
@@ -204,9 +201,9 @@ test("credentials only appear in the dedicated dialog and complete never contain
 test("existing-account invite codes reach only enrollment, never begin, complete, prompts or storage", async () => {
   const code = "invitation_code_for_my_account";
   const s = setup({ cards: [proposal("accept_project_invite", { code: "model_must_not_prefill" })] });
-  await s.ui.refresh(); await click(button(s.ui.element, "核对并填写"));
+  await s.ui.refresh(); await click(button(s.ui.element, "填写"));
   const control = field(s.ui.element, "invite_code"); assert.equal(control.value, ""); assert.equal(control.type, "password");
-  control.value = `https://example.invalid/workspace#invite=${code}`; checks(s.ui.element)[0].checked = true;
+  control.value = `https://example.invalid/workspace#invite=${code}`;
   await submit(find(s.ui.element, "form")[0]);
   assert.equal(control.value, "");
   assert.deepEqual(s.calls.find(item => item.path.endsWith("/begin")).json, { payload: {} });
@@ -218,7 +215,7 @@ test("existing-account invite codes reach only enrollment, never begin, complete
 
 test("revoked or destroyed invite cards clear unsubmitted private input", async () => {
   for (const destroy of [false, true]) {
-    const s = setup({ cards: [proposal("accept_project_invite", {})] }); await s.ui.refresh(); await click(button(s.ui.element, "核对并填写"));
+    const s = setup({ cards: [proposal("accept_project_invite", {})] }); await s.ui.refresh(); await click(button(s.ui.element, "填写"));
     const control = field(s.ui.element, "invite_code"); control.value = "private_invitation_code";
     if (destroy) s.ui.destroy(); else { s.state.cards = []; await s.ui.refresh(); }
     assert.equal(control.value, ""); assert.equal(s.calls.filter(item => item.method === "POST").length, 0);
@@ -231,25 +228,22 @@ test("destroying the session clears credentials and ignores late private respons
   const pending = s.ui.refresh(); s.ui.destroy(); resolve({ cards: [planCard()] }); await pending;
   assert.equal(find(s.ui.element, "article").length, 0);
   const t = setup({ cards: [proposal("pair_device", { label: "我的手机" })], respond: path => path === "/api/v3/devices/pair" ? { code: "device-code" } : undefined });
-  await t.ui.refresh(); await click(button(t.ui.element, "核对并填写")); await submit(find(t.ui.element, "form")[0]);
+  await t.ui.refresh(); await click(button(t.ui.element, "填写")); await submit(find(t.ui.element, "form")[0]);
   const secret = find(t.document.body, "dialog")[0], value = find(secret, "textarea")[0]; t.ui.destroy(); assert.equal(value.value, ""); assert.equal(find(t.document.body, "dialog").length, 0);
 });
 
 test("stop confirmations ignore model proof text and wake routing uses the immutable returned reference", async () => {
   const card = proposal("confirm_wake_stopped", { wake_id: "wake-fixed", note: "model claims stopped" }, "task-a");
-  const s = setup({ cards: [card] }); await s.ui.refresh(); await click(button(s.ui.element, "核对并填写"));
-  assert.equal(field(s.ui.element, "note").value, "");
-  field(s.ui.element, "note").value = "我已在远端核对停止"; const form = find(s.ui.element, "form")[0]; await submit(form);
-  assert.equal(s.calls.filter(item => item.path.endsWith("/begin")).length, 0);
-  checks(s.ui.element)[0].checked = true; await submit(form);
-  assert.deepEqual(s.calls.find(item => item.path.endsWith("/begin")).json, { payload: { note: "我已在远端核对停止" } });
-  assert.deepEqual(s.calls.find(item => item.path.endsWith("/stopped")), { path: "/api/v4/tasks/task-a/wakes/wake-fixed/stopped", method: "POST", json: { note: "我已在远端核对停止" } });
+  const s = setup({ cards: [card] }); await s.ui.refresh(); await click(button(s.ui.element, "填写"));
+  assert.equal(field(s.ui.element, "note"), undefined);
+  await submit(find(s.ui.element, "form")[0]);
+  assert.deepEqual(s.calls.find(item => item.path.endsWith("/begin")).json, { payload: { note: "已确认停止" } });
+  assert.deepEqual(s.calls.find(item => item.path.endsWith("/stopped")), { path: "/api/v4/tasks/task-a/wakes/wake-fixed/stopped", method: "POST", json: { note: "已确认停止" } });
 });
 
 test("member updates use the strict DTO without the legacy extra action field", async () => {
   for (const revoke of [false, true]) {
-    const s = setup({ cards: [proposal("change_member", { role: "viewer", revoke }, "bob")] }); await s.ui.refresh(); await click(button(s.ui.element, "核对并填写"));
-    checks(s.ui.element)[0].checked = true; await submit(find(s.ui.element, "form")[0]);
+    const s = setup({ cards: [proposal("change_member", { role: "viewer", revoke }, "bob")] }); await s.ui.refresh(); await click(button(s.ui.element, "填写")); await submit(find(s.ui.element, "form")[0]);
     assert.deepEqual(s.calls.find(item => item.path.endsWith("/begin")).json.payload, revoke ? { principal_id: "bob", revoke: true } : { principal_id: "bob", role: "viewer" });
   }
 });
@@ -257,7 +251,7 @@ test("member updates use the strict DTO without the legacy extra action field", 
 test("leaving the current project stops scoped reads before navigation; self-demotion skips forbidden completion", async () => {
   for (const revoke of [true, false]) {
     const s = setup({ cards: [proposal("change_member", { role: "viewer", revoke }, "alice")] });
-    await s.ui.refresh(); await click(button(s.ui.element, "核对并填写")); checks(s.ui.element)[0].checked = true;
+    await s.ui.refresh(); await click(button(s.ui.element, "填写"));
     await submit(find(s.ui.element, "form")[0]);
     const actionAt = s.calls.findIndex(item => item.path === "/api/v3/members" && item.method === "POST");
     assert.ok(actionAt > 0); assert.equal(s.calls.some(item => item.path.endsWith("/complete")), false);
@@ -268,7 +262,7 @@ test("leaving the current project stops scoped reads before navigation; self-dem
 
 test("agent connection forms ignore model secret references and validate only user-entered names", async () => {
   const card = proposal("create_agent", { name: "我的 Grok", kind: "grok", wake_mode: "grok_routine", secret_env: { webhook_url: "MODEL_SUPPLIED", webhook_key: "MODEL_KEY" } });
-  const s = setup({ cards: [card], admin: true }); await s.ui.refresh(); await click(button(s.ui.element, "核对并填写"));
+  const s = setup({ cards: [card], admin: true }); await s.ui.refresh(); await click(button(s.ui.element, "填写"));
   assert.equal(field(s.ui.element, "webhook_url_env").value, "");
   field(s.ui.element, "webhook_url_env").value = "https://example.invalid/private"; field(s.ui.element, "webhook_key_env").value = "GROK_KEY";
   const form = find(s.ui.element, "form")[0]; await submit(form); assert.equal(s.calls.filter(item => item.path.endsWith("/begin")).length, 0);
@@ -282,8 +276,7 @@ test("new and rotated credentials include setup guidance and two fixed download 
     const s = setup({ cards: [proposal(action, action === "create_agent" ? { name: "研究助手", kind: "grok" } : {}, action === "create_agent" ? "" : "agent-a")], respond: (path, options) => {
       if ((path === "/api/v4/agents" || path === "/api/v4/agents/agent-a/token") && options.method === "POST") return { agent: agents[0], worker_token: "private-setup-token", connection: connectionFixture() };
     } });
-    await s.ui.refresh(); await click(button(s.ui.element, "核对并填写"));
-    if (action === "rotate_agent_token") checks(s.ui.element)[0].checked = true;
+    await s.ui.refresh(); await click(button(s.ui.element, "填写"));
     await submit(find(s.ui.element, "form")[0]);
     const dialog = find(s.document.body, "dialog")[0];
     assert.ok(dialog); assert.match(dialog.textContent, /接入指引与文件/);
@@ -304,7 +297,7 @@ test("new and rotated credentials include setup guidance and two fixed download 
 
 test("editing an existing connection reads its real guide without creating or rotating a credential", async () => {
   const s = setup({ cards: [proposal("edit_agent", { name: "研究助手", connection: { openapi_url: "https://model.invalid/unsafe" } }, "agent-a")], respond: path => path === "/api/v4/agents/agent-a" ? { agent: agents[0], connection: connectionFixture() } : undefined });
-  await s.ui.refresh(); await click(button(s.ui.element, "核对并填写"));
+  await s.ui.refresh(); await click(button(s.ui.element, "填写"));
   const guide = find(s.ui.element, "details").find(item => find(item, "summary")[0]?.textContent === "接入指引与文件");
   assert.ok(guide); assert.equal(Boolean(guide.open), false);
   assert.ok(find(guide, "textarea").some(control => control.value === connectionFixture().openapi_url));
@@ -318,7 +311,7 @@ test("editing an existing connection reads its real guide without creating or ro
 test("setup links remain text and unrecognized download paths never become a request", async () => {
   const connection = { ...connectionFixture(), openapi_download_path: "https://outside.invalid/export", bridge_url: "javascript:alert(1)" };
   const s = setup({ cards: [proposal("edit_agent", {}, "agent-a")], respond: path => path === "/api/v4/agents/agent-a" ? { agent: agents[0], connection } : undefined });
-  await s.ui.refresh(); await click(button(s.ui.element, "核对并填写"));
+  await s.ui.refresh(); await click(button(s.ui.element, "填写"));
   assert.equal(button(s.ui.element, "下载 OpenAPI 定义"), undefined);
   assert.equal(find(s.ui.element, "a").length, 0);
   const bridge = button(s.ui.element, "下载 Python Bridge"); await click(bridge);
@@ -329,7 +322,7 @@ test("setup links remain text and unrecognized download paths never become a req
 
 test("task forms preserve forward dependencies and never treat creation as approval", async () => {
   const s = setup({ cards: [proposal("create_agent_task", { title: "两步计划", steps: [{ id: "summary", agent_id: "agent-b", prompt: "汇总", acceptance: "有出处", depends_on: ["research"], required: true }, { id: "research", agent_id: "agent-a", prompt: "研究", acceptance: "有来源", depends_on: [], required: true }] })] });
-  await s.ui.refresh(); await click(button(s.ui.element, "核对并填写")); await submit(find(s.ui.element, "form")[0]);
+  await s.ui.refresh(); await click(button(s.ui.element, "填写")); await submit(find(s.ui.element, "form")[0]);
   const body = s.calls.find(item => item.path === "/api/v4/tasks").json;
   assert.deepEqual(body.steps.map(step => step.depends_on), [["research"], []]); assert.equal(body.client_request_id, "assistant:ac_example");
   assert.equal(s.calls.filter(item => item.path.endsWith("/approve")).length, 0);
@@ -338,7 +331,7 @@ test("task forms preserve forward dependencies and never treat creation as appro
 test("failed refresh disables the previous view until server state is verified again", async () => {
   let fail = false;
   const s = setup({ cards: [planCard()], respond: path => path === "/api/assistant/cards" && fail ? Promise.reject(new Error("offline")) : undefined });
-  await s.ui.refresh(); const old = button(s.ui.element, "确认并派发"); checks(s.ui.element)[0].checked = true;
+  await s.ui.refresh(); const old = button(s.ui.element, "确认并派发");
   fail = true; await s.ui.refresh(); await click(old); assert.equal(s.calls.filter(item => item.method === "POST").length, 0);
   fail = false; await s.ui.refresh(); assert.notEqual(button(s.ui.element, "确认并派发"), old);
 });

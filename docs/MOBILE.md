@@ -13,7 +13,7 @@
 | 加密 | HTTP，只能在可信的局域网里用 | Tailscale 隧道加 HTTPS |
 | 手机上要装什么 | 什么都不用，用 Safari 或 Chrome | 装 Tailscale，并登录有权访问这台电脑的 tailnet |
 | 语音 | 上传已有的录音文件 | 上传录音，或直接用网页麦克风 |
-| 配对 | 电脑生成的一次性链接或二维码 | 同样要配对，不会因为在同一个网络就自动登录 |
+| 配对 | 电脑生成的一次性链接或二维码 | 同样要配对 |
 
 ## 方式一：同一个 Wi-Fi
 
@@ -61,7 +61,7 @@ uv run pa web connect --via tailscale
 
 这条命令会依次：检查 Tailscale 的登录状态和 HTTPS 名称；核对已有的 Serve 配置；设置一个指向本机 agent 的私有 HTTPS 代理；把 HTTPS 地址写进配置；打印一次性二维码。macOS 的 Tailscale App 和 PATH 里的 `tailscale` 命令行，两种装法都支持。
 
-如果你的 tailnet 还没开 MagicDNS / HTTPS / Serve，先照 Tailscale 的提示开好，再重试。这条命令不会用 Funnel，也不会覆盖已经占着同一个 HTTPS 地址的其他服务。如果 443 端口已被占用，换一个端口：
+如果你的 tailnet 还没开 MagicDNS / HTTPS / Serve，先照 Tailscale 的提示开好，再重试。如果 443 端口已被占用，换一个端口：
 
 ```bash
 uv run pa web connect --via tailscale --https-port 8443
@@ -71,7 +71,7 @@ uv run pa web connect --via tailscale --https-port 8443
 
 Safari 里用“分享 → 添加到主屏幕”。主屏幕 App 的 cookie 可能和 Safari 是分开的，要在新窗口里重新配对一次。Android Chrome 用浏览器自带的安装或添加到主屏幕入口。
 
-上面的命令设置的是 [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)，只在 tailnet 策略允许的设备之间提供服务。应用自己的配对、HttpOnly cookie、Host/Origin 检查照样生效。
+上面的命令设置的是 [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)，只有 tailnet 里允许的设备能访问。
 
 ## 连不上怎么办
 
@@ -81,19 +81,19 @@ uv run pa web
 uv run pa doctor
 ```
 
-`check` 会分别检查本机监听和配置里的手机地址，不会改任何设置。电脑上检查通过，不代表手机那边的网络一定通。
+`check` 会分别检查本机监听和配置里的手机地址，不会改任何设置。
 
 - **局域网打不开**：确认两台设备在同一个网络；访客 Wi-Fi 常会把设备互相隔离；检查电脑的防火墙有没有放行这个端口；换了 Wi-Fi 或 IP 之后，重新运行 `connect --via lan --host ...`。
-- **Tailscale 打不开**：检查两端的连接状态、tailnet 的访问规则、MagicDNS / HTTPS，以及 `tailscale serve status`。不要用 Funnel 暴露聊天页面。
+- **Tailscale 打不开**：检查两端的连接状态、tailnet 的访问规则、MagicDNS / HTTPS，以及 `tailscale serve status`。
 - **配置保存了，还是打不开**：重启 agent。正在运行的进程不会自己重新加载监听地址。
-- **提示配对失效**：在电脑上重新生成链接。不要把配对二维码发到消息里，也不要放进公开的截图。
+- **提示配对失效**：在电脑上重新生成链接。
 - **合上电脑盖子后连不上**：服务跑在电脑上，电脑睡眠或关机时它没法响应。要保持电脑唤醒，或者把它部署到一台一直开着的设备上。
 
 ## 看任务，管设备
 
-网页里的“设置 → Recent tasks”会显示：排队中、执行中、等待审批、因预算暂停、下次重试时间、最终停止。点 Refresh status 会从保存的状态重新读一遍；失败的任务不会被显示成“还在干活”。
+网页里的“设置 → Recent tasks”会显示：排队中、执行中、等待审批、因预算暂停、下次重试时间、最终停止。点 Refresh status 会从保存的状态重新读一遍。
 
-语音消息的处理顺序：先把收到的记录存下来，再调用转写服务。同一条消息 ID 被重复投递时，直接用已经完成的转写结果；同时重复投递，也不会发起第二次调用。如果转写在拿到结果之前被打断，会明确提示你重新发一条新消息，不会自动再调一次（再调一次是要花钱的）。外部服务在断线前有没有已经计费，本地没法可靠判断。
+语音消息先把收到的记录存下来，再调用转写服务。同一条消息重复投递时，直接用已经完成的转写结果，不会再调一次。转写在拿到结果之前被打断时，会提示你重新发一条（再调一次要花钱，所以不自动重试）。
 
 ```bash
 uv run pa web sessions          # 查看已配对的浏览器
@@ -102,14 +102,14 @@ uv run pa web revoke --all      # 全部退出
 uv run pa web unpair            # 撤销还没用过的配对链接
 ```
 
-想关掉这条命令配置的 Tailscale 443 入口，运行 `tailscale serve --bg --https=443 off`；用了其他端口就替换成那个端口。撤销浏览器会话和关掉网络入口是两件互不相干的事。
+想关掉这条命令配置的 Tailscale 443 入口，运行 `tailscale serve --bg --https=443 off`；用了其他端口就替换成那个端口。
 
 手机页面断线后会自动用 SSE 重连。关掉网页之后，不会有系统级的 Web Push。想在后台收到主动提醒，请启用 Telegram 或钉钉渠道。
 
 ## 流式回复和下载
 
-默认 `[web] stream_responses = true`：只有来自网页的、可信的交互请求，才会在生成过程中显示正文。推理过程、工具参数、后台任务的正文，都不会出现在预览里。预览是内存里的快照；最终的回复通过发件箱写进对话历史。手机断线不会取消任务，重连后会重新读取当前的预览和已经提交的历史。预览最多显示 32,000 个字符，完成后显示完整的回复。
+默认 `[web] stream_responses = true`：在网页上发起的对话，回复生成时就能看到正文。推理过程、工具参数、后台任务的正文不显示。手机断线不会取消任务，重连后会重新读取当前的预览和已经提交的历史。预览最多显示 32,000 个字符，完成后显示完整的回复。
 
-如果你用的兼容端点不支持流式，在 `[web]` 里设置 `stream_responses = false`，再重启。一次流式请求失败后，系统不会自动改成非流式重来；任务仍按原有的规则处理：明确报失败、重试、审批后恢复。
+如果你用的兼容端点不支持流式，在 `[web]` 里设置 `stream_responses = false`，再重启。
 
-让 agent 用 `publish_artifact` 发布工作区里的文件后，历史里会出现一张下载卡片。下载用的是当前配对的 cookie，局域网和 Tailscale 都能用。把文件 ID 复制给别人，并不会让别人获得访问权限。有效期、额度、Telegram 上传和备份要求，见 [ARTIFACTS.md](ARTIFACTS.md)。过期的文件要重新生成；撤销了网页会话之后，必须重新配对。
+让 agent 用 `publish_artifact` 发布工作区里的文件后，历史里会出现一张下载卡片。下载用的是当前配对的 cookie，局域网和 Tailscale 都能用。有效期、额度、Telegram 上传和备份要求，见 [ARTIFACTS.md](ARTIFACTS.md)。过期的文件要重新生成；撤销了网页会话之后要重新配对。

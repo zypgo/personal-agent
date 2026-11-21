@@ -61,7 +61,7 @@ export async function agentSetupBlob(agentId, kind) {
   try { return await requests.blob(path); }
   catch (error) {
     if (error?.name === "AbortError" || error.status === 0) throw error;
-    throw new ApiError(error.status || 0, error.status === 401 ? "请重新连接此浏览器后下载文件。" : "连接文件暂不可用，请核对权限后重试。");
+    throw new ApiError(error.status || 0, error.status === 401 ? "请重新连接此浏览器后下载文件。" : "连接文件暂时下载不了，请稍后重试。");
   }
 }
 

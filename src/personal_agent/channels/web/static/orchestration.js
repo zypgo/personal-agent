@@ -1,4 +1,4 @@
-// Cloud collaboration UI. Private state stays in memory; credentials live only in the shared dialog.
+// Cloud collaboration UI: connected agents, tasks, steps and their results.
 /** @typedef {import('./orchestration').Agent} Agent */
 /** @typedef {import('./orchestration').Task} Task */
 
@@ -15,6 +15,7 @@ const TASK_TERMINAL = new Set(["succeeded","failed","cancelled","expired","revok
 const REVIEW_STATES = new Set(["result_reported","reported","awaiting_acceptance"]);
 const PLAN_STATES = new Set(["planned","draft","awaiting_approval"]);
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+const STOPPED_NOTE = "已确认停止";
 export const statusLabel = state => STATES[state] || "等待状态更新";
 
 export function connectionStatus(agent, now=Date.now()/1000) {
@@ -26,8 +27,8 @@ export function connectionStatus(agent, now=Date.now()/1000) {
 
 export function wakeStatus(wake) {
   if(wake.claimed_at!=null)return {label:"已领取",message:"Agent 已领取任务。",attention:false};
-  if(wake.state==="stopped")return {label:"已确认触发结束",message:"已记录你的确认：远端已经停止，或者根本没有执行。这个任务不会再派一遍。",attention:false};
-  if(wake.state==="uncertain")return {label:"触发待核查",message:"未确认 Routine 是否收到触发。请先到 Grok 里确认。系统不会自动重复触发。就算收到了触发，也不代表任务已经做完。",attention:true};
+  if(wake.state==="stopped")return {label:"已确认触发结束",message:"你已确认这次触发结束。这个任务不会再派一遍。",attention:false};
+  if(wake.state==="uncertain")return {label:"触发待核查",message:"未确认 Routine 是否收到触发，请先到 Grok 里看看。不会自动重复触发。",attention:true};
   if(wake.state==="failed")return {label:"触发未成功",message:"Routine 触发未能完成。请检查连接配置和服务器环境变量，也可在远端手动领取。",attention:true};
   if(wake.state==="sent")return {label:"已触发，等待领取",message:"Routine 触发请求已送达，仍在等待 Agent 领取。",attention:false};
   return {label:"正在交接触发",message:"正在交接 Routine 触发，尚未确认领取。",attention:false};
@@ -35,16 +36,16 @@ export function wakeStatus(wake) {
 
 export function wakeDescription(agent) {
   if (agent.kind === "muse") return ["native_schedule","muse_task"].includes(agent.wake_mode)
-    ? "原生定时领取 · 请先在 Muse 配好定时任务；这里不会创建定时任务或强制唤醒 Muse。"
-    : "手动领取 · 需要你在 Muse 主动启动，保存连接不会自动唤醒 Muse。";
+    ? "原生定时领取 · 先在 Muse 里配好定时任务。"
+    : "手动领取 · 在 Muse 里启动后领取任务。";
   if (agent.kind === "grok") return ["grok_routine","verified_hook"].includes(agent.wake_mode)
-    ? "Routine 触发 · 使用你已配置的 Grok Routine；触发成功不代表已领取或已完成。"
+    ? "Routine 触发 · 通过你配置的 Grok Routine 通知它来领取。"
     : "手动领取 · 在 Grok 启动已连接的任务工具后领取。";
-  if (["codex","cursor"].includes(agent.kind)) return "自有电脑执行 · 需要可领取任务的执行端；创建记录不会启动本机 CLI。";
+  if (["codex","cursor"].includes(agent.kind)) return "自有电脑执行 · 需要一个能领取任务的执行端。";
   return "由你自己的 Personal Agent 执行端领取任务并回传结果。";
 }
 
-/** Build only the explicitly entered plan. No chat history, memory or browser context is attached. */
+/** Build the task from the form fields. */
 export function buildCollaborationTask({title,prompt,acceptance,mode,steps,visibility="private",timeout_s=3600}, requestId) {
   if (!title?.trim() || !prompt?.trim() || !acceptance?.trim()) throw new Error("请填写任务名称、目标与验收标准。");
   if (!steps?.length || steps.length > 16) throw new Error("请选择 1 至 16 个 Agent。");
@@ -68,7 +69,7 @@ export function secretReferences(urlName, keyName) {
   for (const [key,value] of [["webhook_url",urlName],["webhook_key",keyName]]) {
     const name = value?.trim();
     if (!name) continue;
-    if (!ENV_NAME.test(name)) throw new Error("这里只填写环境变量名，例如 GROK_ROUTINE_URL；请勿粘贴网址或密钥。");
+    if (!ENV_NAME.test(name)) throw new Error("这里填环境变量名，例如 GROK_ROUTINE_URL，不是网址或密钥。");
     result[key] = name;
   }
   return result;
@@ -79,7 +80,7 @@ export function currentAttempt(step) {
   return step.attempt || step.attempts?.find(item=>item.id === step.current_attempt) || null;
 }
 
-/** Artifact routes are server-owned, same-origin and scoped again by RequestScope. */
+/** Download path for an artifact id. */
 export function artifactPath(artifact) {
   const id = artifact.id || artifact.artifact_id;
   if (typeof id !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(id)) return null;
@@ -122,10 +123,10 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
   async function request(path,options={}) {const before=key();const data=await api(path,options);if(before!==key())throw interrupted();return data;}
   function reportError(error,write=false) {
     if(error?.name === "AbortError")return;
-    if(error?.status === 409)notice("计划或执行状态已变化。请刷新并重新核对，本次没有自动重试。",true);
-    else if(error?.status === 401 || error?.status === 403)notice("当前账号已无权执行此操作，请重新确认空间权限。",true);
-    else if(error?.status === 0 || error instanceof TypeError)notice(write ? "未收到服务器确认。操作可能已送达，请先刷新核对，不要重复派发。" : "暂时无法连接服务器，请稍后刷新。",true);
-    else notice(error?.status ? "操作未完成，请检查填写内容、权限和当前状态后重试。" : error?.message || "操作未完成，请稍后重试。",true);
+    if(error?.status === 409)notice("任务状态已经变化，请刷新后再试。",true);
+    else if(error?.status === 401 || error?.status === 403)notice("没有权限做这个操作。",true);
+    else if(error?.status === 0 || error instanceof TypeError)notice(write ? "没收到服务器的回复，操作可能已经生效，请刷新看看。" : "连不上服务器，请稍后刷新。",true);
+    else notice(error?.status ? "没有成功，请检查填写的内容后重试。" : error?.message || "没有成功，请稍后重试。",true);
   }
   function action(button,handler) {
     button.type="button";
@@ -143,19 +144,19 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       const before=key();form.dataset.busy="1";
       const controls=[...form.elements].filter(el=>"disabled" in el),disabled=controls.map(el=>el.disabled);
       controls.forEach(el=>el.disabled=true);
-      try{if(await handler(form)!==false)delete form.dataset.dirty;}
+      try{await handler(form);delete form.dataset.dirty;}
       catch(error){if(before===key()){reportError(error,true);if(error?.status===409 && state.taskId)await loadTask(true).catch(()=>{});}}
       finally{delete form.dataset.busy;controls.forEach((el,i)=>el.disabled=disabled[i]);}
     });
   }
   function disclosure(title,text) {const details=node("details","","or-disclosure");details.append(node("summary",title),node("p",text,"hint"));return details;}
   function secretDialog(data,agent) {
-    if(!data.worker_token) {notice("连接已保存，但凭据未返回。可在此 Agent 下重新生成。",true);return;}
+    if(!data.worker_token) {notice("连接已保存，但没有返回凭据。可以在这个 Agent 下重新生成。",true);return;}
     const connection=data.connection || {};
     const lines=[wakeDescription(agent)];
-    lines.push("将凭据保存为连接设置的 Bearer Token。按执行环境实际支持的方式接入；下方地址也可在 Agent 卡片的「接入指引」中查看。");
+    lines.push("把凭据存成 Bearer Token，再用下面的地址接入。地址也能在 Agent 卡片的「接入指引」里再看。");
     for(const [name,labelText] of [["mcp_url","MCP 地址"],["openapi_url","OpenAPI 地址"],["bridge_url","Python Bridge 下载地址"]])if(typeof connection[name] === "string")lines.push(`${labelText}：${connection[name]}`);
-    showSecret(`${agent.name} · 连接凭据`,data.worker_token,"只显示这一次。请保存在此 Agent 的连接设置中，不要粘贴到聊天或共享文档。",lines.join("\n\n"));
+    showSecret(`${agent.name} · 连接凭据`,data.worker_token,"只显示这一次，请先复制。",lines.join("\n\n"));
   }
 
   function clear() {
@@ -188,7 +189,6 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       const sharing=owns(agent) ? (agent.allowed_actor_ids?.length ? `已授权 ${agent.allowed_actor_ids.length} 位成员使用` : "仅自己使用") : "已授权给你使用";
       card.append(node("p",`所有者：${memberName(agent.owner_id)} · ${sharing}`,"muted"));
       card.append(node("p",wakeDescription(agent),"or-connection-note"));
-      if(nativeShared(agent))card.append(node("p","共享原生环境：执行可能使用此 Agent 已有的历史、文件和工具权限。","or-scope-note"));
       if(agent.last_seen_at)card.append(node("p",`最近响应 ${when(agent.last_seen_at)}`,"hint"));
       if(owns(agent) && !agent.revoked_at && agent.state !== "revoked")card.append(connectionGuide(agent));
       if(canWrite() && owns(agent))card.append(occupancyGuide(agent));
@@ -198,13 +198,13 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
           const data=await request(`/api/v4/agents/${encodeURIComponent(agent.id)}`);renderAgentForm(data.agent || agent);get("agent-create").open=true;get("agent-create").scrollIntoView?.({behavior:motionBehavior(),block:"start"});
         }));else card.append(node("p","此连接含实例环境配置，修改需要实例管理员权限。","hint"));
         actions.append(action(node("button","重新生成连接凭据","ghost"),async()=>{
-          if(!confirmAction(`重新生成 ${agent.name} 的连接凭据？原凭据会失效，已有计划需要重新确认。`))return;
+          if(!confirmAction(`重新生成 ${agent.name} 的连接凭据？原凭据会马上失效。`))return;
           const data=await request(`/api/v4/agents/${encodeURIComponent(agent.id)}/token`,{method:"POST",body:{}});
           secretDialog(data,data.agent || agent);await loadAgents();
         }));
         actions.append(action(node("button","撤销连接","ghost danger"),async()=>{
-          if(!confirmAction(`撤销 ${agent.name}？它以后不能再领任务。已经在跑的任务，还要等你确认它们停了。`))return;
-          await request(`/api/v4/agents/${encodeURIComponent(agent.id)}/revoke`,{method:"POST",body:{}});notice("已撤销连接；进行中的执行请继续核对停止状态。");await loadAgents();
+          if(!confirmAction(`撤销 ${agent.name}？它以后不能再领任务。`))return;
+          await request(`/api/v4/agents/${encodeURIComponent(agent.id)}/revoke`,{method:"POST",body:{}});notice("已撤销。");await loadAgents();
         }));card.append(actions);
       }
       list.append(card);
@@ -228,22 +228,20 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     }
     function render() {
       const data=state.occupancies.get(agent.id);content.replaceChildren();
-      content.append(node("p","这里只显示这个连接正在占用的任务，看不到其他成员私人任务的内容。确认“已停止”之前，请先到远端实际看一眼。","hint"));
+      content.append(node("p","这个连接正在占用的任务。到远端确认停了以后，在这里释放。","hint"));
       if(!data){content.append(node("p","正在读取占用状态…","hint"));return;}
       if(!data.attempts.length && !data.wakes.length)content.append(node("p","没有待处理的占用。","hint"));
       for(const [kind,rows] of [["attempt",data.attempts],["wake",data.wakes]])rows.forEach((row,index)=>{
         const record=node("section","","or-occupancy-record"),isWake=kind==="wake";
         const labelText=isWake ? wakeStatus(row).label : row.desired_state==="cancel" && row.state!=="uncertain" ? "取消待确认" : statusLabel(row.state);
         record.append(node("h3",`${isWake ? "触发" : "执行"} ${index+1} · ${labelText}`));
-        if(!row.can_confirm_stopped || !canWrite()){record.append(node("p","执行由此 Agent 的原生环境负责；正在进行的工作请先到远端核对。","hint"));content.append(record);return;}
-        const form=node("form"),note=textarea("occupancy_note","记录你在远端核对、停止执行的情况。",3,1000);note.required=true;
-        const consent=check("confirm_occupancy",isWake ? "已核对：这次触发未执行或相关执行已停止" : "已核对：本次远端执行确实停止");consent.control.required=true;
-        const submit=node("button",isWake ? "确认触发已结束" : "确认执行已停止","danger");submit.type="submit";form.append(label("核对说明",note),consent.el,submit);
+        if(!row.can_confirm_stopped || !canWrite()){record.append(node("p","暂时不能在这里释放，请先到远端确认状态。","hint"));content.append(record);return;}
+        const form=node("form");
+        const submit=node("button",isWake ? "确认触发已结束" : "确认执行已停止","danger");submit.type="submit";form.append(submit);
         bind(form,async()=>{
-          if(!consent.control.checked || !note.value.trim())throw new Error("请先实际核对远端状态，并填写确认说明。");
           const base=`/api/v4/tasks/${encodeURIComponent(row.task_id)}`;
-          await request(isWake ? `${base}/wakes/${encodeURIComponent(row.wake_id)}/stopped` : `${base}/stopped`,{method:"POST",body:isWake ? {note:note.value.trim()} : {step_id:row.step_id,attempt_id:row.attempt_id,note:note.value.trim()}});
-          notice("已记录你的确认，占用已释放。这个任务不会再派一遍；想继续的话，请重新建一个计划。");await refreshOccupancy();
+          await request(isWake ? `${base}/wakes/${encodeURIComponent(row.wake_id)}/stopped` : `${base}/stopped`,{method:"POST",body:isWake ? {note:STOPPED_NOTE} : {step_id:row.step_id,attempt_id:row.attempt_id,note:STOPPED_NOTE}});
+          notice("已释放占用。要继续的话，请重新建一个计划。");await refreshOccupancy();
         });record.append(form);content.append(record);
       });
       content.append(action(node("button","刷新占用状态","ghost"),refreshOccupancy));
@@ -261,7 +259,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     const content=node("div");details.append(node("summary","接入指引与地址"),content);
     const render=()=>{
       const connection=state.connections.get(agent.id);content.replaceChildren();
-      content.append(node("p","在 Agent 运行的环境里，选一种它支持的连接方式，把这个一次性凭据存成 Bearer Token。只能聊天、不能调用外部工具的会话，领不了任务。","hint"));
+      content.append(node("p","在执行环境里选一种接入方式，把凭据存成 Bearer Token。","hint"));
       content.append(node("p",wakeDescription(agent),"hint"));
       if(!connection){content.append(node("p","正在读取接入地址…","hint"));return;}
       const copyField=(title,text)=>{
@@ -277,9 +275,9 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       const schemaPath=`/api/v4/agents/${encodeURIComponent(agent.id)}/openapi.json`;
       if(connection.openapi_download_path===schemaPath && downloadArtifact) {
         content.append(action(node("button","下载 OpenAPI 定义","ghost"),async()=>downloadArtifact(schemaPath,`${agent.name}-openapi.json`)));
-        content.append(node("p","工具读取这个 OpenAPI 地址时，需要 Bearer 凭据。也可以先下载定义文件，再上传到 Muse 这类支持导入的工具里。定义文件里没有连接密钥。","hint"));
+        content.append(node("p","读取这个地址需要 Bearer 凭据。也可以下载定义文件，导入到 Muse 这类支持导入的工具里。","hint"));
       }
-      if(connection.bridge_url)content.append(node("p","Python Bridge 只负责领取与回传，运行任务的仍是你自己的 Agent。下载后用 python bridge.py --help 查看接入方法；凭据通过安全输入或环境变量提供。","hint"));
+      if(connection.bridge_url)content.append(node("p","下载后运行 python bridge.py --help 查看用法。","hint"));
       if(typeof connection.instructions === "string") {
         const instructions=node("details","","or-disclosure");instructions.append(node("summary","给执行 Agent 的协议说明"),node("pre",connection.instructions));content.append(instructions);
       }
@@ -309,9 +307,9 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     form.append(label("Agent 名称",name),label("运行在哪里",kind),node("p",`所有者：${context().me?.principal?.display_name || "我"}`,"hint"));
     const mode=select("wake_mode",[["manual","手动领取"]]);const modeLabel=label("任务如何到达 Agent",mode),guidance=node("p","","or-connection-note");
     form.append(modeLabel,guidance);
-    const shared=check("shared_environment","此 Agent 使用共享原生环境（历史、文件与工具权限可能沿用）",true);
+    const shared=check("shared_environment","使用助手原有的运行环境",true);
     form.append(shared.el);
-    const sharing=node("fieldset","","or-fieldset");sharing.append(node("legend","允许谁使用"),node("p","默认仅自己可用。授权成员可以派活，但不会因此获得你的私人任务。","hint"));
+    const sharing=node("fieldset","","or-fieldset");sharing.append(node("legend","允许谁使用"));
     let members=0;
     for(const member of state.members) {
       const id=member.principal_id || member.id;
@@ -325,8 +323,8 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       envDetails=node("details","","or-disclosure");envDetails.append(node("summary","已配置 Grok Routine？填写服务器环境变量名"));
       const url=input("webhook_url_env",{placeholder:"GROK_ROUTINE_URL",maxLength:128}),secret=input("webhook_key_env",{placeholder:"GROK_ROUTINE_KEY",maxLength:128});
       url.pattern=secret.pattern="[A-Za-z_][A-Za-z0-9_]{0,127}";url.autocomplete=secret.autocomplete="off";
-      envDetails.append(node("p","只引用服务器已设置的环境变量。Routine 触发需要同时配置网址与认证密钥；这里不会替你创建 Routine。","hint"),label("Routine 网址的环境变量名",url),label("认证密钥的环境变量名",secret));form.append(envDetails);
-    } else form.append(node("p","使用领取模式连接。如需配置 Routine 触发，请联系实例管理员。","hint"));
+      envDetails.append(node("p","填服务器上已设置的环境变量名。Routine 需要网址和认证密钥两个变量。","hint"),label("Routine 网址的环境变量名",url),label("认证密钥的环境变量名",secret));form.append(envDetails);
+    } else form.append(node("p","要用 Routine 触发，需要实例管理员来配置。","hint"));
     const refreshMode=()=>{
       guidance.textContent=wakeDescription({kind:kind.value,wake_mode:mode.value});
       if(envDetails){const required=mode.value==="grok_routine";envDetails.open=required;field(form,"webhook_url_env").required=required;field(form,"webhook_key_env").required=required;}
@@ -344,7 +342,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       name.value=editAgent.name;kind.value=editAgent.kind;refreshKind();kind.disabled=true;mode.value=editAgent.wake_mode || "manual";
       shared.control.checked=nativeShared(editAgent);
       if(envDetails){field(form,"webhook_url_env").value=editAgent.secret_env?.webhook_url || "";field(form,"webhook_key_env").value=editAgent.secret_env?.webhook_key || "";}refreshMode();
-      form.append(node("p","保存修改会使此 Agent 的旧计划失效，并要求进行中的执行停止。需要继续时，请重新建立和确认计划。","or-attention"));
+      form.append(node("p","保存后，这个 Agent 的旧计划会失效。","or-attention"));
     }
     const submit=node("button",editAgent ? "保存修改" : "保存连接并生成凭据","primary");submit.type="submit";form.append(submit);
     if(editAgent)form.append(action(node("button","取消编辑","ghost"),async()=>{renderAgentForm();get("agent-create").open=false;}));
@@ -353,9 +351,8 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       if(mode.value==="grok_routine" && (!secret_env.webhook_url || !secret_env.webhook_key))throw new Error("请填写 Routine 网址和认证密钥对应的环境变量名，或改用手动领取。");
       const allowed_actor_ids=[...form.elements].filter(el=>el.name==="allowed_actor_ids" && el.checked).map(el=>el.value);
       const body={name:name.value.trim(),kind:kind.value,allowed_actor_ids,shared_environment:shared.control.checked,capabilities:editAgent?.capabilities || [],secret_env,wake_mode:mode.value};
-      if(editAgent && !confirmAction("保存会使此 Agent 的旧计划失效，并要求进行中的执行停止。确认保存？"))return false;
       const data=await request(editAgent ? `/api/v4/agents/${encodeURIComponent(editAgent.id)}` : "/api/v4/agents",{method:editAgent ? "PATCH" : "POST",body});
-      if(!editAgent)secretDialog(data,data.agent || body);get("agent-create").open=false;state.agentFormBuilt=false;await loadAgents();notice(editAgent ? "连接已更新。旧计划已失效，请新建并确认计划。" : "连接已保存。完成 Agent 端配置后，才能领取任务。");
+      if(!editAgent)secretDialog(data,data.agent || body);get("agent-create").open=false;state.agentFormBuilt=false;await loadAgents();notice(editAgent ? "连接已更新，旧计划已失效。" : "连接已保存。在助手那边配好以后就能领取任务。");
     });root.append(form);
   }
 
@@ -414,7 +411,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     state.taskAgentsSignature=choicesSignature();
     const form=node("form");form.id="collaboration-task-form";
     const title=input("title",{required:true,maxLength:200,placeholder:"例如：研究竞品并给出产品建议"});
-    const prompt=textarea("prompt","写明目标与要提供给 Agent 的背景资料。这里的内容会发给每个选中的 Agent。",5,12000);prompt.required=true;
+    const prompt=textarea("prompt","写明目标和背景资料，会发给每个选中的 Agent。",5,12000);prompt.required=true;
     const acceptance=textarea("acceptance","例如：注明来源和日期；交付一份可下载的报告；列明未确认事项。",3,4000);acceptance.required=true;
     form.append(label("任务名称",title),label("目标与外发内容（最多 12000 字符）",prompt),label("验收标准（最多 4000 字符）",acceptance));
     const mode=select("mode",[["parallel","并行研究 · 各自独立完成"],["sequential","按顺序接力 · 前一步验收后继续"],["research_then_synthesis","并行后汇总 · 最后一个 Agent 汇总成果"]]);
@@ -428,7 +425,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     }
     for(const agent of available) {
       const selected=check("selected_agent",agent.name,state.steps.some(step=>step.agent_id===agent.id));selected.control.value=agent.id;
-      const meta=node("span",`${AGENT_KINDS[agent.kind] || "Agent"} · 所有者：${memberName(agent.owner_id)}${nativeShared(agent) ? " · 共享环境" : ""}`,"hint");selected.el.append(meta);
+      const meta=node("span",`${AGENT_KINDS[agent.kind] || "Agent"} · 所有者：${memberName(agent.owner_id)}`,"hint");selected.el.append(meta);
       selected.control.addEventListener("change",()=>{
         if(selected.control.checked && state.steps.length>=16){selected.control.checked=false;notice("每项任务最多选择 16 个 Agent。",true);return;}
         if(selected.control.checked)state.steps.push({agent_id:agent.id,instruction:""});else state.steps=state.steps.filter(step=>step.agent_id!==agent.id);
@@ -451,7 +448,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       });
     }
     mode.addEventListener("change",()=>{delete form.dataset.requestId;renderSelectedSteps();});
-    form.append(choicesSection,steps,node("p","下一步会展示完整计划。确认后才派发；顺序任务需逐步验收，前序未通过时后续不会自动执行。","hint"));
+    form.append(choicesSection,steps,node("p","提交后会生成计划，批准后才开始派发。","hint"));
     const visibility=check("space_visibility","项目成员可查看此任务（默认仅自己可见）");
     if(context().me?.spaces?.find(space=>space.id===context().space)?.kind==="project")form.append(visibility.el);
     const timeout=select("timeout_s",[["3600","1 小时"],["21600","6 小时"],["86400","24 小时"],["604800","7 天"]]);form.append(label("等待与执行期限",timeout));
@@ -462,7 +459,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
       const body=buildCollaborationTask({title:title.value,prompt:prompt.value,acceptance:acceptance.value,mode:mode.value,steps:state.steps,visibility:visibility.control.checked?"space":"private",timeout_s:timeout.value},form.dataset.requestId);
       const data=await request("/api/v4/tasks",{method:"POST",body});const task=data.task || data;
       state.taskId=task.id;state.steps=[];state.taskFormBuilt=false;get("collaboration-compose").open=false;
-      notice("计划已保存。请核对外发范围，再批准派发。");await loadTasks(true);
+      notice("计划已保存，批准后开始派发。");await loadTasks(true);
     });root.append(form);
   }
   async function loadTask(force=false) {
@@ -496,35 +493,30 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     root.append(node("p",`${accepted} / ${steps.length} 步已验收 · ${task.visibility==="space" ? "项目成员可查看" : "仅你可查看"}`,"muted"));
     if(task.deadline_at)root.append(node("p",`任务期限：${when(task.deadline_at)}`,"hint"));
     const progress=node("progress");progress.max=Math.max(steps.length,1);progress.value=accepted;progress.setAttribute("aria-label",`已验收 ${accepted} 步，共 ${steps.length} 步`);root.append(progress);
-    if(task.state==="uncertain" || steps.some(step=>step.state==="uncertain"))root.append(node("p","原执行结果尚未核实。请先在对应 Agent 核对；这里不会自动重派，也不会把失联视为执行失败。","or-attention"));
+    if(task.state==="uncertain" || steps.some(step=>step.state==="uncertain"))root.append(node("p","结果还没确认，请先到对应 Agent 那里看看。不会自动重派。","or-attention"));
     if(["cancel_requested","cancelling"].includes(task.state))root.append(node("p","取消请求已发出，仍在等待执行端确认停止。","or-attention"));
-    if(["waiting_claim","queued","approved"].includes(task.state))root.append(node("p","等待执行端领取。手动模式需要你在对应 Agent 中启动领取；离开此页面不会取消任务。","hint"));
+    if(["waiting_claim","queued","approved"].includes(task.state))root.append(node("p","等待领取。手动模式需要你在对应 Agent 里启动领取。","hint"));
     if(PLAN_STATES.has(task.state))renderPlanReview(root,task);
     for(const [index,step] of steps.entries())renderStep(root,task,step,index);
     for(const question of task.questions || [])renderQuestion(root,task,question);
     if(canManageTask(task) && !TASK_TERMINAL.has(task.state) && !["cancel_requested","cancelling"].includes(task.state)) {
       const actions=node("div","","actions");actions.append(action(node("button","取消任务","ghost danger"),async()=>{
-        if(!confirmAction("取消这项任务？进行中的执行仍须等待执行端确认停止。"))return;
-        await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/cancel`,{method:"POST",body:{}});notice("已提交取消请求，请以任务的实际状态为准。");await loadTasks(true);
+        if(!confirmAction("取消这项任务？"))return;
+        await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/cancel`,{method:"POST",body:{}});notice("已提交取消。");await loadTasks(true);
       }));root.append(actions);
     }
   }
   function renderPlanReview(root,task) {
     const review=node("section","","or-plan-review");review.append(node("h3","确认这份派发计划"));
-    review.append(node("p","下方列出实际外发的内容、接收 Agent 和验收标准。顺序任务还会把前序成果交给后续 Agent。","hint"));
-    review.append(node("p","这里批准派发计划；执行端自身需要的权限仍在其原生环境中确认。","hint"));
-    const shared=(task.steps || []).filter(step=>nativeShared(agentForStep(step)));
-    if(shared.length)review.append(node("p",`共享原生环境：${[...new Set(shared.map(step=>stepAgentName(step)))].join("、")}。它们可能沿用原有历史、文件和工具权限，请确认其中的信息适合本任务。`,"or-scope-note"));
+    review.append(node("p","下面是每一步发给 Agent 的内容和验收标准。","hint"));
     if(canApproveTask(task)) {
-      const form=node("form");const consent=check("confirm_scope","我已核对每一步的外发内容、共享环境与验收标准");consent.control.required=true;
-      const approve=node("button","批准并派发","primary");approve.type="submit";approve.disabled=true;
-      consent.control.addEventListener("change",()=>{approve.disabled=!consent.control.checked;form.dataset.dirty="1";});form.append(consent.el,approve);
+      const form=node("form");
+      const approve=node("button","批准并派发","primary");approve.type="submit";form.append(approve);
       bind(form,async()=>{
-        if(!consent.control.checked)throw new Error("请先确认外发范围和计划。");
         await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/approve`,{method:"POST",body:{revision:task.revision,plan_hash:task.plan_hash}});
-        notice("已批准这份计划。请等待 Agent 领取。");await loadTasks(true);
+        notice("已批准，等 Agent 领取。");await loadTasks(true);
       });review.append(form);
-    } else review.append(node("p","等待任务发起者核对并批准。","hint"));
+    } else review.append(node("p","等待任务发起者批准。","hint"));
     root.append(review);
   }
   function renderStep(root,task,step,index) {
@@ -550,7 +542,7 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
     }
     if(result) {
       section.append(node("h3","提交的成果"),node("pre",typeof result==="string" ? result : result.text || result.summary || "已提交文件。","or-result"));
-      if(result.outcome==="failed")section.append(node("p","执行端报告未完成，请核对成果与原因。","or-attention"));
+      if(result.outcome==="failed")section.append(node("p","执行端报告没有完成。","or-attention"));
       if(result.artifacts?.length) {
         const files=node("div","","or-files");
         for(const artifact of result.artifacts) {
@@ -560,25 +552,21 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
         }section.append(files);
       }
       if(REVIEW_STATES.has(step.state) && canManageTask(task) && attempt?.id) {
-        section.append(node("p","对照上方验收标准检查后再确认。验收通过才会解锁依赖此步骤的任务。","hint"));
         const actions=node("div","","actions");if(canAcceptTask(task) && result.outcome==="succeeded" && attempt.result_eligible!==false)actions.append(action(node("button","验收通过","primary"),async()=>{
-          if(!confirmAction("确认此成果满足验收标准？通过后会解锁后续步骤。"))return;
           await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/accept`,{method:"POST",body:{step_id:step.id,attempt_id:attempt.id,revision:task.revision,plan_hash:task.plan_hash}});notice("该步骤已验收。");await loadTasks(true);
         }));section.append(actions);
-        const rejection=node("details","","or-disclosure");rejection.append(node("summary","成果未通过"));const form=node("form"),reason=textarea("reason","说明未满足的标准；拒绝不会自动重派。",2,2000);reason.required=true;
+        const rejection=node("details","","or-disclosure");rejection.append(node("summary","成果未通过"));const form=node("form"),reason=textarea("reason","说明哪里没达到标准。",2,2000);reason.required=true;
         const submit=node("button","拒绝此成果","danger");submit.type="submit";form.append(label("未通过的原因",reason),submit);
-        bind(form,async()=>{await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/reject`,{method:"POST",body:{step_id:step.id,attempt_id:attempt.id,revision:task.revision,plan_hash:task.plan_hash,reason:reason.value.trim()}});notice("已记录未通过的原因，后续依赖步骤不会继续。");await loadTasks(true);});rejection.append(form);section.append(rejection);
+        bind(form,async()=>{await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/reject`,{method:"POST",body:{step_id:step.id,attempt_id:attempt.id,revision:task.revision,plan_hash:task.plan_hash,reason:reason.value.trim()}});notice("已标记未通过，依赖它的后续步骤不会开始。");await loadTasks(true);});rejection.append(form);section.append(rejection);
       }
     }
     if(canWrite() && step.can_confirm_stopped && attempt?.id) {
-      const stopped=node("details","","or-disclosure");stopped.append(node("summary","我已在远端停止执行"),node("p","先在对应 Agent 或电脑上实际停止本次执行，再在这里登记。这会记录你的确认，释放占用；需要重做时请新建计划。","hint"));
-      const form=node("form"),note=textarea("stop_note","说明你在哪里核对、如何确认执行已停止。",3,1000);note.required=true;
-      const checked=check("confirm_stopped","我已核对远端执行确实停止");checked.control.required=true;
-      const submit=node("button","记录停止确认","danger");submit.type="submit";form.append(label("停止确认说明",note),checked.el,submit);
+      const stopped=node("details","","or-disclosure");stopped.append(node("summary","确认已停止"),node("p","到对应 Agent 或电脑上停掉这次执行后，在这里释放占用。","hint"));
+      const form=node("form");
+      const submit=node("button","确认已停止","danger");submit.type="submit";form.append(submit);
       bind(form,async()=>{
-        if(!checked.control.checked || !note.value.trim())throw new Error("请填写说明并确认远端执行已停止。");
-        await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/stopped`,{method:"POST",body:{step_id:step.id,attempt_id:attempt.id,note:note.value.trim()}});
-        notice("已记录停止确认。原任务不会重派，如需继续请新建计划。");await loadTasks(true);
+        await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/stopped`,{method:"POST",body:{step_id:step.id,attempt_id:attempt.id,note:STOPPED_NOTE}});
+        notice("已释放占用。要继续的话，请新建一个计划。");await loadTasks(true);
       });stopped.append(form);section.append(stopped);
     }
     if(["failed","rejected","revoked","expired","skipped"].includes(step.state) && !result)section.append(node("p","该步骤没有可验收成果。依赖它的后续步骤不会自动执行。","hint"));
@@ -595,14 +583,12 @@ export function createOrchestrationUI({api,getContext,notice,showSecret,download
   function renderWake(root,task,wake) {
     const status=wakeStatus(wake);root.append(node("p",status.message,status.attention ? "or-attention" : "hint"));
     if(!canWrite() || !wake.can_confirm_stopped)return;
-    const details=node("details","","or-disclosure");details.append(node("summary","我已核对这次触发已结束"),node("p","先在远端确认这次触发未执行，或相关执行已经停止。登记后释放连接占用，原任务不会重新派发。","hint"));
-    const form=node("form"),note=textarea("wake_stop_note","写明你如何核对远端触发与执行状态。",3,1000);note.required=true;
-    const checked=check("confirm_wake_stopped","我已实际核对：执行未发生或已停止");checked.control.required=true;
-    const submit=node("button","记录触发结束确认","danger");submit.type="submit";form.append(label("核对说明",note),checked.el,submit);
+    const details=node("details","","or-disclosure");details.append(node("summary","确认触发已结束"),node("p","到远端确认这次触发没有执行或已经停掉后，在这里释放占用。","hint"));
+    const form=node("form");
+    const submit=node("button","确认触发已结束","danger");submit.type="submit";form.append(submit);
     bind(form,async()=>{
-      if(!checked.control.checked || !note.value.trim())throw new Error("请先核对远端情况，并填写确认说明。");
-      await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/wakes/${encodeURIComponent(wake.id || wake.wake_id)}/stopped`,{method:"POST",body:{note:note.value.trim()}});
-      notice("已登记触发结束确认。原任务不会重派，需要继续时请新建计划。");await loadTasks(true);
+      await request(`/api/v4/tasks/${encodeURIComponent(task.id)}/wakes/${encodeURIComponent(wake.id || wake.wake_id)}/stopped`,{method:"POST",body:{note:STOPPED_NOTE}});
+      notice("已确认触发结束。要继续的话，请新建一个计划。");await loadTasks(true);
     });details.append(form);root.append(details);
   }
   async function refreshTasks(force=false) {

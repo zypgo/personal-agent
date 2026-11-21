@@ -1100,7 +1100,6 @@ body {
 @media (hover: hover) and (pointer: fine) {
   .composer-note .keys {
     display: inline;
-    margin-left: 0.35em;
   }
 }
 
